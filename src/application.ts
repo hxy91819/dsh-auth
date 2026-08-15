@@ -10,6 +10,7 @@ import { verifyPassword } from './password.js'
 import { resolveUiPreferences } from './preferences.js'
 import type { HarnessUiSettings, UiPreferences } from './preferences.js'
 import { SessionStore } from './session.js'
+import type { SessionAuthentication } from './session.js'
 import type { ResolvedConfig } from './config.js'
 
 const MAX_FORM_BYTES = 20 * 1024
@@ -180,7 +181,7 @@ export class AuthApplication {
     private readonly now: () => number = Date.now,
     private readonly readHarnessUiSettings: () => HarnessUiSettings = () => ({}),
   ) {
-    this.sessions = new SessionStore(config)
+    this.sessions = new SessionStore(config, now)
     this.csrfSigner = new CookieSigner(config.sessionSecret)
     this.cookieNames = cookieNames(config.secureCookies)
     this.limiter = new LoginLimiter(
@@ -241,8 +242,9 @@ export class AuthApplication {
     const returnTo = safeReturnTarget(url.searchParams.get('returnTo'))
     const preferences = resolveUiPreferences(req, this.readHarnessUiSettings())
     if (req.method === 'GET') {
-      if (this.sessions.authenticate(req, this.now()) !== undefined) {
-        redirect(res, returnTo)
+      const authenticated = this.sessions.authenticate(req, this.now())
+      if (authenticated !== undefined) {
+        redirect(res, returnTo, this.renewalHeaders(authenticated))
         return
       }
       this.renderLogin(res, 200, returnTo, preferences)
@@ -312,17 +314,18 @@ export class AuthApplication {
       write(res, 405, 'method not allowed', { allow: 'GET', 'cache-control': 'no-store' })
       return
     }
-    const session = this.sessions.authenticate(req, this.now())
-    if (session === undefined) {
+    const authenticated = this.sessions.authenticate(req, this.now())
+    if (authenticated === undefined) {
       writeJson(res, 401, { authenticated: false })
       return
     }
+    const { session } = authenticated
     writeJson(res, 200, {
       authenticated: true,
       user: session.user,
       createdAt: new Date(session.createdAt).toISOString(),
       expiresAt: new Date(session.expiresAt).toISOString(),
-    })
+    }, this.renewalHeaders(authenticated))
   }
 
   private csrf(req: IncomingMessage, res: ServerResponse): void {
@@ -330,13 +333,17 @@ export class AuthApplication {
       write(res, 405, 'method not allowed', { allow: 'GET', 'cache-control': 'no-store' })
       return
     }
-    if (this.sessions.authenticate(req, this.now()) === undefined) {
+    const authenticated = this.sessions.authenticate(req, this.now())
+    if (authenticated === undefined) {
       writeJson(res, 401, { authenticated: false })
       return
     }
     const csrf = this.issueCsrf()
     writeJson(res, 200, { csrf: csrf.token }, {
-      'set-cookie': this.cookie(this.cookieNames.csrf, csrf.value, 10 * 60),
+      'set-cookie': [
+        ...this.renewalCookies(authenticated),
+        this.cookie(this.cookieNames.csrf, csrf.value, 10 * 60),
+      ],
     })
   }
 
@@ -346,15 +353,18 @@ export class AuthApplication {
       return
     }
     const preferences = resolveUiPreferences(req, this.readHarnessUiSettings())
-    const session = this.sessions.authenticate(req, this.now())
-    if (session === undefined) {
+    const authenticated = this.sessions.authenticate(req, this.now())
+    if (authenticated === undefined) {
       const target = encodeURIComponent(`${this.config.basePath}/account`)
       redirect(res, `${this.config.basePath}/login?returnTo=${target}`)
       return
     }
     const csrf = this.issueCsrf()
-    writeHtml(res, 200, accountPage(this.config.basePath, session, csrf.token, preferences), {
-      'set-cookie': this.cookie(this.cookieNames.csrf, csrf.value, 10 * 60),
+    writeHtml(res, 200, accountPage(this.config.basePath, authenticated.session, csrf.token, preferences), {
+      'set-cookie': [
+        ...this.renewalCookies(authenticated),
+        this.cookie(this.cookieNames.csrf, csrf.value, 10 * 60),
+      ],
     })
   }
 
@@ -377,8 +387,8 @@ export class AuthApplication {
       write(res, 405, 'method not allowed', { allow: 'GET, HEAD', 'cache-control': 'no-store' })
       return
     }
-    const session = this.sessions.authenticate(req, this.now())
-    if (session === undefined) {
+    const authenticated = this.sessions.authenticate(req, this.now())
+    if (authenticated === undefined) {
       const original = safeReturnTarget(headerValue(req, 'x-original-uri'))
       const login = `${this.config.basePath}/login?returnTo=${encodeURIComponent(original)}`
       res.writeHead(401, {
@@ -393,9 +403,10 @@ export class AuthApplication {
     res.writeHead(204, {
       'cache-control': 'no-store, max-age=0',
       'vary': 'Cookie',
-      'x-dsh-auth-user-id': session.user.userId,
-      'x-dsh-auth-username': encodeURIComponent(session.user.username),
-      'x-dsh-auth-roles': session.user.roles.join(','),
+      'x-dsh-auth-user-id': authenticated.session.user.userId,
+      'x-dsh-auth-username': encodeURIComponent(authenticated.session.user.username),
+      'x-dsh-auth-roles': authenticated.session.user.roles.join(','),
+      ...this.renewalHeaders(authenticated),
     })
     res.end()
   }
@@ -422,6 +433,17 @@ export class AuthApplication {
     const signed = parseCookies(req.headers.cookie).get(this.cookieNames.csrf)
     const token = this.csrfSigner.verify(signed)
     return token !== undefined && constantTimeTextEqual(token, submitted, this.config.sessionSecret)
+  }
+
+  private renewalCookies(authenticated: SessionAuthentication): readonly string[] {
+    return authenticated.renewalCookieValue === undefined
+      ? []
+      : [this.cookie(this.cookieNames.session, authenticated.renewalCookieValue, this.config.sessionTtlSeconds)]
+  }
+
+  private renewalHeaders(authenticated: SessionAuthentication): Record<string, string | string[]> {
+    const cookies = this.renewalCookies(authenticated)
+    return cookies.length === 0 ? {} : { 'set-cookie': [...cookies] }
   }
 
   private cookie(name: string, value: string, maxAgeSeconds: number): string {

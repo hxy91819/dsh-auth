@@ -38,13 +38,23 @@ describe('configuration', () => {
     expect(config.passwordHash).toBe(credentials.hash)
     expect(config.sessionSecret.length).toBeGreaterThanOrEqual(32)
     expect(config.secureCookies).toBe(true)
+    expect(config.sessionTtlSeconds).toBe(72 * 60 * 60)
+    expect(config.idleTtlSeconds).toBe(72 * 60 * 60)
+    expect(config.sessionRenewalSeconds).toBe(60 * 60)
   }, 30_000)
 
   it('rejects relative files, duplicate sources, and invalid lifetimes', async () => {
     const credentials = await testCredentials()
     const base = { userId: 'u', username: 'name', passwordHash: credentials.hash, sessionSecret: credentials.secret }
     expect(() => resolveConfig({ ...base, passwordHashFile: 'relative' })).toThrow(/exactly one/u)
+    expect(() => resolveConfig({ ...base, sessionStoreFile: 'relative' })).toThrow(/sessionStoreFile/u)
     expect(() => resolveConfig({ ...base, idleTtlSeconds: 59 })).toThrow(/idleTtlSeconds/u)
+    expect(() => resolveConfig({
+      ...base,
+      sessionTtlSeconds: 60,
+      idleTtlSeconds: 60,
+      sessionRenewalSeconds: 61,
+    })).toThrow(/sessionRenewalSeconds/u)
     expect(resolveConfig({ ...base, secureCookies: false }).secureCookies).toBe(false)
     expect(() => resolveConfig({ ...base, secureCookies: 'false' })).toThrow(/secureCookies/u)
   }, 30_000)

@@ -14,9 +14,11 @@ export interface ConfigInput {
   readonly passwordHashFile?: string
   readonly sessionSecret?: string
   readonly sessionSecretFile?: string
+  readonly sessionStoreFile?: string
   readonly secureCookies?: boolean
   readonly sessionTtlSeconds?: number
   readonly idleTtlSeconds?: number
+  readonly sessionRenewalSeconds?: number
   readonly maxSessions?: number
   readonly maxPasswordBytes?: number
   readonly loginWindowSeconds?: number
@@ -35,9 +37,11 @@ export interface ResolvedConfig {
   }
   readonly passwordHash: string
   readonly sessionSecret: Buffer
+  readonly sessionStoreFile: string | undefined
   readonly secureCookies: boolean
   readonly sessionTtlSeconds: number
   readonly idleTtlSeconds: number
+  readonly sessionRenewalSeconds: number
   readonly maxSessions: number
   readonly maxPasswordBytes: number
   readonly loginWindowSeconds: number
@@ -150,6 +154,13 @@ function validateBasePath(value: unknown): string {
   return path
 }
 
+function optionalAbsolutePath(input: Record<string, unknown>, key: string): string | undefined {
+  const value = optionalString(input, key)
+  if (value === undefined) return undefined
+  if (!isAbsolute(value)) throw new Error(`${key} must be an absolute path`)
+  return value
+}
+
 /**
  * Validate and resolve all plugin configuration.
  * @param value - raw Cordis config.
@@ -173,17 +184,26 @@ export function resolveConfig(value: unknown): ResolvedConfig {
   }
   if (sessionSecret.includes(0)) throw new Error('sessionSecret must not contain NUL bytes')
 
-  const sessionTtlSeconds = integer(input, 'sessionTtlSeconds', 8 * 60 * 60, 60, 30 * 24 * 60 * 60)
-  const idleTtlSeconds = integer(input, 'idleTtlSeconds', 60 * 60, 60, sessionTtlSeconds)
+  const sessionTtlSeconds = integer(input, 'sessionTtlSeconds', 72 * 60 * 60, 60, 30 * 24 * 60 * 60)
+  const idleTtlSeconds = integer(input, 'idleTtlSeconds', 72 * 60 * 60, 60, sessionTtlSeconds)
+  const sessionRenewalSeconds = integer(
+    input,
+    'sessionRenewalSeconds',
+    Math.min(60 * 60, sessionTtlSeconds, idleTtlSeconds),
+    1,
+    Math.min(sessionTtlSeconds, idleTtlSeconds),
+  )
   const trustedProxyAddresses = proxyAddressList(input)
   return {
     basePath: validateBasePath(input.basePath),
     user: { userId, username, roles },
     passwordHash,
     sessionSecret,
+    sessionStoreFile: optionalAbsolutePath(input, 'sessionStoreFile'),
     secureCookies: boolean(input, 'secureCookies', true),
     sessionTtlSeconds,
     idleTtlSeconds,
+    sessionRenewalSeconds,
     maxSessions: integer(input, 'maxSessions', 16, 1, 1024),
     maxPasswordBytes: integer(input, 'maxPasswordBytes', 1024, 64, 16 * 1024),
     loginWindowSeconds: integer(input, 'loginWindowSeconds', 60, 1, 60 * 60),

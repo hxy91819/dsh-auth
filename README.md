@@ -9,13 +9,13 @@ Add a secure, single-account login to the DeepSeek Harness Web app without forki
 ## What you get
 
 - A login and account experience that follows Harness language, theme, spacing, and responsive layout.
-- Argon2id password hashing and opaque, server-revocable sessions.
+- Argon2id password hashing and opaque, persistent, server-revocable sessions.
 - Safe return-to navigation with CSRF and Origin protection.
 - Independent login rate limits in both Nginx and the application.
 - A loopback-only Harness process behind the only public listener: Nginx.
 - Installation from npm, a local checkout, or a pinned offline tarball.
 
-Version 1 supports one configured account. Sessions survive page reloads and browser restarts until their idle or absolute expiry, but restarting DSH revokes all sessions because the session store is intentionally in memory.
+Version 1 supports one configured account. Sessions persist across browser and DSH restarts, use a 72-hour rolling lifetime by default, and renew during authenticated Harness activity. Logout, account identity changes, and session-secret rotation still revoke them immediately.
 
 ## Requirements
 
@@ -33,7 +33,7 @@ The tested baseline is DSH `0.1.0-rc.6`, Cordis `4.0.1`, Node `24.15.0`, and Ngi
 Install the published package into the Harness Web profile. Pin the version for reproducible deployments:
 
 ```sh
-dsh plugin --profile web add dsh-auth@0.1.10
+dsh plugin --profile web add dsh-auth@0.1.11
 dsh --profile web --dump-config
 ```
 
@@ -72,10 +72,13 @@ export DSH_AUTH_ROLES=admin
 export DSH_AUTH_TRUSTED_PROXY_ADDRESSES=127.0.0.1,::1
 export DSH_AUTH_PASSWORD_HASH_FILE="$AUTH_DIR/password-hash"
 export DSH_AUTH_SESSION_SECRET_FILE="$AUTH_DIR/session-secret"
+export DSH_AUTH_SESSION_STORE_FILE="${DSH_HOME:-$HOME/.dsh}/dsh-auth-sessions.json"
 dsh web --port 3080
 ```
 
-DSH listens on `127.0.0.1:3080`; do not expose that listener publicly. For a persistent deployment, put these values in a service-manager environment file and run DSH under that service. DSH rejects `DSH_*` launch variables in its project `.env`; use inherited environment, a container env-file, or a service manager. The packaged [`deploy/dsh-auth.env.example`](deploy/dsh-auth.env.example) contains placeholders only.
+DSH listens on `127.0.0.1:3080`; do not expose that listener publicly. The bundle defaults the session store to `$DSH_HOME/dsh-auth-sessions.json` if `DSH_AUTH_SESSION_STORE_FILE` is omitted. Its parent directory must already exist and be writable by the DSH service user; the plugin creates and atomically replaces the state file with mode `0600`.
+
+For a persistent deployment, put these values in a service-manager environment file and run DSH under that service. DSH rejects `DSH_*` launch variables in its project `.env`; use inherited environment, a container env-file, or a service manager. The packaged [`deploy/dsh-auth.env.example`](deploy/dsh-auth.env.example) contains placeholders only.
 
 ### 4. Put Nginx in front
 
@@ -133,8 +136,10 @@ Plain HTTP still enforces authentication, CSRF/Origin checks, rate limiting, and
 | `DSH_AUTH_PASSWORD_HASH` / `_FILE` | exactly one | Argon2id v=19 hash or absolute file path |
 | `DSH_AUTH_SESSION_SECRET` / `_FILE` | exactly one | at least 32 bytes or absolute file path; rotation revokes all sessions |
 | `DSH_AUTH_SECURE_COOKIES` | `true` | keep `Secure` and `__Host-` cookies; set `false` only for isolated HTTP evaluation |
-| `DSH_AUTH_SESSION_TTL_SECONDS` | `28800` | absolute session lifetime |
-| `DSH_AUTH_IDLE_TTL_SECONDS` | `3600` | idle lifetime, not greater than the absolute lifetime |
+| `DSH_AUTH_SESSION_STORE_FILE` | `$DSH_HOME/dsh-auth-sessions.json` | absolute path for atomically written `0600` session state |
+| `DSH_AUTH_SESSION_TTL_SECONDS` | `259200` | rolling session and browser-cookie lifetime; defaults to 72 hours |
+| `DSH_AUTH_IDLE_TTL_SECONDS` | `259200` | maximum inactivity before expiry; defaults to 72 hours |
+| `DSH_AUTH_SESSION_RENEWAL_SECONDS` | `3600` | minimum active interval between renewal cookies and state writes |
 | `DSH_AUTH_MAX_SESSIONS` | `16` | maximum live sessions for the account |
 | `DSH_AUTH_MAX_PASSWORD_BYTES` | `1024` | submitted password byte limit |
 | `DSH_AUTH_LOGIN_WINDOW_SECONDS` | `60` | application login-rate window |
@@ -155,7 +160,7 @@ npm pack --dry-run
 Install the exact artifact into a profile without registry access:
 
 ```sh
-dsh plugin --profile web add --offline --config.auto-install-peers=false ./dsh-auth-0.1.10.tgz
+dsh plugin --profile web add --offline --config.auto-install-peers=false ./dsh-auth-0.1.11.tgz
 ```
 
 The tarball has no installed runtime dependencies and includes the Node plugin, browser bundle, Nginx template, and Docker integration files. Pin and verify its digest in production builds. [`deploy/docker/Dockerfile.install`](deploy/docker/Dockerfile.install) performs the profile installation with `--network=none`; see [`deploy/docker/README.md`](deploy/docker/README.md).
@@ -165,6 +170,8 @@ For two containers, publish only Nginx and keep DSH on a private network. Give N
 ## Security and limitations
 
 - Session and CSRF cookies use `HttpOnly; Secure; SameSite=Lax; Path=/` and the `__Host-` prefix by default.
+- The session file contains opaque tokens and timestamps, never passwords, password hashes, cookie signatures, or session secrets. Invalid or overly permissive state files fail startup instead of silently disabling persistence.
+- Active authenticated requests extend the rolling expiry no more than once per renewal interval. Nginx forwards the renewed cookie from its internal `auth_request`, so long-running Agent API activity keeps both browser and server expiry aligned without writing on every request.
 - Password verification uses Argon2id and constant-time tag comparison. Unknown usernames run the configured hash before returning the same generic failure.
 - Login and logout require a signed double-submit token and exact Origin/Referer validation after trusted-proxy resolution.
 - Authentication responses are `no-store`; credentials, cookies, request bodies, and authentication failures are not logged by the plugin.
@@ -178,7 +185,7 @@ Security reports follow [`SECURITY.md`](SECURITY.md).
 
 ## How it works
 
-Nginx is the only public listener. It applies security headers and an outer login limit, calls the plugin's internal verification route, and proxies authenticated traffic to DSH. The plugin uses Harness's public WebServer, Settings, index-tap, client-module, locale, and sidebar-slot extension points; it does not fork Harness, replace assets, probe the DOM, or use Nginx `sub_filter`.
+Nginx is the only public listener. It applies security headers and an outer login limit, calls the plugin's internal verification route, forwards renewal cookies, and proxies authenticated traffic to DSH. The plugin uses Harness's public WebServer, Settings, index-tap, client-module, locale, and sidebar-slot extension points; it does not fork Harness, replace assets, probe the DOM, or use Nginx `sub_filter`.
 
 | Traffic | DSH route | Nginx behavior |
 |---|---|---|

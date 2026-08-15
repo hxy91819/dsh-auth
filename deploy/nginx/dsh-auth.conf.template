@@ -54,6 +54,7 @@ server {
     add_header X-Frame-Options "DENY" always;
     add_header Referrer-Policy "same-origin" always;
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Set-Cookie $dsh_auth_renew_cookie always;
 
     location = /_dsh_auth_verify {
         internal;
@@ -107,6 +108,7 @@ server {
 
     location = /api {
         auth_request /_dsh_auth_verify;
+        auth_request_set $dsh_auth_renew_cookie $upstream_http_set_cookie;
         proxy_pass http://dsh_auth_upstream;
         proxy_http_version 1.1;
         proxy_buffering off;
@@ -120,6 +122,7 @@ server {
 
     location ^~ /api/ {
         auth_request /_dsh_auth_verify;
+        auth_request_set $dsh_auth_renew_cookie $upstream_http_set_cookie;
         proxy_pass http://dsh_auth_upstream;
         proxy_http_version 1.1;
         proxy_buffering off;
@@ -134,6 +137,7 @@ server {
 
     location = /plugins/events {
         auth_request /_dsh_auth_verify;
+        auth_request_set $dsh_auth_renew_cookie $upstream_http_set_cookie;
         auth_request_set $dsh_auth_login_url $upstream_http_x_dsh_auth_login;
         error_page 401 = @dsh_auth_login;
         proxy_pass http://dsh_auth_upstream;
@@ -146,6 +150,7 @@ server {
 
     location / {
         auth_request /_dsh_auth_verify;
+        auth_request_set $dsh_auth_renew_cookie $upstream_http_set_cookie;
         auth_request_set $dsh_auth_login_url $upstream_http_x_dsh_auth_login;
         error_page 401 = @dsh_auth_login;
         proxy_pass http://dsh_auth_upstream;

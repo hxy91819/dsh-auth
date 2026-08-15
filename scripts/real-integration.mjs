@@ -238,6 +238,7 @@ async function main() {
     DSH_AUTH_TRUSTED_PROXY_ADDRESSES: '127.0.0.2',
     DSH_AUTH_PASSWORD_HASH_FILE: hashFile,
     DSH_AUTH_SESSION_SECRET_FILE: secretFile,
+    DSH_AUTH_SESSION_RENEWAL_SECONDS: '1',
   }
   dshProcess = child('dsh', ['web', '--port', String(dshPort)], { cwd: launchCwd, env: dshEnvironment })
   await waitUntil(async () => {
@@ -369,14 +370,19 @@ async function main() {
     assert(session.field.includes(attribute), `session cookie omitted ${attribute}`)
   }
 
-  const sessionView = await request(httpsPort, '/auth/session', { headers: { cookie: session.pair } })
-  const sessionJson = JSON.parse(sessionView.body.toString('utf8'))
-  assert(sessionView.status === 200 && sessionJson.user.userId === 'integration-user', 'session identity was unavailable')
-
+  await new Promise(resolveTimeout => setTimeout(resolveTimeout, 1_100))
   const spa = await request(httpsPort, '/', { headers: { cookie: session.pair } })
   const spaHtml = spa.body.toString('utf8')
   assert(spa.status === 200 && spaHtml.includes('window.__DSH_BOOT__'), 'authenticated real SPA was unavailable')
+  assert(
+    (Array.isArray(spa.headers['set-cookie']) ? spa.headers['set-cookie'] : [spa.headers['set-cookie']])
+      .some(field => field?.startsWith('__Host-dsh_auth_session=')),
+    'Nginx did not forward the renewed session cookie from auth_request',
+  )
   assert(!spaHtml.includes('browser-bootstrap.js'), 'HTTPS SPA included the HTTP compatibility script')
+  const sessionView = await request(httpsPort, '/auth/session', { headers: { cookie: session.pair } })
+  const sessionJson = JSON.parse(sessionView.body.toString('utf8'))
+  assert(sessionView.status === 200 && sessionJson.user.userId === 'integration-user', 'session identity was unavailable')
   const assetPath = /<script[^>]+src="([^"]+\.js)"/u.exec(spaHtml)?.[1]
   assert(assetPath !== undefined, 'SPA entry asset was not discoverable')
   assert((await request(httpsPort, assetPath, { headers: { cookie: session.pair } })).status === 200, 'SPA asset was unavailable')
@@ -404,6 +410,21 @@ async function main() {
   const download = await request(httpsPort, downloadPath, { headers: { cookie: session.pair } })
   assert(download.status === 200 && download.body.length > 0, 'authenticated download returned no artifact')
   assert(await websocketStatus(httpsPort, session.pair) === 101, 'authenticated real WebSocket did not upgrade')
+
+  await terminate(dshProcess)
+  dshProcess = child('dsh', ['web', '--port', String(dshPort)], { cwd: launchCwd, env: dshEnvironment })
+  await waitUntil(async () => {
+    const response = await fetch(`http://127.0.0.1:${String(dshPort)}/auth/login`)
+    return response.status === 200
+  }, 'restarted DSH')
+  const afterRestartSession = await request(httpsPort, '/auth/session', { headers: { cookie: session.pair } })
+  const afterRestartIdentity = JSON.parse(afterRestartSession.body.toString('utf8'))
+  assert(
+    afterRestartSession.status === 200 && afterRestartIdentity.user?.userId === 'integration-user',
+    'persisted session identity did not survive a DSH restart',
+  )
+  const afterRestartSpa = await request(httpsPort, '/', { headers: { cookie: session.pair } })
+  assert(afterRestartSpa.status === 200, 'persisted session did not reach the protected SPA after a DSH restart')
 
   const browser = await openBrowser(chromePort, `https://localhost:${String(httpsPort)}/auth/login`)
   try {
@@ -476,6 +497,8 @@ async function main() {
     authenticatedApi: createdResponse.status,
     authenticatedDownload: download.status,
     authenticatedWebSocket: 101,
+    sessionRenewal: 'Set-Cookie via auth_request',
+    sessionPersistence: 'survived DSH restart',
     browserSidebarSignOut: 'Sign out -> /auth/login',
     logoutRevocation: 401,
     tamperedCookie: 401,

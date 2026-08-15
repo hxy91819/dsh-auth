@@ -12,9 +12,11 @@
         passwordHashFile: !!js process.env.DSH_AUTH_PASSWORD_HASH_FILE
         sessionSecret: !!js process.env.DSH_AUTH_SESSION_SECRET
         sessionSecretFile: !!js process.env.DSH_AUTH_SESSION_SECRET_FILE
+        sessionStoreFile: !!js process.env.DSH_AUTH_SESSION_STORE_FILE ?? dshHomePath('dsh-auth-sessions.json')
         secureCookies: !!js JSON.parse(process.env.DSH_AUTH_SECURE_COOKIES ?? 'true')
-        sessionTtlSeconds: !!js Number(process.env.DSH_AUTH_SESSION_TTL_SECONDS ?? 28800)
-        idleTtlSeconds: !!js Number(process.env.DSH_AUTH_IDLE_TTL_SECONDS ?? 3600)
+        sessionTtlSeconds: !!js Number(process.env.DSH_AUTH_SESSION_TTL_SECONDS ?? 259200)
+        idleTtlSeconds: !!js Number(process.env.DSH_AUTH_IDLE_TTL_SECONDS ?? 259200)
+        sessionRenewalSeconds: !!js Number(process.env.DSH_AUTH_SESSION_RENEWAL_SECONDS ?? 3600)
         maxSessions: !!js Number(process.env.DSH_AUTH_MAX_SESSIONS ?? 16)
         maxPasswordBytes: !!js Number(process.env.DSH_AUTH_MAX_PASSWORD_BYTES ?? 1024)
         loginWindowSeconds: !!js Number(process.env.DSH_AUTH_LOGIN_WINDOW_SECONDS ?? 60)

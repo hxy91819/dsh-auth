@@ -15,6 +15,7 @@ coverage/
 cookie-jar*
 password-hash
 session-secret
+dsh-auth-sessions.json
 secrets/
 pnpm-debug.log*
 npm-debug.log*
