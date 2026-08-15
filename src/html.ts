@@ -12,11 +12,9 @@ function escapeHtml(value: string): string {
 
 interface UiCopy {
   readonly signInTitle: string
-  readonly signInLede: string
   readonly username: string
   readonly password: string
   readonly signIn: string
-  readonly credentialsNotice: string
   readonly invalidCredentials: string
   readonly rateLimited: string
   readonly accountTitle: string
@@ -30,11 +28,9 @@ interface UiCopy {
 const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
   zh: {
     signInTitle: '登录 DeepSeek Harness',
-    signInLede: '使用此部署配置的账户继续。',
     username: '用户名',
     password: '密码',
     signIn: '登录',
-    credentialsNotice: '凭据仅由此部署验证，不会写入应用日志。',
     invalidCredentials: '用户名或密码不正确。',
     rateLimited: '尝试次数过多，请稍后再试。',
     accountTitle: '账户',
@@ -46,11 +42,9 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
   },
   en: {
     signInTitle: 'Sign in to DeepSeek Harness',
-    signInLede: 'Continue with the account configured by this deployment.',
     username: 'Username',
     password: 'Password',
     signIn: 'Sign in',
-    credentialsNotice: 'Credentials are verified by this deployment and are not written to application logs.',
     invalidCredentials: 'The username or password is incorrect.',
     rateLimited: 'Too many attempts. Try again later.',
     accountTitle: 'Account',
@@ -171,6 +165,7 @@ body[data-theme='dark'] {
 h1 { margin: 0; font-size: 24px; line-height: 32px; font-weight: 500; letter-spacing: -.02em; }
 .lede { margin: 8px 0 28px; color: var(--label-secondary); font-size: 14px; line-height: 22px; }
 form { display: flex; flex-direction: column; }
+.login-form { margin-top: 28px; }
 .field { display: flex; flex-direction: column; gap: 8px; }
 .field + .field { margin-top: 18px; }
 label { font-size: 14px; line-height: 22px; font-weight: 400; }
@@ -214,8 +209,7 @@ button:hover, .button:hover { background: var(--button-hover); }
 button:focus-visible, .button:focus-visible { outline: none; box-shadow: 0 0 0 3px rgb(65 118 230 / 22%); }
 .secondary { margin-top: 20px; border-color: var(--border-l2); background: transparent; color: var(--label-primary); }
 .secondary:hover { background: var(--bg-control-hover); }
-.notice { margin: 0 0 20px; padding: 11px 12px; border: 1px solid color-mix(in srgb, var(--error-label) 18%, transparent); border-radius: 12px; background: var(--error-bg); color: var(--error-label); font-size: 13px; line-height: 20px; }
-.fine { margin: 20px 0 0; color: var(--label-tertiary); font-size: 12px; line-height: 18px; text-align: center; }
+.notice { margin: 20px 0 0; padding: 11px 12px; border: 1px solid color-mix(in srgb, var(--error-label) 18%, transparent); border-radius: 12px; background: var(--error-bg); color: var(--error-label); font-size: 13px; line-height: 20px; }
 .details { margin-top: 28px; padding: 4px 16px; border: 1px solid var(--border-l2); border-radius: 16px; background: var(--bg-control); }
 dl { margin: 0; }
 .detail { display: grid; grid-template-columns: minmax(80px, auto) 1fr; gap: 16px; padding: 13px 0; border-bottom: 1px solid var(--border-l2); font-size: 14px; line-height: 22px; }
@@ -267,9 +261,8 @@ export function loginPage(
   const notice = message === undefined ? '' : `<p class="notice" role="alert">${escapeHtml(copy[message])}</p>`
   return document(copy.signInTitle, `<section class="content">
     <h1>${escapeHtml(copy.signInTitle)}</h1>
-    <p class="lede">${escapeHtml(copy.signInLede)}</p>
     ${notice}
-    <form method="post" action="${escapeHtml(basePath)}/login">
+    <form class="login-form" method="post" action="${escapeHtml(basePath)}/login">
       <input type="hidden" name="csrf" value="${escapeHtml(csrfToken)}">
       <input type="hidden" name="returnTo" value="${escapeHtml(returnTo)}">
       <div class="field">
@@ -282,7 +275,6 @@ export function loginPage(
       </div>
       <button type="submit">${escapeHtml(copy.signIn)}</button>
     </form>
-    <p class="fine">${escapeHtml(copy.credentialsNotice)}</p>
   </section>`, preferences)
 }
 

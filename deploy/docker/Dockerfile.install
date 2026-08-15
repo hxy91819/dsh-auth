@@ -2,7 +2,7 @@
 ARG DSH_BASE_IMAGE
 FROM ${DSH_BASE_IMAGE}
 
-ARG DSH_AUTH_TARBALL=dsh-auth-0.1.7.tgz
+ARG DSH_AUTH_TARBALL=dsh-auth-0.1.8.tgz
 COPY ${DSH_AUTH_TARBALL} /opt/dsh-auth/dsh-auth.tgz
 
 # The tarball has no runtime dependency downloads. The base image must contain

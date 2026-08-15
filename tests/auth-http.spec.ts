@@ -68,6 +68,8 @@ describe('observable authentication flow', () => {
   it('uses a generic failure, issues hardened cookies, exposes identity, and revokes on logout', async () => {
     const first = await loginPage('/workspace?tab=recent')
     expect(first.html).toContain('Sign in to DeepSeek Harness')
+    expect(first.html).not.toContain('Continue with the account configured by this deployment.')
+    expect(first.html).not.toContain('Credentials are verified by this deployment')
     const denied = await submitLogin(first.csrfCookie, first.csrf, randomBytes(24).toString('base64url'))
     expect(denied.status).toBe(401)
     expect(await denied.text()).toContain('username or password is incorrect')
@@ -238,6 +240,8 @@ describe('observable authentication flow', () => {
     expect(html).toContain('<html lang="zh-CN">')
     expect(html).toContain('<body data-theme="dark">')
     expect(html).toContain('登录 DeepSeek Harness')
+    expect(html).not.toContain('使用此部署配置的账户继续。')
+    expect(html).not.toContain('凭据仅由此部署验证')
     expect(html).not.toContain('class="preferences"')
     expect(html).not.toContain('aria-label="外观"')
     expect(html).not.toContain('dsh_auth_language')

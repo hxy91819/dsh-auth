@@ -87,7 +87,7 @@ npm pack --dry-run
 Install the exact tarball into a profile without registry access:
 
 ```sh
-dsh plugin --profile web add --offline --config.auto-install-peers=false ./dsh-auth-0.1.7.tgz
+dsh plugin --profile web add --offline --config.auto-install-peers=false ./dsh-auth-0.1.8.tgz
 ```
 
 The tarball contains both the Node plugin and `lib/client.js`, the closure bundle discovered by DSH's Web client loader. It has no installed runtime dependencies; DSH supplies the optional Host and browser platform peers. Pin and verify the tarball digest in production image builds. Future npm installation can use the same bundle format after a registry owner publishes it; no npm package currently exists.
