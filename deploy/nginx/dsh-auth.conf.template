@@ -1,0 +1,166 @@
+# Include this file inside nginx's `http {}` block. Render only the declared
+# ${DSH_*} placeholders so nginx variables such as $request_uri stay intact.
+
+map $http_upgrade $dsh_connection_upgrade {
+    default upgrade;
+    '' close;
+}
+
+map $request_method $dsh_auth_login_limit_key {
+    default '';
+    POST $binary_remote_addr;
+}
+
+map $host $dsh_public_host_allowed {
+    default 0;
+    ${DSH_PUBLIC_SERVER_NAME} 1;
+}
+
+limit_req_zone $dsh_auth_login_limit_key zone=dsh_auth_login:10m rate=${DSH_LOGIN_RATE};
+
+upstream dsh_auth_upstream {
+    server ${DSH_UPSTREAM};
+    keepalive 32;
+}
+
+server {
+    listen ${DSH_HTTP_LISTEN};
+    server_name ${DSH_PUBLIC_SERVER_NAME};
+    server_name_in_redirect on;
+
+    if ($dsh_public_host_allowed = 0) { return 421; }
+
+    return 308 https://${DSH_PUBLIC_HTTPS_AUTHORITY}$request_uri;
+}
+
+server {
+    listen ${DSH_HTTPS_LISTEN} ssl http2;
+    server_name ${DSH_PUBLIC_SERVER_NAME};
+    server_name_in_redirect on;
+
+    if ($dsh_public_host_allowed = 0) { return 421; }
+
+    ssl_certificate ${DSH_TLS_CERTIFICATE};
+    ssl_certificate_key ${DSH_TLS_CERTIFICATE_KEY};
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:DSHAuthTLS:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    client_max_body_size 170m;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "same-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+
+    location = /_dsh_auth_verify {
+        internal;
+        proxy_pass http://dsh_auth_upstream/auth/verify;
+        proxy_method GET;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length '';
+        proxy_set_header Cookie $http_cookie;
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_set_header X-Original-Method $request_method;
+        proxy_set_header Host 127.0.0.1:3080;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    location = /auth/verify {
+        return 404;
+    }
+
+    location = /auth {
+        return 303 /auth/login;
+    }
+
+    location = /auth/login {
+        client_max_body_size 20k;
+        limit_req zone=dsh_auth_login burst=${DSH_LOGIN_BURST} nodelay;
+        limit_req_status 429;
+        proxy_pass http://dsh_auth_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host 127.0.0.1:3080;
+        proxy_set_header Origin $http_origin;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    location ^~ /auth/ {
+        client_max_body_size 20k;
+        proxy_pass http://dsh_auth_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host 127.0.0.1:3080;
+        proxy_set_header Origin $http_origin;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    location = /api {
+        auth_request /_dsh_auth_verify;
+        proxy_pass http://dsh_auth_upstream;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_set_header Host 127.0.0.1:3080;
+        proxy_set_header Origin http://127.0.0.1:3080;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $dsh_connection_upgrade;
+        expires epoch;
+    }
+
+    location ^~ /api/ {
+        auth_request /_dsh_auth_verify;
+        proxy_pass http://dsh_auth_upstream;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 1h;
+        proxy_set_header Host 127.0.0.1:3080;
+        proxy_set_header Origin http://127.0.0.1:3080;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $dsh_connection_upgrade;
+        expires epoch;
+    }
+
+    location = /plugins/events {
+        auth_request /_dsh_auth_verify;
+        auth_request_set $dsh_auth_login_url $upstream_http_x_dsh_auth_login;
+        error_page 401 = @dsh_auth_login;
+        proxy_pass http://dsh_auth_upstream;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+        proxy_set_header Host 127.0.0.1:3080;
+    }
+
+    location / {
+        auth_request /_dsh_auth_verify;
+        auth_request_set $dsh_auth_login_url $upstream_http_x_dsh_auth_login;
+        error_page 401 = @dsh_auth_login;
+        proxy_pass http://dsh_auth_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host 127.0.0.1:3080;
+        proxy_set_header Origin http://127.0.0.1:3080;
+    }
+
+    location @dsh_auth_login {
+        add_header Cache-Control "no-store, max-age=0" always;
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "same-origin" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+        return 303 $dsh_auth_login_url;
+    }
+}

@@ -1,0 +1,23 @@
+# Installed bundle layer. DSH_AUTH_* values must come from the inherited
+# process environment (or an orchestrator env-file), not DSH's project .env.
+- insert:
+    - id: dsh-auth
+      name: dsh-auth
+      config:
+        basePath: /auth
+        userId: !!js process.env.DSH_AUTH_USER_ID
+        username: !!js process.env.DSH_AUTH_USERNAME
+        roles: !!js process.env.DSH_AUTH_ROLES?.split(',').map(value => value.trim()).filter(Boolean)
+        passwordHash: !!js process.env.DSH_AUTH_PASSWORD_HASH
+        passwordHashFile: !!js process.env.DSH_AUTH_PASSWORD_HASH_FILE
+        sessionSecret: !!js process.env.DSH_AUTH_SESSION_SECRET
+        sessionSecretFile: !!js process.env.DSH_AUTH_SESSION_SECRET_FILE
+        secureCookies: !!js JSON.parse(process.env.DSH_AUTH_SECURE_COOKIES ?? 'true')
+        sessionTtlSeconds: !!js Number(process.env.DSH_AUTH_SESSION_TTL_SECONDS ?? 28800)
+        idleTtlSeconds: !!js Number(process.env.DSH_AUTH_IDLE_TTL_SECONDS ?? 3600)
+        maxSessions: !!js Number(process.env.DSH_AUTH_MAX_SESSIONS ?? 16)
+        maxPasswordBytes: !!js Number(process.env.DSH_AUTH_MAX_PASSWORD_BYTES ?? 1024)
+        loginWindowSeconds: !!js Number(process.env.DSH_AUTH_LOGIN_WINDOW_SECONDS ?? 60)
+        loginMaxAttempts: !!js Number(process.env.DSH_AUTH_LOGIN_MAX_ATTEMPTS ?? 5)
+        loginBlockSeconds: !!js Number(process.env.DSH_AUTH_LOGIN_BLOCK_SECONDS ?? 300)
+        trustedProxyAddresses: !!js (process.env.DSH_AUTH_TRUSTED_PROXY_ADDRESSES ?? '127.0.0.1,::1').split(',').map(value => value.trim()).filter(Boolean)

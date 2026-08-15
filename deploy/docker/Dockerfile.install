@@ -1,0 +1,13 @@
+# syntax=docker/dockerfile:1.7
+ARG DSH_BASE_IMAGE
+FROM ${DSH_BASE_IMAGE}
+
+ARG DSH_AUTH_TARBALL=dsh-auth-0.1.7.tgz
+COPY ${DSH_AUTH_TARBALL} /opt/dsh-auth/dsh-auth.tgz
+
+# The tarball has no runtime dependency downloads. The base image must contain
+# dsh, pnpm, and Node >=24.7.0. The resulting profile remains patchable.
+RUN --network=none DSH_HOME=/opt/dsh-home \
+    dsh plugin --profile web add --offline --config.auto-install-peers=false /opt/dsh-auth/dsh-auth.tgz
+
+ENV DSH_HOME=/opt/dsh-home

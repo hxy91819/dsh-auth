@@ -1,0 +1,51 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import { Config, resolveConfig } from '../src/config.js'
+import { testCredentials } from './helpers.js'
+
+const roots: string[] = []
+
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+})
+
+describe('configuration', () => {
+  it('fails before activation when identity, hash, or session secret is absent', () => {
+    expect(Config['~standard'].validate({}).issues?.[0]?.message).toMatch(/userId/u)
+    expect(() => resolveConfig({ userId: 'u', username: 'name' })).toThrow(/passwordHash/u)
+  })
+
+  it('reads bounded absolute secret files and preserves stable account fields', async () => {
+    const credentials = await testCredentials()
+    const root = mkdtempSync(join(tmpdir(), 'dsh-auth-config-'))
+    roots.push(root)
+    const hashFile = join(root, 'hash')
+    const secretFile = join(root, 'secret')
+    writeFileSync(hashFile, `${credentials.hash}\n`, { mode: 0o600 })
+    writeFileSync(secretFile, `${randomBytes(48).toString('base64url')}\n`, { mode: 0o600 })
+
+    const config = resolveConfig({
+      userId: 'stable-id',
+      username: 'display-name',
+      roles: ['admin', 'operator'],
+      passwordHashFile: hashFile,
+      sessionSecretFile: secretFile,
+    })
+    expect(config.user).toEqual({ userId: 'stable-id', username: 'display-name', roles: ['admin', 'operator'] })
+    expect(config.passwordHash).toBe(credentials.hash)
+    expect(config.sessionSecret.length).toBeGreaterThanOrEqual(32)
+    expect(config.secureCookies).toBe(true)
+  }, 30_000)
+
+  it('rejects relative files, duplicate sources, and invalid lifetimes', async () => {
+    const credentials = await testCredentials()
+    const base = { userId: 'u', username: 'name', passwordHash: credentials.hash, sessionSecret: credentials.secret }
+    expect(() => resolveConfig({ ...base, passwordHashFile: 'relative' })).toThrow(/exactly one/u)
+    expect(() => resolveConfig({ ...base, idleTtlSeconds: 59 })).toThrow(/idleTtlSeconds/u)
+    expect(resolveConfig({ ...base, secureCookies: false }).secureCookies).toBe(false)
+    expect(() => resolveConfig({ ...base, secureCookies: 'false' })).toThrow(/secureCookies/u)
+  }, 30_000)
+})
