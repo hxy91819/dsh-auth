@@ -2,7 +2,7 @@
 
 `dsh-auth` is an installable DeepSeek Harness/Cordis authentication bundle for deployments that put Nginx in front of the DSH Web app. It adds a standalone single-account login and account page, a bilingual sign-out action in the real Harness sidebar, signed server-revocable sessions, and an internal verification endpoint for Nginx `auth_request`. It does not fork or patch DeepSeek Harness.
 
-The package is not published to npm. Install it from a checkout or a locally built tarball. The unscoped `dsh-auth` package name is provisional until a public registry owner is chosen.
+The package is published on npm as [`dsh-auth`](https://www.npmjs.com/package/dsh-auth). A checkout and a locally packed tarball remain supported for development and deterministic offline image builds.
 
 ## Architecture
 
@@ -34,7 +34,18 @@ No Nginx `sub_filter`, DOM probing, or fragile asset replacement is used. In exp
 
 The real integration baseline is DSH `0.1.0-rc.6`, Cordis `4.0.1`, Node `24.15.0`, and Nginx `1.26.3`.
 
-## Quick start from a checkout
+## Install from npm
+
+Install the published package into the Web profile and pin the version for reproducible deployments:
+
+```sh
+dsh plugin --profile web add dsh-auth@0.1.9
+dsh --profile web --dump-config
+```
+
+The package is unscoped and public. DeepSeek Harness and its Web profile supply the optional Cordis, server, Settings, React, and client-platform peer packages.
+
+## Install from a checkout
 
 Install, check, and build:
 
@@ -87,10 +98,10 @@ npm pack --dry-run
 Install the exact tarball into a profile without registry access:
 
 ```sh
-dsh plugin --profile web add --offline --config.auto-install-peers=false ./dsh-auth-0.1.8.tgz
+dsh plugin --profile web add --offline --config.auto-install-peers=false ./dsh-auth-0.1.9.tgz
 ```
 
-The tarball contains both the Node plugin and `lib/client.js`, the closure bundle discovered by DSH's Web client loader. It has no installed runtime dependencies; DSH supplies the optional Host and browser platform peers. Pin and verify the tarball digest in production image builds. Future npm installation can use the same bundle format after a registry owner publishes it; no npm package currently exists.
+The tarball contains both the Node plugin and `lib/client.js`, the closure bundle discovered by DSH's Web client loader. It has no installed runtime dependencies; DSH supplies the optional Host and browser platform peers. Pin and verify the tarball digest in production image builds. This artifact has the same contents as the npm registry artifact, so a Docker build can remain offline after the tarball is copied into its context.
 
 `cordis.patch.yml` is the normal bundle layer. [`cordis.overlay.yml`](cordis.overlay.yml) supports advanced setups where the package is already resolvable in a profile but intentionally omitted from `dsh.profile.bundles`; pass it with `dsh --profile web --patch <path>`. Do not activate both files because they register the same row id.
 

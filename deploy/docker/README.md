@@ -1,11 +1,11 @@
 # Docker image integration
 
-Build `dsh-auth-0.1.8.tgz` with `pnpm pack --pack-destination dist-pack`, copy the exact tarball beside `Dockerfile.install`, and provide a pinned DSH base image:
+Build `dsh-auth-0.1.9.tgz` with `pnpm pack --pack-destination dist-pack`, copy the exact tarball beside `Dockerfile.install`, and provide a pinned DSH base image:
 
 ```sh
 docker build \
   --build-arg DSH_BASE_IMAGE=your-registry/your-dsh-image@sha256:replace-with-digest \
-  --build-arg DSH_AUTH_TARBALL=dsh-auth-0.1.8.tgz \
+  --build-arg DSH_AUTH_TARBALL=dsh-auth-0.1.9.tgz \
   -f Dockerfile.install .
 ```
 

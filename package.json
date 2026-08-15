@@ -1,6 +1,6 @@
 {
   "name": "dsh-auth",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Nginx-fronted single-account authentication bundle for DeepSeek Harness",
   "type": "module",
   "main": "./lib/index.js",
@@ -18,6 +18,18 @@
   },
   "bin": {
     "dsh-auth": "./lib/cli.js"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hxy91819/dsh-auth.git"
+  },
+  "homepage": "https://github.com/hxy91819/dsh-auth#readme",
+  "bugs": {
+    "url": "https://github.com/hxy91819/dsh-auth/issues"
   },
   "files": [
     "lib/**/*.js",
