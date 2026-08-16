@@ -6,6 +6,18 @@
 
 Add a secure, single-account login to the DeepSeek Harness Web app without forking or patching Harness. `dsh-auth` supplies a bilingual login page, signed and revocable sessions, a native sign-out action in the Harness sidebar, and the Nginx `auth_request` integration that protects pages, APIs, downloads, and WebSockets.
 
+## Preview
+
+Unauthenticated visitors see a responsive login page styled to match DeepSeek Harness:
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/hxy91819/dsh-auth/main/docs/images/login.png" alt="dsh-auth login page for DeepSeek Harness" width="720">
+</p>
+
+After sign-in, users enter the real Harness Web app. The authentication plugin keeps normal sessions, tools, model selection, and workspace navigation intact while adding a native sign-out action:
+
+![Authenticated DeepSeek Harness Web app with the dsh-auth sign-out action](https://raw.githubusercontent.com/hxy91819/dsh-auth/main/docs/images/authenticated-harness.png)
+
 ## What you get
 
 - A login and account experience that follows Harness language, theme, spacing, and responsive layout.
