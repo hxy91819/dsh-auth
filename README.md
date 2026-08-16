@@ -6,6 +6,17 @@
 
 Add a secure, single-account login to the DeepSeek Harness Web app without forking or patching Harness. `dsh-auth` supplies a bilingual login page, signed and revocable sessions, a native sign-out action in the Harness sidebar, and the Nginx `auth_request` integration that protects pages, APIs, downloads, and WebSockets.
 
+## Install from npm
+
+Install the published [`dsh-auth` package](https://www.npmjs.com/package/dsh-auth) from npm directly into your Harness Web profile:
+
+```sh
+dsh plugin --profile web add dsh-auth@0.1.11
+dsh --profile web --dump-config
+```
+
+Then follow the [quick start](#quick-start) to create credentials, start Harness on loopback, and put Nginx in front. Pin the package version for reproducible deployments.
+
 ## Preview
 
 Unauthenticated visitors see a responsive login page styled to match DeepSeek Harness:
@@ -40,18 +51,9 @@ The tested baseline is DSH `0.1.0-rc.6`, Cordis `4.0.1`, Node `24.15.0`, and Ngi
 
 ## Quick start
 
-### 1. Install the plugin
-
-Install the published package into the Harness Web profile. Pin the version for reproducible deployments:
-
-```sh
-dsh plugin --profile web add dsh-auth@0.1.11
-dsh --profile web --dump-config
-```
-
 The package is public and unscoped. Harness supplies its optional Cordis, server, Settings, React, and client-platform peers.
 
-### 2. Create the password hash and session secret
+### 1. Create the password hash and session secret
 
 The following Bash commands keep the password out of command-line arguments and shell history. The password is read without echo, sent only to the hashing process, and then removed from the shell variable:
 
@@ -72,7 +74,7 @@ chmod 600 "$AUTH_DIR/password-hash" "$AUTH_DIR/session-secret"
 
 Production orchestrators should mount both files from a secret manager instead. Never store a plaintext password in configuration or pass one as a command-line argument.
 
-### 3. Configure and start Harness
+### 2. Configure and start Harness
 
 Choose a stable `userId`; keep it unchanged if the display username changes. Start DSH with the authentication configuration in its process environment:
 
@@ -92,7 +94,7 @@ DSH listens on `127.0.0.1:3080`; do not expose that listener publicly. The bundl
 
 For a persistent deployment, put these values in a service-manager environment file and run DSH under that service. DSH rejects `DSH_*` launch variables in its project `.env`; use inherited environment, a container env-file, or a service manager. The packaged [`deploy/dsh-auth.env.example`](deploy/dsh-auth.env.example) contains placeholders only.
 
-### 4. Put Nginx in front
+### 3. Put Nginx in front
 
 The packaged template is an Nginx `http {}` include. Point it at the loopback DSH listener and your existing certificate files:
 
@@ -117,7 +119,7 @@ sudo systemctl reload nginx
 
 `DSH_PUBLIC_SERVER_NAME` is the exact public host used for virtual-host selection. `DSH_PUBLIC_HTTPS_AUTHORITY` is the canonical redirect authority and may include a nonstandard HTTPS port. Unknown Host values receive `421` and cannot influence redirects. Keep any ACME HTTP challenge exception required by your certificate automation.
 
-### 5. Verify the deployment
+### 4. Verify the deployment
 
 Open `https://your-host/`. An unauthenticated page request should redirect to `/auth/login`; after login, the real Harness SPA should load and its sidebar should contain the bilingual sign-out action.
 
@@ -195,32 +197,14 @@ Future multi-account support can preserve the public session fields `{ userId, u
 
 Security reports follow [`SECURITY.md`](SECURITY.md).
 
-## How it works
-
-Nginx is the only public listener. It applies security headers and an outer login limit, calls the plugin's internal verification route, forwards renewal cookies, and proxies authenticated traffic to DSH. The plugin uses Harness's public WebServer, Settings, index-tap, client-module, locale, and sidebar-slot extension points; it does not fork Harness, replace assets, probe the DOM, or use Nginx `sub_filter`.
-
-| Traffic | DSH route | Nginx behavior |
-|---|---|---|
-| SPA and static assets | `/` fallback | unauthenticated navigation redirects safely to login |
-| RPC | `/api/*` | unauthenticated requests receive `401` |
-| WebSocket downlinks | `/api/events.mux`, `/api/events.host` | authentication runs before Upgrade; denial is `401` |
-| Session-log download | `/api/session.export` | authenticated `HEAD`/`GET`, streaming proxy |
-| Client bundles | `/plugins/*` | authenticated static proxy |
-| Development reload stream | `/plugins/events` | authenticated, unbuffered SSE proxy |
-| Authentication | `/auth/*` | public login plus session, account, and logout handlers |
-| Verification | upstream `/auth/verify` | reachable only through Nginx's `internal` subrequest location |
-
-`cordis.patch.yml` is the normal bundle layer. [`cordis.overlay.yml`](cordis.overlay.yml) is for advanced deployments where the package is already resolvable but intentionally omitted from `dsh.profile.bundles`; do not activate both files.
-
 ## Development
 
-Install a checkout, run the complete checks, and add the checkout to the Web profile:
+Development is intentionally small. Install dependencies and run the repository checks:
 
 ```sh
 corepack pnpm install --frozen-lockfile
 corepack pnpm run check
 corepack pnpm run check:nginx
-dsh plugin --profile web add "$PWD"
 ```
 
-Tests cover real HTTP behavior, cookie security, login/logout, revocation, expiration, tampering, CSRF/Origin handling, rate limiting, live Harness locale/theme changes, responsive sidebar rendering, bilingual copy, the HTTP Web Crypto bootstrap, and Cordis registration lifecycle behavior.
+Agents and contributors should read [`AGENTS.md`](AGENTS.md) for the architecture, security invariants, change map, and verification workflow.
