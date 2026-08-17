@@ -8,6 +8,19 @@ permissions:
   contents: read
 
 jobs:
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan for committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -23,6 +36,8 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install --yes nginx util-linux
       - run: nginx -v
       - run: pnpm install --frozen-lockfile
+      - name: Audit production and development dependencies
+        run: pnpm audit --audit-level high
       - run: pnpm run check
       - run: pnpm run check:nginx
       - run: pnpm pack --pack-destination packed
