@@ -78,6 +78,18 @@ Use `--nginx require` when the image or provisioning layer already installs Ngin
 
 Passwords are accepted only through hidden interactive input, `--password-stdin`, or `--password-file`. There is no inline password flag. Command output, JSON, plans, subprocess argv, and installer errors never contain password or session-secret values.
 
+## Preview
+
+Unauthenticated visitors see a responsive login page styled to match DeepSeek Harness:
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/hxy91819/dsh-auth/main/docs/images/login.png" alt="dsh-auth login page for DeepSeek Harness" width="720">
+</p>
+
+After sign-in, users enter the real Harness Web app with its normal sessions, tools, model selection, and workspace navigation. The authentication plugin adds a native sign-out action to the sidebar:
+
+![Authenticated DeepSeek Harness Web app with the dsh-auth sign-out action](https://raw.githubusercontent.com/hxy91819/dsh-auth/main/docs/images/authenticated-harness.png)
+
 ## Reset the password
 
 For an installation created by `setup`, run the interactive reset:
