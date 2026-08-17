@@ -190,6 +190,8 @@ Security reports follow [`SECURITY.md`](SECURITY.md).
 corepack pnpm install --frozen-lockfile
 corepack pnpm run check
 corepack pnpm run check:nginx
+corepack pnpm pack --pack-destination packed
+node scripts/installer-e2e.mjs packed/dsh-auth-0.1.11.tgz
 ```
 
 Contributors should read [`AGENTS.md`](AGENTS.md). Installer architecture and maintenance checks are in [`docs/installer.md`](docs/installer.md).

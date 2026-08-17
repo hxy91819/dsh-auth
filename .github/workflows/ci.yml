@@ -20,11 +20,12 @@ jobs:
         with:
           node-version: 24.15.0
           cache: pnpm
-      - run: sudo apt-get update && sudo apt-get install --yes nginx
+      - run: sudo apt-get update && sudo apt-get install --yes nginx util-linux
       - run: nginx -v
       - run: pnpm install --frozen-lockfile
       - run: pnpm run check
       - run: pnpm run check:nginx
       - run: pnpm pack --pack-destination packed
       - run: node scripts/pack-smoke.mjs packed/dsh-auth-*.tgz
+      - run: node scripts/installer-e2e.mjs packed/dsh-auth-*.tgz
       - run: npm pack --dry-run
