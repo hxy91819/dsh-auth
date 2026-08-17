@@ -16,6 +16,7 @@
 - Integrate through Harness WebServer, Settings, index-tap, client-module, locale, and sidebar-slot extension points. Extend those seams instead of forking Harness, rewriting its assets, probing the DOM, or using Nginx `sub_filter`.
 - `cordis.patch.yml` is the normal bundle layer. `cordis.overlay.yml` is only for deployments that resolve the package outside `dsh.profile.bundles`; one deployment uses one of them.
 - `src/` is the source of truth. `lib/` is the published build output. Deployment templates live under `deploy/`; observable behavior belongs in `tests/`.
+- Read `docs/installer.md` before changing setup/plan/doctor/uninstall, Nginx or package discovery, systemd integration, managed paths, JSON/exit-code behavior, or installer release checks.
 
 ## Security invariants
 
@@ -33,6 +34,7 @@
 - Harness UI, locale, theme, and sign-out: `src/client.tsx`, `src/preferences.ts`, and `tests/client.spec.tsx`.
 - Cordis registration and configuration: `src/index.ts`, `src/config.ts`, `cordis.patch.yml`, and `tests/plugin.spec.ts`.
 - Edge routing and WebSocket/download behavior: `deploy/nginx/dsh-auth.conf.template` and `scripts/check-nginx.mjs`.
+- Installer discovery, typed plans, execution, recovery, doctor, and uninstall: `src/installer/`, `src/cli.ts`, and `tests/installer-*.spec.ts`.
 
 Tests assert observable behavior. Add decision-oriented comments only when code cannot express the reason for a security or compatibility choice.
 

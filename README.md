@@ -4,202 +4,165 @@
 [![CI](https://github.com/hxy91819/dsh-auth/actions/workflows/ci.yml/badge.svg)](https://github.com/hxy91819/dsh-auth/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/dsh-auth.svg)](LICENSE)
 
-Add a secure, single-account login to the DeepSeek Harness Web app without forking or patching Harness. `dsh-auth` supplies a bilingual login page, signed and revocable sessions, a native sign-out action in the Harness sidebar, and the Nginx `auth_request` integration that protects pages, APIs, downloads, and WebSockets.
+Add a secure single-account login to the DeepSeek Harness Web app. `dsh-auth` keeps Harness on loopback and installs an Nginx `auth_request` edge for pages, APIs, downloads, SSE, and WebSockets.
 
-## Install from npm
+## Install in one command
 
-Install the published [`dsh-auth` package](https://www.npmjs.com/package/dsh-auth) from npm directly into your Harness Web profile:
-
-```sh
-dsh plugin --profile web add dsh-auth@0.1.11
-dsh --profile web --dump-config
-```
-
-Then follow the [quick start](#quick-start) to create credentials, start Harness on loopback, and put Nginx in front. Pin the package version for reproducible deployments.
-
-## Preview
-
-Unauthenticated visitors see a responsive login page styled to match DeepSeek Harness:
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/hxy91819/dsh-auth/main/docs/images/login.png" alt="dsh-auth login page for DeepSeek Harness" width="720">
-</p>
-
-After sign-in, users enter the real Harness Web app. The authentication plugin keeps normal sessions, tools, model selection, and workspace navigation intact while adding a native sign-out action:
-
-![Authenticated DeepSeek Harness Web app with the dsh-auth sign-out action](https://raw.githubusercontent.com/hxy91819/dsh-auth/main/docs/images/authenticated-harness.png)
-
-## What you get
-
-- A login and account experience that follows Harness language, theme, spacing, and responsive layout.
-- Argon2id password hashing and opaque, persistent, server-revocable sessions.
-- Safe return-to navigation with CSRF and Origin protection.
-- Independent login rate limits in both Nginx and the application.
-- A loopback-only Harness process behind the only public listener: Nginx.
-- Installation from npm, a local checkout, or a pinned offline tarball.
-
-Version 1 supports one configured account. Sessions persist across browser and DSH restarts, use a 72-hour rolling lifetime by default, and renew during authenticated Harness activity. Logout, account identity changes, and session-secret rotation still revoke them immediately.
-
-## Requirements
-
-- DeepSeek Harness Web `0.1.0-rc.6`.
-- Node.js `>=24.7.0`.
-- Nginx 1.24 or newer with `ngx_http_auth_request_module`.
-- A TLS certificate for normal deployments. Plain HTTP is available only as an explicit evaluation mode.
-
-The tested baseline is DSH `0.1.0-rc.6`, Cordis `4.0.1`, Node `24.15.0`, and Nginx `1.26.3`.
-
-## Quick start
-
-The package is public and unscoped. Harness supplies its optional Cordis, server, Settings, React, and client-platform peers.
-
-### 1. Create the password hash and session secret
-
-The following Bash commands keep the password out of command-line arguments and shell history. The password is read without echo, sent only to the hashing process, and then removed from the shell variable:
-
-```bash
-AUTH_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/dsh-auth"
-DSH_AUTH_PACKAGE_DIR="${DSH_HOME:-$HOME/.dsh}/profiles/web/node_modules/dsh-auth"
-install -d -m 700 "$AUTH_DIR"
-
-IFS= read -r -s -p 'Password: ' DSH_AUTH_TEMP_PASSWORD
-printf '\n'
-printf '%s' "$DSH_AUTH_TEMP_PASSWORD" |
-  node "$DSH_AUTH_PACKAGE_DIR/lib/cli.js" hash --stdin > "$AUTH_DIR/password-hash"
-unset DSH_AUTH_TEMP_PASSWORD
-
-node "$DSH_AUTH_PACKAGE_DIR/lib/cli.js" secret > "$AUTH_DIR/session-secret"
-chmod 600 "$AUTH_DIR/password-hash" "$AUTH_DIR/session-secret"
-```
-
-Production orchestrators should mount both files from a secret manager instead. Never store a plaintext password in configuration or pass one as a command-line argument.
-
-### 2. Configure and start Harness
-
-Choose a stable `userId`; keep it unchanged if the display username changes. Start DSH with the authentication configuration in its process environment:
+Start with an existing DSH Web systemd service whose upstream listens only on loopback, then run:
 
 ```sh
-AUTH_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/dsh-auth"
-export DSH_AUTH_USER_ID=replace-with-stable-user-id
-export DSH_AUTH_USERNAME=replace-with-username
-export DSH_AUTH_ROLES=admin
-export DSH_AUTH_TRUSTED_PROXY_ADDRESSES=127.0.0.1,::1
-export DSH_AUTH_PASSWORD_HASH_FILE="$AUTH_DIR/password-hash"
-export DSH_AUTH_SESSION_SECRET_FILE="$AUTH_DIR/session-secret"
-export DSH_AUTH_SESSION_STORE_FILE="${DSH_HOME:-$HOME/.dsh}/dsh-auth-sessions.json"
-dsh web --port 3080
+sudo npx dsh-auth@0.1.11 setup
 ```
 
-DSH listens on `127.0.0.1:3080`; do not expose that listener publicly. The bundle defaults the session store to `$DSH_HOME/dsh-auth-sessions.json` if `DSH_AUTH_SESSION_STORE_FILE` is omitted. Its parent directory must already exist and be writable by the DSH service user; the plugin creates and atomically replaces the state file with mode `0600`.
+The interactive installer asks for the exact DSH service, account name, HTTPS hostname, and certificate paths; shows a secret-free plan; reads and confirms the password without echo; and changes the system only after you type the exact confirmation. It installs the pinned bundle into the selected DSH profile, writes permission-restricted file-backed credentials and a systemd `EnvironmentFile` drop-in, renders the Nginx include, runs `nginx -t`, restarts only the named DSH service, then reloads Nginx. It never stores the plaintext password.
 
-For a persistent deployment, put these values in a service-manager environment file and run DSH under that service. DSH rejects `DSH_*` launch variables in its project `.env`; use inherited environment, a container env-file, or a service manager. The packaged [`deploy/dsh-auth.env.example`](deploy/dsh-auth.env.example) contains placeholders only.
+If Nginx is missing, the installer detects the operating system first. On Ubuntu 24.04 and TencentOS Server 4.4 it can show and, after a separate `install-nginx` confirmation, run the operating system's fixed `apt-get` or `dnf` argv. It uses only configured system repositories. Unknown systems fail closed with a copyable remediation; no `curl | sh` path exists.
 
-### 3. Put Nginx in front
+Normal deployment requires Nginx 1.24 or newer with `ngx_http_auth_request_module`, systemd, Node.js 24.7 or newer, DSH Web 0.1.0-rc.6, and an existing TLS certificate and key. The installer cannot and does not guess a domain or certificate.
 
-The packaged template is an Nginx `http {}` include. Point it at the loopback DSH listener and your existing certificate files:
+## Interactive example
+
+```text
+$ sudo npx dsh-auth@0.1.11 setup
+Existing DSH Web systemd unit: dsh-web.service
+Stable user id [admin]:
+Login username [admin]: operator
+Edge mode (https/http) [https]:
+HTTPS listen address [0.0.0.0]:
+Public HTTPS hostname: harness.example.com
+TLS certificate absolute path: /etc/letsencrypt/live/harness.example.com/fullchain.pem
+TLS certificate key absolute path: /etc/letsencrypt/live/harness.example.com/privkey.pem
+...
+Type install to apply this exact plan: install
+Password:
+Confirm password:
+dsh-auth setup completed successfully.
+```
+
+Rerunning the same command is idempotent. An existing managed installation with identical non-secret settings is reported unchanged; different settings or files without an ownership record are rejected instead of overwritten.
+
+Use `plan` before setup to inspect the same typed plan without reading a password or changing the filesystem:
 
 ```sh
-DSH_AUTH_PACKAGE_DIR="${DSH_HOME:-$HOME/.dsh}/profiles/web/node_modules/dsh-auth"
-export DSH_UPSTREAM=127.0.0.1:3080
-export DSH_HTTP_LISTEN=80
-export DSH_HTTPS_LISTEN=443
-export DSH_PUBLIC_SERVER_NAME=replace-with-public-hostname
-export DSH_PUBLIC_HTTPS_AUTHORITY=replace-with-public-hostname
-export DSH_TLS_CERTIFICATE=/etc/letsencrypt/live/replace-with-name/fullchain.pem
-export DSH_TLS_CERTIFICATE_KEY=/etc/letsencrypt/live/replace-with-name/privkey.pem
-export DSH_LOGIN_RATE=5r/m
-export DSH_LOGIN_BURST=4
-
-envsubst '${DSH_UPSTREAM} ${DSH_HTTP_LISTEN} ${DSH_HTTPS_LISTEN} ${DSH_PUBLIC_SERVER_NAME} ${DSH_PUBLIC_HTTPS_AUTHORITY} ${DSH_TLS_CERTIFICATE} ${DSH_TLS_CERTIFICATE_KEY} ${DSH_LOGIN_RATE} ${DSH_LOGIN_BURST}' \
-  < "$DSH_AUTH_PACKAGE_DIR/deploy/nginx/dsh-auth.conf.template" |
-  sudo tee /etc/nginx/conf.d/dsh-auth.conf >/dev/null
-sudo nginx -t
-sudo systemctl reload nginx
+sudo npx dsh-auth@0.1.11 plan
 ```
 
-`DSH_PUBLIC_SERVER_NAME` is the exact public host used for virtual-host selection. `DSH_PUBLIC_HTTPS_AUTHORITY` is the canonical redirect authority and may include a nonstandard HTTPS port. Unknown Host values receive `421` and cannot influence redirects. Keep any ACME HTTP challenge exception required by your certificate automation.
+## Cloud and configuration-management example
 
-### 4. Verify the deployment
-
-Open `https://your-host/`. An unauthenticated page request should redirect to `/auth/login`; after login, the real Harness SPA should load and its sidebar should contain the bilingual sign-out action.
-
-These quick checks cover the public edge behavior:
+Non-interactive mode requires stable flags and an explicit Nginx policy. Mount the plaintext password as a temporary `0600` secret file supplied by the platform; `dsh-auth` reads it once to create an Argon2id hash and does not copy the plaintext.
 
 ```sh
-curl -I https://your-host/
-curl -I https://your-host/api/session.list
-curl -I https://your-host/auth/verify
+sudo npx dsh-auth@0.1.11 setup \
+  --non-interactive \
+  --json \
+  --nginx install \
+  --authorize-nginx-install \
+  --dsh-service dsh-web.service \
+  --dsh-home /var/lib/dsh \
+  --dsh-bin /usr/local/bin/dsh \
+  --profile web \
+  --package dsh-auth@0.1.11 \
+  --user-id primary-admin \
+  --username operator \
+  --roles admin \
+  --password-file /run/secrets/dsh-auth-password \
+  --mode https \
+  --upstream 127.0.0.1:3080 \
+  --listen-address 0.0.0.0 \
+  --server-name harness.example.com \
+  --certificate /etc/letsencrypt/live/harness.example.com/fullchain.pem \
+  --certificate-key /etc/letsencrypt/live/harness.example.com/privkey.pem
 ```
 
-Expect a login redirect for `/`, `401` for the unauthenticated API request, and `404` for the public verification path. Nginx alone can reach the internal verification location.
+Use `--nginx require` when the image or provisioning layer already installs Nginx; missing or incompatible Nginx then returns exit code 3 and a JSON diagnostic. `--nginx install` never installs anything without `--authorize-nginx-install`. `--nginx skip` is accepted only with `--output-dir`, where no service or system Nginx action occurs.
 
-## Plain HTTP for isolated evaluation
+Passwords are accepted only through hidden interactive input, `--password-stdin`, or `--password-file`. There is no inline password flag. Command output, JSON, plans, subprocess argv, and installer errors never contain password or session-secret values.
 
-The template defaults to HTTPS. For an isolated trusted-network evaluation, expose the protected server block with a plain `listen`, remove its TLS and HSTS directives, and set `DSH_AUTH_SECURE_COOKIES=false` in the DSH environment. This switches away from `Secure` and `__Host-` cookies and enables the same-origin Web Crypto compatibility bootstrap required by browsers that omit `crypto.randomUUID` outside a secure context.
+## Plain HTTP for an isolated trusted network
 
-Plain HTTP still enforces authentication, CSRF/Origin checks, rate limiting, and loopback binding, but it exposes credentials and sessions to network interception. Do not use it on an untrusted network or as a production default.
-
-## Configuration
-
-| Variable | Required/default | Meaning |
-|---|---|---|
-| `DSH_AUTH_USER_ID` | required | stable account id, retained if the display username changes |
-| `DSH_AUTH_USERNAME` | required | login name and session display name |
-| `DSH_AUTH_ROLES` | `admin` | comma-separated stable role ids |
-| `DSH_AUTH_TRUSTED_PROXY_ADDRESSES` | `127.0.0.1,::1` | literal Nginx source IPs allowed to supply forwarded origin/client fields |
-| `DSH_AUTH_PASSWORD_HASH` / `_FILE` | exactly one | Argon2id v=19 hash or absolute file path |
-| `DSH_AUTH_SESSION_SECRET` / `_FILE` | exactly one | at least 32 bytes or absolute file path; rotation revokes all sessions |
-| `DSH_AUTH_SECURE_COOKIES` | `true` | keep `Secure` and `__Host-` cookies; set `false` only for isolated HTTP evaluation |
-| `DSH_AUTH_SESSION_STORE_FILE` | `$DSH_HOME/dsh-auth-sessions.json` | absolute path for atomically written `0600` session state |
-| `DSH_AUTH_SESSION_TTL_SECONDS` | `259200` | rolling session and browser-cookie lifetime; defaults to 72 hours |
-| `DSH_AUTH_IDLE_TTL_SECONDS` | `259200` | maximum inactivity before expiry; defaults to 72 hours |
-| `DSH_AUTH_SESSION_RENEWAL_SECONDS` | `3600` | minimum active interval between renewal cookies and state writes |
-| `DSH_AUTH_MAX_SESSIONS` | `16` | maximum live sessions for the account |
-| `DSH_AUTH_MAX_PASSWORD_BYTES` | `1024` | submitted password byte limit |
-| `DSH_AUTH_LOGIN_WINDOW_SECONDS` | `60` | application login-rate window |
-| `DSH_AUTH_LOGIN_MAX_ATTEMPTS` | `5` | attempts per forwarded client in one window |
-| `DSH_AUTH_LOGIN_BLOCK_SECONDS` | `300` | application block duration |
-
-Invalid identifiers, ambiguous secret sources, relative secret-file paths, unsafe lifetimes, and malformed or excessive Argon2 parameters fail during plugin loading.
-
-## Docker and offline installation
-
-Build a deterministic tarball and inspect its contents:
+Plain HTTP remains authenticated but exposes credentials and sessions to network interception. It is accepted only with an explicit `--mode http` and a literal loopback, RFC1918, or ULA listen address:
 
 ```sh
-corepack pnpm pack
-npm pack --dry-run
+sudo npx dsh-auth@0.1.11 setup \
+  --nginx require \
+  --mode http \
+  --listen-address 10.0.0.20 \
+  --http-port 8080
 ```
 
-Install the exact artifact into a profile without registry access:
+Do not use this mode on an untrusted network. HTTPS is the production default.
+
+## Doctor and uninstall
+
+`doctor` checks the ownership record, file permissions, the exact DSH service, root-executable safety, Nginx version and module support, `nginx -t`, and service state:
 
 ```sh
-dsh plugin --profile web add --offline --config.auto-install-peers=false ./dsh-auth-0.1.11.tgz
+sudo npx dsh-auth@0.1.11 doctor
+sudo npx dsh-auth@0.1.11 doctor --json
 ```
 
-The tarball has no installed runtime dependencies and includes the Node plugin, browser bundle, Nginx template, and Docker integration files. Pin and verify its digest in production builds. [`deploy/docker/Dockerfile.install`](deploy/docker/Dockerfile.install) performs the profile installation with `--network=none`; see [`deploy/docker/README.md`](deploy/docker/README.md).
+`uninstall --dry-run` lists only files and profile changes proven by the ownership record. Interactive uninstall requires typing `uninstall`; automation requires the exact `--authorize-uninstall` flag. Nginx is always retained as a shared system package, even when setup originally installed it.
 
-For two containers, publish only Nginx and keep DSH on a private network. Give Nginx a stable private source IP and list that literal address in `DSH_AUTH_TRUSTED_PROXY_ADDRESSES`; never trust an entire shared subnet.
+```sh
+sudo npx dsh-auth@0.1.11 uninstall --dry-run
+sudo npx dsh-auth@0.1.11 uninstall
+```
 
-## Security and limitations
+## Exit codes
 
-- Session and CSRF cookies use `HttpOnly; Secure; SameSite=Lax; Path=/` and the `__Host-` prefix by default.
-- The session file contains opaque tokens and timestamps, never passwords, password hashes, cookie signatures, or session secrets. Invalid or overly permissive state files fail startup instead of silently disabling persistence.
-- Active authenticated requests extend the rolling expiry no more than once per renewal interval. Nginx forwards the renewed cookie from its internal `auth_request`, so long-running Agent API activity keeps both browser and server expiry aligned without writing on every request.
-- Password verification uses Argon2id and constant-time tag comparison. Unknown usernames run the configured hash before returning the same generic failure.
-- Login and logout require a signed double-submit token and exact Origin/Referer validation after trusted-proxy resolution.
-- Authentication responses are `no-store`; credentials, cookies, request bodies, and authentication failures are not logged by the plugin.
-- Nginx authenticates SPA, API, download, SSE, and WebSocket entry paths. DSH remains unreachable from external interfaces.
-- Logout revokes the session immediately. An already-open WebSocket cannot be rechecked by standard Nginx `auth_request`; deployments requiring immediate stream termination need a connection-aware edge.
-- Multiple DSH replicas require a shared session and revocation provider. Registration, recovery, MFA, databases, multi-account policy, and multi-tenancy are outside version 1.
+| Code | Meaning |
+|---:|---|
+| `0` | success, healthy, or unchanged |
+| `2` | invalid or incomplete CLI input |
+| `3` | missing or unsupported prerequisite |
+| `4` | ownership or existing-configuration conflict |
+| `5` | insufficient or unsafe permissions |
+| `6` | execution or rollback failure |
+| `7` | interactive cancellation before changes |
+| `8` | doctor found an unhealthy installation |
 
-Future multi-account support can preserve the public session fields `{ userId, username, roles }`, replace configured password lookup with an identity store, and key workspace policy by stable `userId`.
+JSON output uses schema version 1 and includes the command, status, exit code, redacted actions, and structured diagnostics.
+
+## Docker and offline images
+
+Build and pin the exact npm tarball, then install it into the DSH profile without registry access:
+
+```sh
+corepack pnpm pack --pack-destination packed
+dsh plugin --profile web add --offline --config.auto-install-peers=false /artifacts/dsh-auth-0.1.11.tgz
+```
+
+Generate deterministic runtime files without invoking systemd, a package manager, or a host Nginx binary:
+
+```sh
+dsh-auth setup \
+  --non-interactive \
+  --nginx skip \
+  --output-dir /image/dsh-auth \
+  --package /artifacts/dsh-auth-0.1.11.tgz \
+  --user-id primary-admin \
+  --username operator \
+  --password-file /run/secrets/dsh-auth-password \
+  --mode https \
+  --listen-address 0.0.0.0 \
+  --server-name harness.example.com \
+  --certificate /run/tls/fullchain.pem \
+  --certificate-key /run/tls/privkey.pem
+```
+
+The output directory contains `dsh-auth.env`, file-backed credentials, a session-state directory, and `dsh-auth.nginx.conf`. Copy or mount them into fixed image paths and explicitly wire the environment file and Nginx include. [`deploy/docker/Dockerfile.install`](deploy/docker/Dockerfile.install) shows the offline profile layer.
+
+## Security behavior and limits
+
+- Production cookies are `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, and `__Host-` prefixed. Plain HTTP uses an explicit compatibility cookie mode.
+- Argon2id hashes and random session secrets live in separate permission-restricted files. Persistent opaque sessions use a `0600` store.
+- Login and logout enforce CSRF plus exact Origin/Referer checks after trusted-proxy resolution. Authentication responses are `no-store`.
+- Version 1 supports one account and one DSH Web service per managed installation. Registration, recovery, MFA, databases, multi-account policy, and multi-tenancy are outside this release.
+- A standard Nginx `auth_request` cannot immediately revoke an already-open WebSocket. Deployments requiring immediate stream termination need a connection-aware edge.
 
 Security reports follow [`SECURITY.md`](SECURITY.md).
 
 ## Development
-
-Development is intentionally small. Install dependencies and run the repository checks:
 
 ```sh
 corepack pnpm install --frozen-lockfile
@@ -207,4 +170,4 @@ corepack pnpm run check
 corepack pnpm run check:nginx
 ```
 
-Agents and contributors should read [`AGENTS.md`](AGENTS.md) for the architecture, security invariants, change map, and verification workflow.
+Contributors should read [`AGENTS.md`](AGENTS.md). Installer architecture and maintenance checks are in [`docs/installer.md`](docs/installer.md).

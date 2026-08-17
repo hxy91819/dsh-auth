@@ -26,4 +26,5 @@ jobs:
       - run: pnpm run check
       - run: pnpm run check:nginx
       - run: pnpm pack --pack-destination packed
+      - run: node scripts/pack-smoke.mjs packed/dsh-auth-*.tgz
       - run: npm pack --dry-run

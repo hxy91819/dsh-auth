@@ -37,6 +37,7 @@
     "cordis.patch.yml",
     "cordis.overlay.yml",
     "deploy/",
+    "docs/installer.md",
     "README.md",
     "SECURITY.md",
     "LICENSE"
@@ -98,13 +99,13 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsdown",
+    "build": "tsc -p tsconfig.build.json && tsdown && node scripts/mark-bin.mjs",
     "clean": "tsc --build --clean tsconfig.build.json",
     "test": "vitest run",
     "test:integration:real": "node scripts/real-integration.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "check:nginx": "node scripts/check-nginx.mjs",
+    "check:nginx": "pnpm run build && node scripts/check-nginx.mjs",
     "check": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build",
     "prepack": "tsc --build --clean tsconfig.build.json && pnpm run build"
   },
