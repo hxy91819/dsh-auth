@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'node:fs'
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs'
 import { isIP } from 'node:net'
 import { isAbsolute } from 'node:path'
 import type { StandardSchemaV1 } from '@standard-schema/spec'
@@ -119,19 +119,22 @@ function proxyAddressList(input: Record<string, unknown>): readonly string[] {
 
 function materialFromFile(path: string, label: string): string {
   if (!isAbsolute(path)) throw new Error(`${label}File must be an absolute path`)
-  let size: number
+  let descriptor: number | undefined
   try {
-    const stat = statSync(path)
+    if (process.platform === 'win32' && lstatSync(path).isSymbolicLink()) throw new Error('symbolic links are not allowed')
+    const flags = constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW)
+    descriptor = openSync(path, flags)
+    const stat = fstatSync(descriptor)
     if (!stat.isFile()) throw new Error('not a regular file')
-    size = stat.size
+    if (stat.size === 0 || stat.size > 4096) throw new Error('must contain 1-4096 bytes')
+    if (process.platform !== 'win32' && ((stat.mode & 0o020) !== 0 || (stat.mode & 0o007) !== 0)) {
+      throw new Error('must not allow group write or any access by others')
+    }
+    return readFileSync(descriptor, 'utf8').replace(/\r?\n$/u, '')
   } catch (error) {
     throw new Error(`${label}File cannot be read: ${error instanceof Error ? error.message : String(error)}`)
-  }
-  if (size === 0 || size > 4096) throw new Error(`${label}File must contain 1-4096 bytes`)
-  try {
-    return readFileSync(path, 'utf8').replace(/\r?\n$/u, '')
-  } catch (error) {
-    throw new Error(`${label}File cannot be read: ${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor)
   }
 }
 

@@ -7,6 +7,10 @@ function listenEndpoint(address: string, port: number): string {
   return address.includes(':') ? `[${address}]:${String(port)}` : `${address}:${String(port)}`
 }
 
+function requestHost(address: string): string {
+  return address.includes(':') ? `[${address}]` : address
+}
+
 function protectedLocations(upstream: string, secure: boolean): string {
   const hsts = secure ? '        add_header Strict-Transport-Security "max-age=31536000" always;\n' : ''
   return `
@@ -27,6 +31,7 @@ ${hsts}    add_header X-Content-Type-Options "nosniff" always;
         proxy_set_header Cookie $http_cookie;
         proxy_set_header X-Original-URI $request_uri;
         proxy_set_header X-Original-Method $request_method;
+        proxy_set_header X-Original-Upgrade $http_upgrade;
         proxy_set_header Host ${upstream};
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host $http_host;
@@ -154,9 +159,15 @@ upstream dsh_auth_upstream {
 
 `
   if (request.mode === 'http') {
-    return `${common}server {
+    return `${common}map $host $dsh_public_host_allowed {
+    default 0;
+    "${requestHost(request.listenAddress)}" 1;
+}
+
+server {
     listen ${listenEndpoint(request.listenAddress, request.httpPort)};
     server_name _;
+    if ($dsh_public_host_allowed = 0) { return 421; }
 ${protectedLocations(upstream, false)}}
 `
   }

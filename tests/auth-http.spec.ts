@@ -124,6 +124,54 @@ describe('observable authentication flow', () => {
     expect((await fetch(`${running.baseUrl}/auth/verify`, { headers: { cookie: sessionCookie } })).status).toBe(401)
   }, 30_000)
 
+  it('rejects cross-origin protected mutations and WebSocket handshakes at the auth subrequest', async () => {
+    const page = await loginPage()
+    const accepted = await submitLogin(page.csrfCookie, page.csrf, credentials.password)
+    const sessionCookie = cookiePair(accepted.headers, SESSION_COOKIE)
+
+    const sameOriginMutation = await fetch(`${running.baseUrl}/auth/verify`, {
+      headers: {
+        ...proxyHeaders(),
+        cookie: sessionCookie,
+        'sec-fetch-site': 'same-origin',
+        'x-original-method': 'POST',
+      },
+    })
+    expect(sameOriginMutation.status).toBe(204)
+    const sameOriginWebSocket = await fetch(`${running.baseUrl}/auth/verify`, {
+      headers: {
+        ...proxyHeaders(),
+        cookie: sessionCookie,
+        'sec-fetch-site': 'same-origin',
+        'x-original-method': 'GET',
+        'x-original-upgrade': 'websocket',
+      },
+    })
+    expect(sameOriginWebSocket.status).toBe(204)
+
+    const missingOrigin = await fetch(`${running.baseUrl}/auth/verify`, {
+      headers: {
+        cookie: sessionCookie,
+        'x-forwarded-host': 'auth.test',
+        'x-forwarded-proto': 'https',
+        'x-original-method': 'POST',
+      },
+    })
+    expect(missingOrigin.status).toBe(403)
+
+    for (const originalHeaders of [
+      { origin: 'https://sibling.auth.test', 'sec-fetch-site': 'same-site', 'x-original-method': 'POST' },
+      { origin: 'https://attacker.invalid', 'sec-fetch-site': 'cross-site', 'x-original-method': 'POST' },
+      { origin: 'https://sibling.auth.test', 'sec-fetch-site': 'same-site', 'x-original-method': 'GET', 'x-original-upgrade': 'websocket' },
+    ]) {
+      const denied = await fetch(`${running.baseUrl}/auth/verify`, {
+        headers: { ...proxyHeaders(), ...originalHeaders, cookie: sessionCookie },
+      })
+      expect(denied.status).toBe(403)
+      expect(denied.headers.get('cache-control')).toBe('no-store')
+    }
+  }, 30_000)
+
   it('rejects open redirects, tampered sessions, untrusted origins, and bad CSRF tokens', async () => {
     const anonymousCsrf = await fetch(`${running.baseUrl}/auth/csrf`)
     expect(anonymousCsrf.status).toBe(401)

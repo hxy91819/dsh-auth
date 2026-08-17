@@ -65,6 +65,7 @@ server {
         proxy_set_header Cookie $http_cookie;
         proxy_set_header X-Original-URI $request_uri;
         proxy_set_header X-Original-Method $request_method;
+        proxy_set_header X-Original-Upgrade $http_upgrade;
         proxy_set_header Host 127.0.0.1:3080;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host $http_host;
