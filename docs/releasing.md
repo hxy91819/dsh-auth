@@ -2,6 +2,16 @@
 
 Stable npm publishing is an explicit GitHub Actions dispatch. The release workflow accepts one existing `vX.Y.Z` tag, checks that the package version matches, checks that the tag commit is reachable from `origin/main`, builds and tests the package in a fresh Ubuntu runner, uploads one hashed tarball, and publishes that exact tarball with npm Trusted Publishing.
 
+## Short answer
+
+A tag alone does not publish. Creating and pushing the tag selects the immutable source; one explicit dispatch of the **Release** workflow authorizes publication. After the release commit and tag exist on GitHub, the shortest supported command is:
+
+```sh
+gh workflow run release.yml --ref main -f tag=vX.Y.Z
+```
+
+Replace `vX.Y.Z` with the exact stable tag, for example `v0.1.14`. The workflow has no tag, branch-push, or pull-request publication trigger by design.
+
 The workflow is [`release.yml`](../.github/workflows/release.yml). It has no `push` or `pull_request` trigger, never changes `package.json`, never creates or pushes a tag, and never uses a long-lived npm credential. Preflight has only `contents: read`; the publish job adds only `id-token: write` and is protected by the `npm-release` environment. Release builds deliberately do not use the setup-node package cache.
 
 ## One-time npm configuration
@@ -28,21 +38,37 @@ Protect `main` with pull requests, the normal CI checks, no force-push, and no d
 
 If **Actions permissions** is restricted to selected actions, allow these exact action repositories (using the versions in the workflow):
 
-- `actions/checkout`
-- `actions/setup-node`
-- `actions/upload-artifact`
-- `actions/download-artifact`
-- `pnpm/action-setup`
-- `gitleaks/gitleaks-action`
+- `actions/checkout@*`
+- `actions/setup-node@*`
+- `actions/upload-artifact@*`
+- `actions/download-artifact@*`
+- `pnpm/action-setup@*`
+- `gitleaks/gitleaks-action@*`
 
 The workflow does not need write permissions for repository contents, packages, or security events. Its publish permission is the GitHub OIDC `id-token: write` permission only.
 
 ## Release procedure
 
-1. Update `package.json` and the lockfile when the dependency graph changes, run the local checks in `AGENTS.md`, and commit the change on `main`.
-2. Create and push an annotated stable tag whose version exactly matches `package.json`, for example `v0.1.13`. Do not create a prerelease tag for this workflow.
-3. From the `main` workflow ref in GitHub Actions, dispatch **Release** and enter that exact tag. If reviewer protection is enabled after the project gains another maintainer, have an eligible maintainer approve the `npm-release` deployment.
-4. Inspect the preflight logs and uploaded manifest. It records the tag, commit SHA, package version, tarball filename, and SHA-256. The publish job rechecks all five values before the version-absent check and OIDC publish.
-5. Confirm the official registry version, `latest` dist-tag, and fresh registry install/bin smoke. A failure in these post-publish checks is diagnostic only: npm publication cannot be rolled back automatically, so fix forward with a new version.
+1. Choose a new stable version that does not exist on npm. Update `package.json`, update version-pinned documentation, and update the lockfile only when its dependency data changes.
+2. Run the local checks in `AGENTS.md` and commit the release preparation on `main`.
+3. Create an annotated tag on that exact commit, then atomically push `main` and the tag. Its `vX.Y.Z` value must equal the `package.json` version. Do not use a prerelease or move an existing tag.
+4. Dispatch **Release** from the `main` workflow ref with the exact tag input. If reviewer protection is enabled after the project gains another maintainer, have an eligible maintainer approve the `npm-release` deployment.
+5. Inspect the preflight and publish jobs. The manifest records the tag, commit SHA, package version, tarball filename, and SHA-256; the publish job rechecks all five values before the version-absent check and OIDC publish.
+6. Confirm that the workflow's official-registry version, `latest` dist-tag, and fresh install/bin smoke all pass.
+
+For the command-line path, use explicit values and publish the release commit and tag atomically:
+
+```sh
+git tag -a vX.Y.Z -m "dsh-auth vX.Y.Z"
+git push --atomic origin main refs/tags/vX.Y.Z
+gh workflow run release.yml --ref main -f tag=vX.Y.Z
+gh run list --workflow release.yml --event workflow_dispatch --limit 1
+```
+
+In the GitHub UI, open **Actions → Release → Run workflow**, keep **Use workflow from** set to `main`, enter the exact existing tag in **tag**, and run the workflow. Do not select the tag as the workflow ref: the `npm-release` Environment permits `main`, while the jobs themselves check out and validate the tag.
+
+## Failure handling
+
+Before rerunning a failed release, check whether the **Publish the exact tarball** step succeeded. If it did not and `dsh-auth@X.Y.Z` is still absent from the official registry, the same immutable tag may be dispatched again after fixing the workflow or external configuration. If publication succeeded, do not retry it as a new publication and do not move the tag; npm versions are immutable. Confirm the published version and `latest` directly, then fix forward with a new version if package contents are wrong. A failure in post-publish verification is diagnostic because publication cannot be rolled back automatically.
 
 Preflight runs `check`, `check:nginx`, the npm pack dry-run and tarball file-list check, offline packed-bin smoke, the real PTY interactive and non-interactive installer E2E, tracked-file privacy checks, and gitleaks. It uses disposable files and does not touch a deployed Harness, port 3080, or host Nginx configuration.
