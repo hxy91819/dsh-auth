@@ -13,14 +13,16 @@ import { executeSetup, type SetupSecrets } from './installer/executor.js'
 import { NodeInstallerHost } from './installer/host.js'
 import { discoverNginx } from './installer/nginx.js'
 import { prepareSetup } from './installer/plan.js'
+import { resetManagedPassword } from './installer/reset-password.js'
 import { executeUninstall, prepareUninstall } from './installer/uninstall.js'
 import { ExitCode, type InstallationPlan, type InstallerHost, type PasswordSource, type SetupRequest } from './installer/types.js'
-import { validateSetupRequest } from './installer/validation.js'
+import { validateAbsolutePath, validateSetupRequest } from './installer/validation.js'
 
 const HELP = `Usage:
   dsh-auth setup [options]
   dsh-auth plan [options]
   dsh-auth doctor [--json]
+  dsh-auth reset-password [--password-stdin|--password-file PATH] [--authorize-password-reset] [--json]
   dsh-auth uninstall [--dry-run] [--authorize-uninstall] [--json]
   dsh-auth hash [--stdin]
   dsh-auth secret
@@ -52,6 +54,7 @@ Setup options:
 
 Plain HTTP is accepted only on loopback or RFC1918/ULA addresses. Nginx package
 installation and uninstall each require their exact authorization flag in
+non-interactive mode. Password reset requires --authorize-password-reset in
 non-interactive mode; --yes and inline password options do not exist.
 `
 
@@ -141,7 +144,7 @@ const VALUE_OPTIONS = new Set([
   '--password-file', '--mode', '--upstream', '--listen-address', '--http-port', '--https-port', '--server-name', '--certificate',
   '--certificate-key', '--output-dir',
 ])
-const BOOLEAN_OPTIONS = new Set(['--non-interactive', '--json', '--dry-run', '--authorize-nginx-install', '--authorize-uninstall', '--password-stdin', '--help'])
+const BOOLEAN_OPTIONS = new Set(['--non-interactive', '--json', '--dry-run', '--authorize-nginx-install', '--authorize-uninstall', '--authorize-password-reset', '--password-stdin', '--help'])
 
 function parseArguments(argv: readonly string[]): ParsedArguments {
   const [command, ...tokens] = argv
@@ -279,10 +282,10 @@ function jsonOutput(command: string, status: string, exitCode: number, plan?: In
   return `${JSON.stringify({ schemaVersion: 1, command, status, exitCode, ...(plan === undefined ? {} : { plan }) })}\n`
 }
 
-function setupSecrets(io: CliIo, host: InstallerHost, source: PasswordSource | undefined): SetupSecrets {
+function setupSecrets(io: CliIo, host: InstallerHost, source: PasswordSource | undefined, operation = 'setup'): SetupSecrets {
   return {
     async readPassword(): Promise<string> {
-      if (source === undefined) throw new InstallerError('setup requires --password-stdin or --password-file', ExitCode.usage)
+      if (source === undefined) throw new InstallerError(`${operation} requires --password-stdin or --password-file`, ExitCode.usage)
       if (source.kind === 'stdin') return await io.readStdin()
       if (source.kind === 'interactive') {
         const first = await io.readHidden('Password: ')
@@ -300,17 +303,48 @@ function setupSecrets(io: CliIo, host: InstallerHost, source: PasswordSource | u
   }
 }
 
-function validatePasswordSource(host: InstallerHost, source: PasswordSource | undefined): void {
-  if (source === undefined) throw new InstallerError('setup requires --password-stdin or --password-file', ExitCode.usage)
+function validatePasswordSource(host: InstallerHost, source: PasswordSource | undefined, operation = 'setup'): void {
+  if (source === undefined) throw new InstallerError(`${operation} requires --password-stdin or --password-file`, ExitCode.usage)
   if (source.kind !== 'file') return
+  validateAbsolutePath(source.path, 'password file')
   if (!host.regularFile(source.path)) throw new InstallerError('password file is not a readable regular file', ExitCode.usage)
   const stat = host.stat(source.path)
   if ((stat.mode & 0o077) !== 0) throw new InstallerError('password file must not be accessible by group or others', ExitCode.permission)
   if (stat.size === 0 || stat.size > 16 * 1024 + 1) throw new InstallerError('password file must contain 1-16385 bytes', ExitCode.usage)
 }
 
+function passwordSource(parsed: ParsedArguments, interactive: boolean): PasswordSource | undefined {
+  const file = parsed.values.get('--password-file')
+  const stdin = parsed.flags.has('--password-stdin')
+  if (file !== undefined && stdin) throw new InstallerError('choose exactly one password input source', ExitCode.usage)
+  if (file !== undefined) return { kind: 'file', path: file }
+  if (stdin) return { kind: 'stdin' }
+  return interactive ? { kind: 'interactive' } : undefined
+}
+
+async function runResetPassword(parsed: ParsedArguments, io: CliIo, host: InstallerHost): Promise<number> {
+  const allowed = new Set(['--password-file', '--password-stdin', '--authorize-password-reset', '--non-interactive', '--json'])
+  const unknown = [...parsed.values.keys(), ...parsed.flags].filter(option => !allowed.has(option))
+  if (unknown.length > 0) throw new InstallerError(`reset-password does not accept ${unknown.join(', ')}`, ExitCode.usage)
+  const json = parsed.flags.has('--json')
+  const interactive = io.interactive && !parsed.flags.has('--non-interactive') && !json
+  const source = passwordSource(parsed, interactive)
+  validatePasswordSource(host, source, 'reset-password')
+  if (interactive) {
+    io.writeOut('This replaces the managed password hash, rotates the session secret, revokes all current sessions, and restarts the DSH service when it is active.\n')
+    if ((await io.readLine('Type reset-password to continue: ')).trim() !== 'reset-password') return ExitCode.cancelled
+  } else if (!parsed.flags.has('--authorize-password-reset')) {
+    throw new InstallerError('non-interactive password reset requires --authorize-password-reset', ExitCode.usage)
+  }
+  const reader = setupSecrets(io, host, source, 'reset-password')
+  await resetManagedPassword(host, async () => await reader.readPassword())
+  if (json) io.writeOut(`${JSON.stringify({ schemaVersion: 1, command: 'reset-password', status: 'success', exitCode: ExitCode.success, sessionsRevoked: true })}\n`)
+  else io.writeOut('dsh-auth password reset completed; all existing sessions were revoked.\n')
+  return ExitCode.success
+}
+
 async function runSetupOrPlan(parsed: ParsedArguments, io: CliIo, host: InstallerHost, command: 'setup' | 'plan'): Promise<number> {
-  const invalid = [...parsed.flags].filter(option => option === '--authorize-uninstall')
+  const invalid = [...parsed.flags].filter(option => option === '--authorize-uninstall' || option === '--authorize-password-reset')
   if (invalid.length > 0) throw new InstallerError(`${command} does not accept ${invalid.join(', ')}`, ExitCode.usage)
   const json = parsed.flags.has('--json')
   const interactive = io.interactive && !parsed.flags.has('--non-interactive') && !json
@@ -412,6 +446,7 @@ export async function runCli(argv: readonly string[], io: CliIo = new ProcessCli
       io.writeOut(parsed.flags.has('--json') ? jsonOutput('doctor', plan.status === 'ready' ? 'healthy' : 'unhealthy', exitCode, plan) : renderPlan(plan))
       return exitCode
     }
+    if (parsed.command === 'reset-password') return await runResetPassword(parsed, io, host)
     if (parsed.command === 'uninstall') {
       const unknown = [...parsed.values.keys(), ...parsed.flags].filter(option => !['--json', '--dry-run', '--authorize-uninstall', '--non-interactive'].includes(option))
       if (unknown.length > 0) throw new InstallerError('uninstall accepts only --dry-run, --authorize-uninstall, and --json', ExitCode.usage)

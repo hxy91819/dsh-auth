@@ -1,16 +1,42 @@
-/** Install one packed artifact without network and exercise its real bin plus output-mode setup. */
+/**
+ * Install one local npm tarball without network and exercise its published bin.
+ * Input is one absolute or cwd-relative .tgz path. Success prints one summary;
+ * validation or subprocess failures exit nonzero without printing credentials.
+ */
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
+const HELP = `Usage:
+  node scripts/pack-smoke.mjs PATH.tgz
+
+Description:
+  Install a local dsh-auth tarball with npm --offline, execute its published
+  CLI, and verify secret-safe output-mode files and permissions.
+
+Arguments:
+  PATH.tgz  Required absolute or cwd-relative npm tarball path.
+
+Output:
+  Prints one success summary. Validation and subprocess failures exit nonzero.
+
+Examples:
+  node scripts/pack-smoke.mjs packed/dsh-auth-0.1.11.tgz
+  node scripts/pack-smoke.mjs /tmp/artifacts/dsh-auth-0.1.11.tgz
+`
+
 const input = process.argv[2]
-if (input === undefined) {
-  process.stderr.write('Usage: node scripts/pack-smoke.mjs /absolute/path/dsh-auth-VERSION.tgz\n')
+if (input === '--help' || input === '-h') {
+  process.stdout.write(HELP)
+  process.exit(0)
+}
+if (input === undefined || process.argv.length !== 3) {
+  process.stderr.write(HELP)
   process.exit(2)
 }
 const tarball = resolve(input)
-if (!isAbsolute(tarball) || !tarball.endsWith('.tgz')) throw new Error('tarball must be an absolute .tgz path')
+if (!isAbsolute(tarball) || !tarball.endsWith('.tgz')) throw new Error('tarball must resolve to an absolute .tgz path')
 const root = mkdtempSync(join(tmpdir(), 'dsh-auth-pack-smoke-'))
 
 function run(command, args, options = {}) {
@@ -24,7 +50,7 @@ try {
   run('npm', ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', tarball])
   const bin = join(root, 'node_modules', '.bin', 'dsh-auth')
   const help = run(bin, ['--help'])
-  if (!help.stdout.includes('dsh-auth setup')) throw new Error('packed bin help did not execute')
+  if (!help.stdout.includes('dsh-auth setup') || !help.stdout.includes('dsh-auth reset-password')) throw new Error('packed bin help is missing a public command')
 
   const password = 'pack-smoke-password-not-for-output'
   const output = join(root, 'rendered')

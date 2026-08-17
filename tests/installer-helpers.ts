@@ -16,6 +16,7 @@ export class FakeInstallerHost implements InstallerHost {
   readonly entries = new Map<string, FakeEntry>()
   readonly commands: CommandSpec[] = []
   commandHandler: (command: CommandSpec) => CommandResult = () => ({ status: 0, stdout: '', stderr: '' })
+  private randomCounter = 0
 
   constructor() {
     for (const path of ['/', '/etc', '/etc/nginx', '/etc/nginx/conf.d', '/etc/systemd', '/etc/systemd/system', '/usr', '/usr/bin', '/usr/sbin', '/opt', '/opt/dsh', '/opt/dsh/bin', '/root', '/root/.dsh']) {
@@ -177,7 +178,9 @@ export class FakeInstallerHost implements InstallerHost {
   }
 
   randomBytes(size: number): Buffer {
-    return Buffer.alloc(size, 0xa5)
+    const value = 0xa5 + this.randomCounter
+    this.randomCounter = (this.randomCounter + 1) % 32
+    return Buffer.alloc(size, value)
   }
 }
 

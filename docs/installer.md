@@ -1,12 +1,12 @@
 # Installer architecture
 
-Read this document before changing `setup`, `plan`, `doctor`, `uninstall`, Nginx discovery/rendering, systemd integration, package-manager support, managed paths, JSON output, or installer exit codes.
+Read this document before changing `setup`, `plan`, `doctor`, `reset-password`, `uninstall`, Nginx discovery/rendering, systemd integration, package-manager support, managed paths, JSON output, or installer exit codes.
 
 ## Public surface
 
 `setup` and `plan` accept the same validated `SetupRequest`. Interactive input and non-interactive flags only construct that request; both call `discoverHost()` and `prepareSetup()`. `setup --dry-run` selects the `plan` path before preparation. Secret input is represented by a `PasswordSource` descriptor and is read only by `executeSetup()` after all prerequisite and interactive confirmations pass.
 
-`doctor` is read-only. `uninstall` reads the state record and removes only recorded files and the profile package installed by the recorded setup. The legacy `hash` and `secret` commands remain narrow credential helpers; they are not part of installation planning.
+`doctor` is read-only. `reset-password` reads the same validated ownership record, replaces only the two managed credential files, rotates the session secret to revoke sessions, and restores both files if an active DSH service cannot restart. `uninstall` reads the state record and removes only recorded files and the profile package installed by the recorded setup. The legacy `hash` and `secret` commands remain narrow credential helpers; they are not part of installation planning.
 
 JSON schema version 1 and exit codes are public automation interfaces. New diagnostic codes may be added; existing meanings and fields require an explicit compatibility decision.
 
@@ -34,6 +34,8 @@ The first managed file is the adjacent root-only bootstrap journal `/etc/dsh-aut
 Setup rollback removes only paths recorded in the journal and removes the DSH profile package only when this setup installed it. Service activation milestones and prior active/enabled states are journaled: rollback touches only services whose mutation was attempted, reloads or stops Nginx to restore its prior state, and restarts or stops the named DSH service to restore its prior state. The final journal remains after a failed setup when its directory is still available, so recovery evidence survives.
 
 Uninstall removes public Nginx routing first, validates and reloads Nginx, then removes the owned profile package and systemd drop-in. It restores captured owned files and the package when an activation step fails. It never invokes a package-manager removal command for Nginx.
+
+Password reset validates the completed system ownership record, credential file type, exact path, owner, group, mode, and current secret formats before reading the new password. It hashes the new password and creates a replacement session secret before either managed file changes. Both replacements preserve `root:<service-group>` ownership and `0640` mode. An inactive DSH service remains inactive; an active service is restarted, and restart failure restores both prior credentials before retrying the restart.
 
 ## Ownership and managed paths
 
@@ -63,6 +65,7 @@ The state parser validates mode, root ownership under `/etc`, schema fields, exa
 - HTTPS requires an explicit server name, certificate, and key. HTTP requires an explicit private/loopback literal address and disables secure cookies and HSTS.
 - Plans contain secret file targets and descriptions, never password, hash, or session-secret values. JSON and subprocess failures withhold command output.
 - Password files must be regular, bounded, and inaccessible to group/others before setup can execute. Plaintext from any accepted source is read and hashed before the first journal, package, file, or service mutation, and is never persisted by the installer.
+- Non-interactive password reset requires `--authorize-password-reset`; both setup and reset reject inline password arguments and keep secrets out of JSON and diagnostics.
 - Nginx activation always follows a successful `nginx -t`. A reload failure rolls back the candidate include and validates the restored configuration before reloading.
 
 ## Nginx and package discovery
@@ -81,6 +84,7 @@ Automatic package installation is a closed table. The verified Ubuntu 24.04 base
 - OS, systemd, DSH service, and package-manager discovery: `src/installer/discovery.ts`.
 - Fingerprints, plans, conflicts, state parsing: `src/installer/config-files.ts`, `src/installer/plan.ts`.
 - Setup transaction and rollback: `src/installer/executor.ts`.
+- Password reset validation, credential rotation, session revocation, and rollback: `src/installer/reset-password.ts`.
 - Health and owned removal: `src/installer/doctor.ts`, `src/installer/uninstall.ts`.
 - System behavior matrix: `tests/installer-system.spec.ts`.
 

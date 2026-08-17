@@ -168,5 +168,6 @@ describe('installer CLI', () => {
 
     const setupIo = new FakeCliIo(false)
     await expect(runCli(['plan', ...OUTPUT_ARGS, '--authorize-uninstall'], setupIo, new FakeInstallerHost())).resolves.toBe(2)
+    await expect(runCli(['plan', ...OUTPUT_ARGS, '--authorize-password-reset'], setupIo, new FakeInstallerHost())).resolves.toBe(2)
   })
 })

@@ -1,5 +1,7 @@
+import { randomBytes } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { runCli } from '../src/cli.js'
+import { verifyPassword } from '../src/password.js'
 import { FakeCliIo, FakeInstallerHost } from './installer-helpers.js'
 
 const SYSTEM_ARGS = [
@@ -332,6 +334,84 @@ describe('system installer transactions', () => {
 
     expect(host.stat('/etc/dsh-auth/password-hash').gid).toBe(2000)
     expect(host.stat('/var/lib/dsh-auth').gid).toBe(2000)
+  }, 30_000)
+
+  it('resets the password interactively and revokes existing sessions', async () => {
+    const host = readyHost()
+    const originalPassword = randomBytes(18).toString('base64url')
+    await runCli(['setup', ...SYSTEM_ARGS, '--password-stdin'], new FakeCliIo(false, [], [], originalPassword), host)
+    const oldHash = host.readFile('/etc/dsh-auth/password-hash')
+    const oldSecret = host.readFile('/etc/dsh-auth/session-secret')
+    const newPassword = randomBytes(18).toString('base64url')
+    const io = new FakeCliIo(true, ['reset-password'], [newPassword, newPassword])
+
+    const exitCode = await runCli(['reset-password'], io, host)
+
+    expect(exitCode).toBe(0)
+    const newHash = host.readFile('/etc/dsh-auth/password-hash')
+    expect(newHash).not.toBe(oldHash)
+    expect(host.readFile('/etc/dsh-auth/session-secret')).not.toBe(oldSecret)
+    await expect(verifyPassword(newPassword, newHash.trim())).resolves.toBe(true)
+    await expect(verifyPassword(originalPassword, newHash.trim())).resolves.toBe(false)
+    expect(io.outputs.join('')).not.toContain(newPassword)
+    expect(io.outputs.join('')).toContain('all existing sessions were revoked')
+    expect(host.stat('/etc/dsh-auth/password-hash')).toMatchObject({ uid: 0, gid: 0, mode: 0o640 })
+  }, 30_000)
+
+  it('cancels interactive password reset before reading or changing credentials', async () => {
+    const host = readyHost()
+    await runCli(['setup', ...SYSTEM_ARGS, '--password-stdin'], new FakeCliIo(false, [], [], randomBytes(18).toString('base64url')), host)
+    const oldHash = host.readFile('/etc/dsh-auth/password-hash')
+    const oldSecret = host.readFile('/etc/dsh-auth/session-secret')
+    const restartCount = host.commands.filter(command => command.args[0] === 'restart').length
+    const io = new FakeCliIo(true, ['cancel'])
+
+    const exitCode = await runCli(['reset-password'], io, host)
+
+    expect(exitCode).toBe(7)
+    expect(io.hiddenReads).toBe(0)
+    expect(host.readFile('/etc/dsh-auth/password-hash')).toBe(oldHash)
+    expect(host.readFile('/etc/dsh-auth/session-secret')).toBe(oldSecret)
+    expect(host.commands.filter(command => command.args[0] === 'restart')).toHaveLength(restartCount)
+  }, 30_000)
+
+  it('requires explicit non-interactive password-reset authorization and emits secret-free JSON', async () => {
+    const host = readyHost()
+    await runCli(['setup', ...SYSTEM_ARGS, '--password-stdin'], new FakeCliIo(false, [], [], randomBytes(18).toString('base64url')), host)
+    const password = randomBytes(18).toString('base64url')
+    const denied = new FakeCliIo(false, [], [], password)
+
+    await expect(runCli(['reset-password', '--non-interactive', '--json', '--password-stdin'], denied, host)).resolves.toBe(2)
+    expect(denied.stdinReads).toBe(0)
+
+    const allowed = new FakeCliIo(false, [], [], password)
+    await expect(runCli(['reset-password', '--non-interactive', '--json', '--authorize-password-reset', '--password-stdin'], allowed, host)).resolves.toBe(0)
+    const output = allowed.outputs.join('')
+    expect(output).not.toContain(password)
+    expect(JSON.parse(output)).toMatchObject({ schemaVersion: 1, command: 'reset-password', status: 'success', exitCode: 0, sessionsRevoked: true })
+  }, 30_000)
+
+  it('restores both credentials when the password-reset restart fails', async () => {
+    const host = readyHost()
+    await runCli(['setup', ...SYSTEM_ARGS, '--password-stdin'], new FakeCliIo(false, [], [], randomBytes(18).toString('base64url')), host)
+    const oldHash = host.readFile('/etc/dsh-auth/password-hash')
+    const oldSecret = host.readFile('/etc/dsh-auth/session-secret')
+    const prior = host.commandHandler
+    let failed = false
+    host.commandHandler = (command) => {
+      if (!failed && command.executable === '/usr/bin/systemctl' && command.args[0] === 'restart' && command.args[1] === 'dsh-web.service') {
+        failed = true
+        return { status: 1, stdout: '', stderr: 'synthetic reset restart failure' }
+      }
+      return prior(command)
+    }
+
+    const exitCode = await runCli(['reset-password', '--non-interactive', '--authorize-password-reset', '--password-stdin'], new FakeCliIo(false, [], [], randomBytes(18).toString('base64url')), host)
+
+    expect(exitCode).toBe(6)
+    expect(host.readFile('/etc/dsh-auth/password-hash')).toBe(oldHash)
+    expect(host.readFile('/etc/dsh-auth/session-secret')).toBe(oldSecret)
+    expect(host.commands.filter(command => command.args[0] === 'restart' && command.args[1] === 'dsh-web.service')).toHaveLength(3)
   }, 30_000)
 
   it('refuses to overwrite an unowned Nginx include', async () => {

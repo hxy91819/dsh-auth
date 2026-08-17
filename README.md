@@ -6,7 +6,9 @@
 
 Add a secure single-account login to the DeepSeek Harness Web app. `dsh-auth` keeps Harness on loopback and installs an Nginx `auth_request` edge for pages, APIs, downloads, SSE, and WebSockets.
 
-## Install in one command
+## Quick start
+
+### Interactive setup
 
 Start with an existing DSH Web systemd service whose upstream listens only on loopback, then run:
 
@@ -19,8 +21,6 @@ The interactive installer asks for the exact DSH service, account name, HTTPS ho
 If Nginx is missing, the installer detects the operating system first. On the verified Ubuntu 24.04 baseline it can show and, after a separate `install-nginx` confirmation, run fixed `apt-get` argv. It uses only configured system repositories. Other systems fail closed with a copyable remediation; no `curl | sh` path exists.
 
 Normal deployment requires Nginx 1.24 or newer with `ngx_http_auth_request_module`, systemd, Node.js 24.7 or newer, DSH Web 0.1.0-rc.6, and an existing TLS certificate and key. The installer cannot and does not guess a domain or certificate.
-
-## Interactive example
 
 ```text
 $ sudo npx dsh-auth@0.1.11 setup
@@ -47,7 +47,7 @@ Use `plan` before setup to inspect the same typed plan without reading a passwor
 sudo npx dsh-auth@0.1.11 plan
 ```
 
-## Cloud and configuration-management example
+### CLI setup (non-interactive)
 
 Non-interactive mode requires stable flags and an explicit Nginx policy. Mount the plaintext password as a temporary `0600` secret file supplied by the platform; `dsh-auth` reads it once to create an Argon2id hash and does not copy the plaintext.
 
@@ -77,6 +77,28 @@ sudo npx dsh-auth@0.1.11 setup \
 Use `--nginx require` when the image or provisioning layer already installs Nginx; missing or incompatible Nginx then returns exit code 3 and a JSON diagnostic. `--nginx install` never installs anything without `--authorize-nginx-install`. `--nginx skip` is accepted only with `--output-dir`, where no service or system Nginx action occurs.
 
 Passwords are accepted only through hidden interactive input, `--password-stdin`, or `--password-file`. There is no inline password flag. Command output, JSON, plans, subprocess argv, and installer errors never contain password or session-secret values.
+
+## Reset the password
+
+For an installation created by `setup`, run the interactive reset:
+
+```sh
+sudo npx dsh-auth@0.1.11 reset-password
+```
+
+After exact confirmation, the command reads and confirms the new password without echo. It atomically replaces the managed Argon2id hash, rotates the session secret, revokes all existing sessions, and restarts the recorded DSH service only when it is active. A failed restart restores both previous credential files.
+
+Automation must provide the password through stdin or a temporary `0600` file and explicitly authorize the operation:
+
+```sh
+sudo npx dsh-auth@0.1.11 reset-password \
+  --non-interactive \
+  --json \
+  --authorize-password-reset \
+  --password-file /run/secrets/dsh-auth-new-password
+```
+
+The command never accepts a password value in argv and does not print the password, hash, or session secret.
 
 ## Plain HTTP for an isolated trusted network
 
@@ -157,7 +179,7 @@ The output directory contains `dsh-auth.env`, file-backed credentials, a session
 - Production cookies are `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, and `__Host-` prefixed. Plain HTTP uses an explicit compatibility cookie mode.
 - Argon2id hashes and random session secrets live in separate permission-restricted files. Persistent opaque sessions use a `0600` store.
 - Login and logout enforce CSRF plus exact Origin/Referer checks after trusted-proxy resolution. Authentication responses are `no-store`.
-- Version 1 supports one account and one DSH Web service per managed installation. Registration, recovery, MFA, databases, multi-account policy, and multi-tenancy are outside this release.
+- Version 1 supports one account and one DSH Web service per managed installation. Registration, self-service account recovery, MFA, databases, multi-account policy, and multi-tenancy are outside this release.
 - A standard Nginx `auth_request` cannot immediately revoke an already-open WebSocket. Deployments requiring immediate stream termination need a connection-aware edge.
 
 Security reports follow [`SECURITY.md`](SECURITY.md).

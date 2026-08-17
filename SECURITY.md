@@ -18,6 +18,8 @@ Keep `DSH_AUTH_SESSION_STORE_FILE` on local storage owned by the DSH service use
 
 System setup stores an Argon2id password hash and a random session secret in separate root-owned, DSH-service-group-readable `0640` files below `/etc/dsh-auth`; the plaintext password is read only from hidden input, stdin, or a caller-managed `0600` secret file and is never persisted by dsh-auth. `/etc/dsh-auth/install-state.json` is root-only `0600` and records exact managed paths and package ownership without secret values. Treat unexpected permission changes, an invalid ownership record, or files at managed targets without a record as a deployment incident; the installer fails closed instead of overwriting or deleting them.
 
+`reset-password` validates that ownership record and the credential files before replacing them, rotates both the Argon2id password hash and session secret, and revokes existing sessions. Non-interactive reset requires `--authorize-password-reset`; passwords are never accepted inline or returned in JSON.
+
 Automatic Nginx installation uses fixed argv for explicitly supported operating-system package managers and their configured repositories. It requires a separate authorization and never removes the shared Nginx package. Review `dsh-auth plan` before granting package-install or uninstall authorization in automation.
 
 ## Deployment incidents
