@@ -38,6 +38,7 @@
     "cordis.overlay.yml",
     "deploy/",
     "docs/installer.md",
+    "CHANGELOG.md",
     "README.md",
     "SECURITY.md",
     "LICENSE"

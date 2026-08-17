@@ -11,6 +11,7 @@ import {
   isPublishedRegistryState,
   parseStableTag,
   validateArchivePaths,
+  validateGitHubReleaseMetadata,
   validatePackageFilePaths,
   validatePackageVersion,
   validatePackReport,
@@ -86,6 +87,25 @@ describe('release validation', () => {
     expect(() => validateReleaseManifest({ ...manifest, commit: 'f'.repeat(40) }, identity)).toThrow(/manifest/u)
     expect(() => validateReleaseManifest({ ...manifest, extra: true }, identity)).toThrow(/unexpected/u)
     expect(() => validateReleaseManifest({ ...manifest, sha256: 'short' }, identity)).toThrow(/SHA-256/u)
+  })
+
+  it('requires a final GitHub Release with exactly the npm tarball and manifest', () => {
+    const release = {
+      tagName: identity.tag,
+      name: identity.tag,
+      body: 'Release notes\n',
+      isDraft: false,
+      isPrerelease: false,
+      assets: [
+        { name: identity.filename, size: 100, state: 'uploaded' },
+        { name: 'manifest.json', size: 200, state: 'uploaded' },
+      ],
+    }
+    expect(validateGitHubReleaseMetadata(release, identity.tag, 'Release notes\n')).toEqual([identity.filename, 'manifest.json'])
+    expect(() => validateGitHubReleaseMetadata({ ...release, isDraft: true }, identity.tag, 'Release notes')).toThrow(/final stable/u)
+    expect(() => validateGitHubReleaseMetadata({ ...release, body: 'Other notes' }, identity.tag, 'Release notes')).toThrow(/final stable/u)
+    expect(() => validateGitHubReleaseMetadata({ ...release, assets: [...release.assets, { name: 'notes.md', size: 1, state: 'uploaded' }] }, identity.tag, 'Release notes')).toThrow(/asset set/u)
+    expect(() => validateGitHubReleaseMetadata({ ...release, assets: [{ name: identity.filename, size: 0, state: 'new' }] }, identity.tag, 'Release notes')).toThrow(/incomplete/u)
   })
 
   it('requires safe published files and the complete pack dry-run report', () => {

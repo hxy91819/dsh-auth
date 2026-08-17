@@ -211,4 +211,4 @@ node scripts/installer-e2e.mjs packed/dsh-auth-0.1.13.tgz
 
 Contributors should read [`AGENTS.md`](AGENTS.md). Installer architecture and maintenance checks are in [`docs/installer.md`](docs/installer.md).
 
-Stable npm releases are dispatched from the [Release workflow](.github/workflows/release.yml); maintainers should follow [`docs/releasing.md`](docs/releasing.md) first.
+Stable npm and GitHub releases are dispatched from the [Release workflow](.github/workflows/release.yml); maintainers should update the [changelog](CHANGELOG.md) and follow [`docs/releasing.md`](docs/releasing.md) first.

@@ -93,6 +93,18 @@ jobs:
             --manifest release/manifest.json \
             --report release/pack-report.json
 
+      - name: Verify the committed changelog and generate release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          node scripts/release-changelog.mjs check \
+            --tag "$RELEASE_TAG" \
+            --target "refs/tags/$RELEASE_TAG" \
+            --output CHANGELOG.md \
+            --notes release/release-notes.md \
+            --repository "$GITHUB_REPOSITORY"
+
       - name: Run offline packed-bin smoke
         env:
           RELEASE_TAG: ${{ inputs.tag }}
@@ -127,6 +139,7 @@ jobs:
           path: |
             release/*.tgz
             release/manifest.json
+            release/release-notes.md
           if-no-files-found: error
           retention-days: 7
 
@@ -203,3 +216,72 @@ jobs:
         run: |
           node scripts/release-validation.mjs registry-published --tag "$RELEASE_TAG"
           node scripts/release-validation.mjs registry-smoke --tag "$RELEASE_TAG"
+
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the exact release tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node 24 without a package cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Download the published npm artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dsh-auth-release
+          path: release
+
+      - name: Revalidate tag, npm registry state, artifact, and SHA-256
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          node scripts/release-validation.mjs artifact-verify \
+            --tag "$RELEASE_TAG" \
+            --directory release \
+            --manifest release/manifest.json
+          node scripts/release-validation.mjs registry-published --tag "$RELEASE_TAG"
+
+      - name: Create the final GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if ! gh release create "$RELEASE_TAG" \
+              "release/dsh-auth-${RELEASE_TAG#v}.tgz" \
+              release/manifest.json \
+              --verify-tag \
+              --title "$RELEASE_TAG" \
+              --notes-file release/release-notes.md; then
+            echo 'Release creation did not complete; requiring an existing exact release before success.'
+          fi
+
+      - name: Download and verify the final GitHub Release (creation cannot be rolled back automatically)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          mkdir published-release
+          gh release download "$RELEASE_TAG" --dir published-release
+          gh release view "$RELEASE_TAG" \
+            --json assets,body,isDraft,isPrerelease,name,tagName \
+            > release-metadata.json
+          cmp release/manifest.json published-release/manifest.json
+          node scripts/release-validation.mjs artifact-verify \
+            --tag "$RELEASE_TAG" \
+            --directory published-release \
+            --manifest published-release/manifest.json
+          node scripts/release-validation.mjs github-release \
+            --tag "$RELEASE_TAG" \
+            --metadata release-metadata.json \
+            --notes release/release-notes.md

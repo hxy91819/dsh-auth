@@ -16,6 +16,7 @@
  *   node scripts/release-validation.mjs registry-absent --tag v0.1.13
  *   node scripts/release-validation.mjs registry-published --tag v0.1.13
  *   node scripts/release-validation.mjs registry-smoke --tag v0.1.13
+ *   node scripts/release-validation.mjs github-release --tag v0.1.13 --metadata release-metadata.json
  *   node scripts/release-validation.mjs privacy
  *
  * Outputs:
@@ -49,6 +50,7 @@ const POST_PUBLISH_DELAY_MS = 5_000
 export const REQUIRED_PACKAGE_FILES = Object.freeze([
   'package.json',
   'README.md',
+  'CHANGELOG.md',
   'SECURITY.md',
   'LICENSE',
   'lib/index.js',
@@ -212,6 +214,33 @@ export function validateReleaseManifest(value, expected) {
     filename: value.filename,
     sha256: value.sha256,
   }
+}
+
+/**
+ * Require a final GitHub Release with exactly the verified npm tarball and manifest.
+ *
+ * @param {unknown} value
+ * @param {string} tag
+ * @param {string} expectedNotes
+ * @returns {string[]}
+ */
+export function validateGitHubReleaseMetadata(value, tag, expectedNotes) {
+  const version = parseStableTag(tag)
+  if (!isRecord(value) || value.tagName !== tag || value.name !== tag || value.isDraft !== false || value.isPrerelease !== false || typeof value.body !== 'string' || value.body.trimEnd() !== expectedNotes.trimEnd()) {
+    throw new ReleaseValidationError('GitHub Release metadata does not describe the exact final stable tag')
+  }
+  if (!Array.isArray(value.assets)) throw new ReleaseValidationError('GitHub Release assets must be an array')
+  const names = value.assets.map(asset => {
+    if (!isRecord(asset) || typeof asset.name !== 'string' || typeof asset.size !== 'number' || asset.size <= 0 || asset.state !== 'uploaded') {
+      throw new ReleaseValidationError('GitHub Release contains an incomplete asset')
+    }
+    return asset.name
+  }).sort()
+  const expected = [expectedTarballFilename(version), 'manifest.json'].sort()
+  if (names.length !== expected.length || names.some((name, index) => name !== expected[index])) {
+    throw new ReleaseValidationError('GitHub Release asset set differs from the verified npm artifact and manifest')
+  }
+  return names
 }
 
 /** @param {string} pathValue @returns {string} */
@@ -540,6 +569,7 @@ Commands:
   registry-absent    Require an exact version response of HTTP 404 from the official registry.
   registry-published Require the exact version and latest dist-tag on the official registry.
   registry-smoke     Install the exact version into a fresh temporary npm home and run its bin.
+  github-release     Verify final stable release metadata and its exact two-asset set.
   privacy            Scan tracked files and run git diff --check without printing matches.
 
 Options:
@@ -547,6 +577,8 @@ Options:
   --directory <path>   Artifact directory for pack and artifact-verify.
   --manifest <path>    Manifest path for artifact-verify; pack defaults to directory/manifest.json.
   --report <path>      Optional npm pack --dry-run JSON report output for pack.
+  --metadata <path>    GitHub Release JSON from gh release view.
+  --notes <path>       Expected generated GitHub Release body.
   -h, --help           Show this help.
 
 Outputs:
@@ -658,6 +690,14 @@ export async function main(argv, repositoryRoot = process.cwd()) {
       validateOptionNames(options, ['tag'])
       registryInstallSmoke(requiredOption(options, 'tag'))
       return
+    case 'github-release': {
+      validateOptionNames(options, ['tag', 'metadata', 'notes'])
+      const tag = requiredOption(options, 'tag')
+      const notes = readFileSync(pathOption(requiredOption(options, 'notes')), 'utf8')
+      const assets = validateGitHubReleaseMetadata(readJson(pathOption(requiredOption(options, 'metadata'))), tag, notes)
+      process.stdout.write(`Final GitHub Release verified: ${tag}, assets=${assets.join(',')}.\n`)
+      return
+    }
     case 'privacy':
       validateOptionNames(options, [])
       runPrivacyGate(repositoryRoot)
