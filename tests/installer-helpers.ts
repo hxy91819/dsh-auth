@@ -22,8 +22,8 @@ export class FakeInstallerHost implements InstallerHost {
       this.addDirectory(path, 0o755)
     }
     for (const path of ['/usr/bin/systemctl', '/usr/bin/id', '/usr/bin/getent', '/opt/dsh/bin/dsh']) this.addFile(path, '', 0o755)
-    this.addFile('/etc/os-release', 'ID="tencentos"\nVERSION_ID="4.4"\n', 0o644)
-    this.addFile('/usr/bin/dnf', '', 0o755)
+    this.addFile('/etc/os-release', 'ID="ubuntu"\nVERSION_ID="24.04"\n', 0o644)
+    this.addFile('/usr/bin/apt-get', '', 0o755)
   }
 
   addDirectory(path: string, mode = 0o755, uid = 0, gid = 0): void {

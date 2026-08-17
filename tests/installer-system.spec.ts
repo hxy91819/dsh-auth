@@ -162,12 +162,12 @@ describe('system installer transactions', () => {
     expect(host.readFile('/root/.dsh/profiles/web/package.json')).not.toContain('dsh-auth"')
   }, 30_000)
 
-  it('uses the fixed TencentOS package argv and records but never removes Nginx', async () => {
+  it('uses the fixed Ubuntu package argv and records but never removes Nginx', async () => {
     const host = new FakeInstallerHost()
     host.withSystemdService()
     const prior = host.commandHandler
     host.commandHandler = (command) => {
-      if (command.executable === '/usr/bin/dnf' && command.args.join(' ') === 'install --assumeyes nginx') {
+      if (command.executable === '/usr/bin/apt-get' && command.args.join(' ') === 'install --yes nginx') {
         host.installNginx()
         return { status: 0, stdout: '', stderr: '' }
       }
@@ -178,20 +178,21 @@ describe('system installer transactions', () => {
 
     await expect(runCli(['setup', ...args, '--authorize-nginx-install', '--password-stdin'], setupIo, host)).resolves.toBe(0)
 
-    expect(host.commands).toContainEqual({ executable: '/usr/bin/dnf', args: ['install', '--assumeyes', 'nginx'] })
+    expect(host.commands).toContainEqual({ executable: '/usr/bin/apt-get', args: ['update'] })
+    expect(host.commands).toContainEqual({ executable: '/usr/bin/apt-get', args: ['install', '--yes', 'nginx'] })
     const state = JSON.parse(host.readFile('/etc/dsh-auth/install-state.json')) as { readonly nginxInstalledByDshAuth: boolean }
     expect(state.nginxInstalledByDshAuth).toBe(true)
 
     await expect(runCli(['uninstall', '--json', '--authorize-uninstall'], new FakeCliIo(false), host)).resolves.toBe(0)
     expect(host.fileExists('/usr/sbin/nginx')).toBe(true)
-    expect(host.commands.some(command => command.executable === '/usr/bin/dnf' && command.args.includes('remove'))).toBe(false)
+    expect(host.commands.some(command => command.executable === '/usr/bin/apt-get' && command.args.includes('remove'))).toBe(false)
   }, 30_000)
 
   it('keeps a recovery journal but no deployed secrets when package installation fails', async () => {
     const host = new FakeInstallerHost()
     host.withSystemdService()
     const prior = host.commandHandler
-    host.commandHandler = (command) => command.executable === '/usr/bin/dnf'
+    host.commandHandler = (command) => command.executable === '/usr/bin/apt-get'
       ? { status: 1, stdout: '', stderr: 'synthetic package failure' }
       : prior(command)
     const args = SYSTEM_ARGS.map(value => value === 'require' ? 'install' : value)
@@ -233,7 +234,7 @@ describe('system installer transactions', () => {
 
     expect(exitCode).toBe(3)
     expect(io.outputs.join('')).toContain('NGINX_INSTALL_UNSUPPORTED')
-    expect(host.commands.some(command => command.executable === '/usr/bin/dnf')).toBe(false)
+    expect(host.commands.some(command => command.executable === '/usr/bin/apt-get')).toBe(false)
   })
 
   it('refuses an installed Nginx without a supported config include', async () => {

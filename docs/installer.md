@@ -69,7 +69,7 @@ The state parser validates mode, root ownership under `/etc`, schema fields, exa
 
 Discovery checks fixed executable locations, parses `nginx -V` for version, `--with-http_auth_request_module`, and `--conf-path`, then tokenizes active main-config directives and accepts only an include directly inside the top-level `http` block ending in `conf.d/*.conf` or `sites-enabled/*`. Commented and stream/server-context includes do not qualify. System activation requires `nginx.service` with `LoadState=loaded` under systemd.
 
-Automatic package installation is a closed table. Ubuntu 24.04 uses `/usr/bin/apt-get update` followed by `/usr/bin/apt-get install --yes nginx`; TencentOS Server 4.4 uses `/usr/bin/dnf install --assumeyes nginx`. The installer re-runs full Nginx discovery after the command. A package that is too old, omits `auth_request`, lacks the supported include, or lacks systemd remains installed for operator inspection, while protected deployment stays inactive. Add another distribution only with a real isolated package-install smoke and fixed argv tests.
+Automatic package installation is a closed table. The verified Ubuntu 24.04 baseline uses `/usr/bin/apt-get update` followed by `/usr/bin/apt-get install --yes nginx`. The installer re-runs full Nginx discovery after the command. A package that is too old, omits `auth_request`, lacks the supported include, or lacks systemd remains installed for operator inspection, while protected deployment stays inactive. Add another distribution only with a real isolated package-install smoke and fixed argv tests.
 
 ## Change map
 

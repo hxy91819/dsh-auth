@@ -20,7 +20,7 @@ export type EdgeMode = 'https' | 'http'
 
 /** Fixed operating-system package installation recipe. */
 export interface PackageManagerDiscovery {
-  readonly kind: 'apt-get' | 'dnf'
+  readonly kind: 'apt-get'
   readonly executable: string
   readonly source: string
   readonly commands: readonly CommandSpec[]

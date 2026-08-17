@@ -42,14 +42,6 @@ export function discoverPackageManager(host: InstallerHost): PackageManagerDisco
       ],
     }
   }
-  if (id === 'tencentos' && version === '4.4' && host.regularFile('/usr/bin/dnf')) {
-    return {
-      kind: 'dnf',
-      executable: '/usr/bin/dnf',
-      source: 'TencentOS system repositories',
-      commands: [{ executable: '/usr/bin/dnf', args: ['install', '--assumeyes', 'nginx'] }],
-    }
-  }
   return undefined
 }
 

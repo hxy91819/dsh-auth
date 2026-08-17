@@ -16,7 +16,7 @@ sudo npx dsh-auth@0.1.11 setup
 
 The interactive installer asks for the exact DSH service, account name, HTTPS hostname, and certificate paths; shows a secret-free plan; reads and confirms the password without echo; and changes the system only after you type the exact confirmation. It installs the pinned bundle into the selected DSH profile, writes permission-restricted file-backed credentials and a systemd `EnvironmentFile` drop-in, renders the Nginx include, runs `nginx -t`, restarts only the named DSH service, then reloads Nginx. It never stores the plaintext password.
 
-If Nginx is missing, the installer detects the operating system first. On Ubuntu 24.04 and TencentOS Server 4.4 it can show and, after a separate `install-nginx` confirmation, run the operating system's fixed `apt-get` or `dnf` argv. It uses only configured system repositories. Unknown systems fail closed with a copyable remediation; no `curl | sh` path exists.
+If Nginx is missing, the installer detects the operating system first. On the verified Ubuntu 24.04 baseline it can show and, after a separate `install-nginx` confirmation, run fixed `apt-get` argv. It uses only configured system repositories. Other systems fail closed with a copyable remediation; no `curl | sh` path exists.
 
 Normal deployment requires Nginx 1.24 or newer with `ngx_http_auth_request_module`, systemd, Node.js 24.7 or newer, DSH Web 0.1.0-rc.6, and an existing TLS certificate and key. The installer cannot and does not guess a domain or certificate.
 
