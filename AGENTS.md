@@ -48,6 +48,6 @@ corepack pnpm run check:nginx
 git diff --check
 ```
 
-Run `corepack pnpm run test:integration:real` only when a live Harness/Nginx deployment and disposable secrets are available. Record exact service commands before stopping anything, target services by exact unit or PID, clean temporary credentials and processes, and restore the original deployment state.
+Run `corepack pnpm run test:e2e` for changes to authentication policy, edge routing, browser integration, session persistence, packaging, or release behavior. The command owns a disposable DSH profile, secrets, processes, and ports; it requires local Nginx, OpenSSL, `ss`, and Chrome or Chromium and leaves existing services untouched.
 
 Before a public push, scan files and Git metadata for credentials, local paths, private service names, logs, and non-public email addresses. Use the repository-approved personal open-source identity, inspect the packed artifact with `npm pack --dry-run`, and verify the remote commit after pushing.

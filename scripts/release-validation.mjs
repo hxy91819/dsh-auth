@@ -44,6 +44,8 @@ const REGISTRY_URL = 'https://registry.npmjs.org/'
 const STABLE_TAG_PATTERN = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u
 const SHA_PATTERN = /^[0-9a-f]{40}$/u
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u
+const POST_PUBLISH_ATTEMPTS = 6
+const POST_PUBLISH_DELAY_MS = 5_000
 export const REQUIRED_PACKAGE_FILES = Object.freeze([
   'package.json',
   'README.md',
@@ -61,6 +63,7 @@ export const REQUIRED_PACKAGE_FILES = Object.freeze([
 /** @typedef {{filename: string, files: string[]}} PackSummary */
 /** @typedef {{status: number, body: unknown}} RegistryResponse */
 /** @typedef {{cwd?: string, input?: string}} CommandOptions */
+/** @typedef {{attempts?: number, delayMs?: number, fetchJson?: (url: string) => Promise<RegistryResponse>, wait?: (delayMs: number) => Promise<void>}} RegistryPublishedOptions */
 
 /**
  * Error raised for a user-controlled release input or an invalid release state.
@@ -253,10 +256,10 @@ export function validatePackageFilePaths(paths, version) {
 
 /** @param {unknown} report @param {string} version @returns {PackSummary} */
 export function validatePackReport(report, version) {
-  if (!Array.isArray(report) || report.length !== 1 || !isRecord(report[0])) {
-    throw new ReleaseValidationError('npm pack --dry-run must report exactly one package')
+  if (!isRecord(report) || Object.keys(report).length !== 1 || !isRecord(report[PACKAGE_NAME])) {
+    throw new ReleaseValidationError('npm 12 pack --dry-run must report exactly one keyed package')
   }
-  const entry = report[0]
+  const entry = report[PACKAGE_NAME]
   if (entry.name !== PACKAGE_NAME || entry.filename !== expectedTarballFilename(version) || entry.version !== version || !Array.isArray(entry.files)) {
     throw new ReleaseValidationError('npm pack --dry-run does not match the release version')
   }
@@ -419,24 +422,48 @@ export async function assertRegistryVersionAbsent(tag) {
   throw new Error(`official npm registry returned HTTP ${String(response.status)}; refusing to assume 404`)
 }
 
-/** @param {string} tag */
-export async function assertRegistryVersionPublished(tag) {
-  const version = parseStableTag(tag)
-  const versionResponse = await fetchRegistryJson(registryVersionUrl(version))
-  if (classifyRegistryStatus(versionResponse.status) !== 'present' || !isRecord(versionResponse.body) || versionResponse.body.version !== version) {
-    throw new Error(`post-publish registry verification failed for ${PACKAGE_NAME}@${version}; publication already happened and cannot be rolled back automatically`)
-  }
+/** @param {number} delayMs @returns {Promise<void>} */
+function wait(delayMs) {
+  return new Promise(resolvePromise => setTimeout(resolvePromise, delayMs))
+}
 
-  const packageResponse = await fetchRegistryJson(registryPackageUrl())
-  if (packageResponse.status !== 200 || !isRecord(packageResponse.body)) {
-    throw new Error(`post-publish latest-tag verification failed; publication already happened and cannot be rolled back automatically`)
-  }
+/**
+ * Check whether the version endpoint and package metadata both expose the release.
+ *
+ * @param {RegistryResponse} versionResponse
+ * @param {RegistryResponse} packageResponse
+ * @param {string} version
+ * @returns {boolean}
+ */
+export function isPublishedRegistryState(versionResponse, packageResponse, version) {
+  if (classifyRegistryStatus(versionResponse.status) !== 'present' || !isRecord(versionResponse.body) || versionResponse.body.version !== version) return false
+  if (packageResponse.status !== 200 || !isRecord(packageResponse.body)) return false
   const distTags = packageResponse.body['dist-tags']
   const versions = packageResponse.body.versions
-  if (!isRecord(distTags) || distTags.latest !== version || !isRecord(versions) || !isRecord(versions[version])) {
-    throw new Error(`post-publish latest-tag verification failed; publication already happened and cannot be rolled back automatically`)
+  return isRecord(distTags) && distTags.latest === version && isRecord(versions) && isRecord(versions[version])
+}
+
+/** @param {string} tag @param {RegistryPublishedOptions} [options] */
+export async function assertRegistryVersionPublished(tag, options = {}) {
+  const version = parseStableTag(tag)
+  const attempts = options.attempts ?? POST_PUBLISH_ATTEMPTS
+  const delayMs = options.delayMs ?? POST_PUBLISH_DELAY_MS
+  const fetchJson = options.fetchJson ?? fetchRegistryJson
+  const waitForRetry = options.wait ?? wait
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const versionResponse = await fetchJson(registryVersionUrl(version))
+      const packageResponse = await fetchJson(registryPackageUrl())
+      if (isPublishedRegistryState(versionResponse, packageResponse, version)) {
+        process.stdout.write(`Official registry reports ${PACKAGE_NAME}@${version} and dist-tags.latest=${version}.\n`)
+        return
+      }
+    } catch {
+      // Post-publish network failures are retried but never converted into success.
+    }
+    if (attempt < attempts) await waitForRetry(delayMs)
   }
-  process.stdout.write(`Official registry reports ${PACKAGE_NAME}@${version} and dist-tags.latest=${version}.\n`)
+  throw new Error(`post-publish registry verification failed for ${PACKAGE_NAME}@${version} and latest after bounded retries; publication already happened and cannot be rolled back automatically`)
 }
 
 /** @param {string} tag */

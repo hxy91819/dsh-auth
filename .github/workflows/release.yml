@@ -16,6 +16,7 @@ concurrency:
 
 env:
   NODE_VERSION: 24.15.0
+  NPM_VERSION: 12.0.2
   PNPM_VERSION: 10.14.0
   NPM_REGISTRY: https://registry.npmjs.org/
 
@@ -26,6 +27,12 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Require the main workflow ref
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo '::error::Release must be dispatched from the main workflow ref.' >&2
+          exit 1
+
       - name: Check out the exact release tag
         uses: actions/checkout@v4
         with:
@@ -37,6 +44,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up the pinned npm 12 release CLI
+        run: |
+          npm install --global "npm@${NPM_VERSION}" --no-audit --no-fund
+          test "$(npm --version)" = "$NPM_VERSION"
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -158,10 +170,12 @@ jobs:
           printf '%s\n' 'registry=https://registry.npmjs.org/' > "$NPM_USERCONFIG"
           chmod 600 "$NPM_USERCONFIG"
 
-      - name: Install an npm CLI with Trusted Publishing support
+      - name: Install the pinned npm 12 release CLI with Trusted Publishing support
         env:
           NPM_USERCONFIG: ${{ runner.temp }}/dsh-auth.npmrc
-        run: npm --userconfig "$NPM_USERCONFIG" install --global npm@11.5.1 --no-audit --no-fund
+        run: |
+          npm --userconfig "$NPM_USERCONFIG" install --global "npm@${NPM_VERSION}" --no-audit --no-fund
+          test "$(npm --version)" = "$NPM_VERSION"
 
       - name: Require the exact version to be absent
         env:

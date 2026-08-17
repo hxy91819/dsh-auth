@@ -12,7 +12,7 @@ gh workflow run release.yml --ref main -f tag=vX.Y.Z
 
 Replace `vX.Y.Z` with the exact stable tag, for example `v0.1.14`. The workflow has no tag, branch-push, or pull-request publication trigger by design.
 
-The workflow is [`release.yml`](../.github/workflows/release.yml). It has no `push` or `pull_request` trigger, never changes `package.json`, never creates or pushes a tag, and never uses a long-lived npm credential. Preflight has only `contents: read`; the publish job adds only `id-token: write` and is protected by the `npm-release` environment. Release builds deliberately do not use the setup-node package cache.
+The workflow is [`release.yml`](../.github/workflows/release.yml). It has no `push` or `pull_request` trigger, never changes `package.json`, never creates or pushes a tag, and never uses a long-lived npm credential. Preflight has only `contents: read`; the publish job adds only `id-token: write` and is protected by the `npm-release` environment. Release automation supports only the exact npm 12 version pinned in the workflow, and release builds deliberately do not use the setup-node package cache.
 
 ## One-time npm configuration
 

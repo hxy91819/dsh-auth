@@ -5,8 +5,10 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   REQUIRED_PACKAGE_FILES,
+  assertRegistryVersionPublished,
   classifyRegistryStatus,
   expectedTarballFilename,
+  isPublishedRegistryState,
   parseStableTag,
   validateArchivePaths,
   validatePackageFilePaths,
@@ -87,12 +89,14 @@ describe('release validation', () => {
   })
 
   it('requires safe published files and the complete pack dry-run report', () => {
-    const report = [{ name: 'dsh-auth', filename: identity.filename, version: identity.version, files: packageFiles.map(path => ({ path })) }]
+    const entry = { name: 'dsh-auth', filename: identity.filename, version: identity.version, files: packageFiles.map(path => ({ path })) }
+    const report = { 'dsh-auth': entry }
     expect(validatePackReport(report, identity.version).files).toEqual(packageFiles)
     expect(validatePackageFilePaths(packageFiles, identity.version)).toEqual(packageFiles)
     expect(() => validatePackageFilePaths([...packageFiles, 'src/private.ts'], identity.version)).toThrow(/forbidden/u)
     expect(() => validatePackageFilePaths([...packageFiles, '../secret'], identity.version)).toThrow(/unsafe/u)
-    expect(() => validatePackReport([{ name: 'dsh-auth', filename: identity.filename, version: identity.version, files: [] }], identity.version)).toThrow(/missing required/u)
+    expect(() => validatePackReport([entry], identity.version)).toThrow(/npm 12/u)
+    expect(() => validatePackReport({ 'dsh-auth': { ...entry, files: [] } }, identity.version)).toThrow(/missing required/u)
   })
 
   it('matches the final archive to the dry-run list and rejects traversal', () => {
@@ -108,5 +112,55 @@ describe('release validation', () => {
     expect(classifyRegistryStatus(401)).toBe('error')
     expect(classifyRegistryStatus(429)).toBe('error')
     expect(classifyRegistryStatus(500)).toBe('error')
+  })
+
+  it('requires both official registry views to converge on the release', () => {
+    const versionResponse = { status: 200, body: { version: identity.version } }
+    const packageResponse = {
+      status: 200,
+      body: { 'dist-tags': { latest: identity.version }, versions: { [identity.version]: {} } },
+    }
+    expect(isPublishedRegistryState(versionResponse, packageResponse, identity.version)).toBe(true)
+    expect(isPublishedRegistryState(versionResponse, { ...packageResponse, body: { ...packageResponse.body, 'dist-tags': { latest: '0.1.12' } } }, identity.version)).toBe(false)
+    expect(isPublishedRegistryState({ status: 404, body: {} }, packageResponse, identity.version)).toBe(false)
+  })
+
+  it('retries stale post-publish metadata and fails after the bound', async () => {
+    let latestRequests = 0
+    let waits = 0
+    const fetchJson = (url: string) => {
+      if (url.endsWith(`/${identity.version}`)) return Promise.resolve({ status: 200, body: { version: identity.version } })
+      latestRequests += 1
+      return Promise.resolve({
+        status: 200,
+        body: {
+          'dist-tags': { latest: latestRequests === 1 ? '0.1.12' : identity.version },
+          versions: { [identity.version]: {} },
+        },
+      })
+    }
+    await expect(assertRegistryVersionPublished(identity.tag, {
+      attempts: 2,
+      delayMs: 0,
+      fetchJson,
+      wait: () => {
+        waits += 1
+        return Promise.resolve()
+      },
+    })).resolves.toBeUndefined()
+    expect(latestRequests).toBe(2)
+    expect(waits).toBe(1)
+
+    let failedRequests = 0
+    await expect(assertRegistryVersionPublished(identity.tag, {
+      attempts: 2,
+      delayMs: 0,
+      fetchJson: () => {
+        failedRequests += 1
+        return Promise.resolve({ status: 404, body: {} })
+      },
+      wait: () => Promise.resolve(),
+    })).rejects.toThrow(/bounded retries/u)
+    expect(failedRequests).toBe(4)
   })
 })
