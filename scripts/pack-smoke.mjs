@@ -22,8 +22,8 @@ Output:
   Prints one success summary. Validation and subprocess failures exit nonzero.
 
 Examples:
-  node scripts/pack-smoke.mjs packed/dsh-auth-0.1.11.tgz
-  node scripts/pack-smoke.mjs /tmp/artifacts/dsh-auth-0.1.11.tgz
+  node scripts/pack-smoke.mjs packed/dsh-auth-0.1.12.tgz
+  node scripts/pack-smoke.mjs /tmp/artifacts/dsh-auth-0.1.12.tgz
 `
 
 const input = process.argv[2]
