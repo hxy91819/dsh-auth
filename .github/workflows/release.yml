@@ -87,7 +87,7 @@ jobs:
         run: |
           set -euo pipefail
           RELEASE_VERSION="${RELEASE_TAG#v}"
-          TARBALL="release/dsh-auth-${RELEASE_VERSION}.tgz"
+          TARBALL="./release/dsh-auth-${RELEASE_VERSION}.tgz"
           node scripts/pack-smoke.mjs "$TARBALL"
 
       - name: Run packed interactive and non-interactive PTY E2E
@@ -167,7 +167,7 @@ jobs:
         run: |
           set -euo pipefail
           RELEASE_VERSION="${RELEASE_TAG#v}"
-          TARBALL="release/dsh-auth-${RELEASE_VERSION}.tgz"
+          TARBALL="./release/dsh-auth-${RELEASE_VERSION}.tgz"
           npm --userconfig "$NPM_USERCONFIG" publish "$TARBALL" \
             --access public \
             --tag latest \
