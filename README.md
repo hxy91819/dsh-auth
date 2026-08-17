@@ -202,9 +202,12 @@ Security reports follow [`SECURITY.md`](SECURITY.md).
 corepack pnpm install --frozen-lockfile
 corepack pnpm run check
 corepack pnpm run check:nginx
+corepack pnpm run test:e2e
 corepack pnpm pack --pack-destination packed
 node scripts/installer-e2e.mjs packed/dsh-auth-0.1.13.tgz
 ```
+
+`test:e2e` packs the current checkout, installs it into a disposable DSH profile, and drives a real TLS Nginx edge plus a headless browser. It verifies unauthenticated denial, login, the protected SPA/API/download/WebSocket paths, session renewal and restart persistence, and sidebar sign-out revocation. It requires Nginx, OpenSSL, `ss`, and Chrome or Chromium; set `DSH_E2E_CHROME_BIN` when the browser is not installed at a standard Linux path.
 
 Contributors should read [`AGENTS.md`](AGENTS.md). Installer architecture and maintenance checks are in [`docs/installer.md`](docs/installer.md).
 

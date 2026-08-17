@@ -1,16 +1,10 @@
 /**
- * Run a disposable real DSH + dsh-auth tarball + TLS Nginx integration.
- *
- * Usage:
- *   DSH_INTEGRATION_CWD=/path/to/workspace node scripts/real-integration.mjs ./dsh-auth-<version>.tgz
- *
- * The workspace is read by DSH exactly as a normal launch directory. All
- * generated profile data, credentials, cookies, certificates, and logs live
- * in one temporary directory that is removed after exact child-PID shutdown.
+ * Exercise the packed bundle through a real DSH, TLS Nginx, and headless
+ * browser. The test owns every generated profile, secret, process, and port.
  */
 import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:net'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { accessSync, constants, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
@@ -18,15 +12,79 @@ import { once } from 'node:events'
 import http from 'node:http'
 import https from 'node:https'
 import WebSocket from 'ws'
-import { hashPassword } from '../lib/password.js'
 
 const checkout = resolve(import.meta.dirname, '..')
-const tarballArgument = process.argv.slice(2).find(argument => argument !== '--')
-const launchCwd = process.env.DSH_INTEGRATION_CWD
-if (tarballArgument === undefined || launchCwd === undefined || !isAbsolute(launchCwd)) {
-  throw new Error('provide a tarball argument and an absolute DSH_INTEGRATION_CWD')
+const HELP = `Usage:
+  corepack pnpm run test:e2e
+  node scripts/real-integration.mjs [PATH.tgz]
+
+Description:
+  Pack the current checkout when PATH.tgz is omitted, install that artifact
+  into a disposable DSH profile, and verify the real TLS edge, authentication
+  flows, protected HTTP/API/download/WebSocket routes, session persistence,
+  and browser sign-out behavior.
+
+Arguments:
+  PATH.tgz  Optional local package artifact. It must resolve to a .tgz file.
+
+Environment:
+  DSH_E2E_CWD         Absolute DSH workspace path (default: repository root).
+  DSH_E2E_DSH_BIN     Absolute DSH executable (default: local dependency).
+  DSH_E2E_CHROME_BIN  Absolute Chrome/Chromium executable (default: auto-detect).
+
+Outputs:
+  Writes a JSON behavior summary to stdout and exits 0 on success. Failures
+  exit nonzero. All temporary profiles, credentials, certificates, and child
+  processes are cleaned up.
+
+Examples:
+  corepack pnpm run test:e2e
+  DSH_E2E_CHROME_BIN=/usr/bin/chromium node scripts/real-integration.mjs packed/dsh-auth-0.1.13.tgz
+`
+
+const args = process.argv.slice(2).filter(argument => argument !== '--')
+if (args.includes('--help') || args.includes('-h')) {
+  process.stdout.write(HELP)
+  process.exit(0)
 }
-const tarball = resolve(tarballArgument)
+if (args.length > 1 || args.some(argument => argument.startsWith('-'))) {
+  process.stderr.write(HELP)
+  process.exit(2)
+}
+
+function executable(path, label) {
+  if (!isAbsolute(path)) throw new Error(`${label} must be an absolute path`)
+  try {
+    accessSync(path, constants.X_OK)
+  } catch {
+    throw new Error(`${label} is not executable: ${path}`)
+  }
+  return path
+}
+
+function chromeExecutable() {
+  if (process.env.DSH_E2E_CHROME_BIN !== undefined) {
+    return executable(process.env.DSH_E2E_CHROME_BIN, 'DSH_E2E_CHROME_BIN')
+  }
+  for (const candidate of ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser']) {
+    try {
+      return executable(candidate, 'browser')
+    } catch {
+      continue
+    }
+  }
+  throw new Error('Chrome/Chromium was not found; set DSH_E2E_CHROME_BIN to its absolute executable path')
+}
+
+const launchCwd = process.env.DSH_E2E_CWD ?? checkout
+if (!isAbsolute(launchCwd) || !statSync(launchCwd).isDirectory()) {
+  throw new Error('DSH_E2E_CWD must be an absolute directory path')
+}
+const dshExecutable = executable(
+  process.env.DSH_E2E_DSH_BIN ?? join(checkout, 'node_modules', '.bin', 'dsh'),
+  'DSH executable',
+)
+const browserExecutable = chromeExecutable()
 const root = mkdtempSync(join(tmpdir(), 'dsh-auth-real-integration-'))
 const home = join(root, 'dsh-home')
 const secrets = join(root, 'secrets')
@@ -45,6 +103,22 @@ function checked(command, args, options = {}) {
   return result.stdout
 }
 
+function packageTarball() {
+  if (args[0] !== undefined) {
+    const supplied = resolve(args[0])
+    if (!supplied.endsWith('.tgz') || !statSync(supplied).isFile()) {
+      throw new Error('PATH.tgz must resolve to a package tarball file')
+    }
+    return supplied
+  }
+
+  const artifactDirectory = join(root, 'artifacts')
+  mkdirSync(artifactDirectory)
+  checked('corepack', ['pnpm', 'pack', '--pack-destination', artifactDirectory], { cwd: checkout })
+  const manifest = JSON.parse(readFileSync(join(checkout, 'package.json'), 'utf8'))
+  return join(artifactDirectory, `${manifest.name}-${manifest.version}.tgz`)
+}
+
 async function availablePort() {
   const server = createServer()
   server.listen(0, '127.0.0.1')
@@ -59,8 +133,13 @@ async function availablePort() {
 
 function child(command, args, options) {
   const process = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], ...options })
-  process.stdout?.resume()
-  process.stderr?.resume()
+  let output = ''
+  const collect = chunk => {
+    output = `${output}${chunk.toString()}`.slice(-8_000)
+  }
+  process.stdout?.on('data', collect)
+  process.stderr?.on('data', collect)
+  process.testOutput = () => output
   return process
 }
 
@@ -77,10 +156,15 @@ async function terminate(process) {
   }
 }
 
-async function waitUntil(check, label) {
+async function waitUntil(check, label, watchedProcesses = []) {
   const deadline = Date.now() + 30_000
   let lastError
   while (Date.now() < deadline) {
+    for (const watched of watchedProcesses) {
+      if (watched.process.exitCode !== null) {
+        throw new Error(`${watched.name} exited with code ${String(watched.process.exitCode)}\n${watched.process.testOutput()}`)
+      }
+    }
     try {
       if (await check()) return
     } catch (error) {
@@ -88,7 +172,8 @@ async function waitUntil(check, label) {
     }
     await new Promise(resolveTimeout => setTimeout(resolveTimeout, 200))
   }
-  throw new Error(`${label} did not become ready${lastError instanceof Error ? `: ${lastError.message}` : ''}`)
+  const childOutput = watchedProcesses.map(watched => `\n${watched.name}:\n${watched.process.testOutput()}`).join('')
+  throw new Error(`${label} did not become ready${lastError instanceof Error ? `: ${lastError.message}` : ''}${childOutput}`)
 }
 
 function clientRequest(client, port, path, options = {}) {
@@ -212,6 +297,8 @@ async function waitForBrowser(evaluate, expression, label) {
 }
 
 async function main() {
+  const tarball = packageTarball()
+  const { hashPassword } = await import('../lib/password.js')
   const password = randomBytes(24).toString('base64url')
   const passwordHash = await hashPassword(password)
   const hashFile = join(secrets, 'password-hash')
@@ -219,7 +306,7 @@ async function main() {
   writeFileSync(hashFile, `${passwordHash}\n`, { mode: 0o600 })
   writeFileSync(secretFile, `${randomBytes(48).toString('base64url')}\n`, { mode: 0o600 })
 
-  checked('dsh', [
+  checked(dshExecutable, [
     'plugin', '--profile', 'web', 'add', '--offline', '--config.auto-install-peers=false', tarball,
   ], { cwd: checkout, env: { ...process.env, DSH_HOME: home } })
   const settingsFile = join(home, 'settings.yaml')
@@ -240,11 +327,11 @@ async function main() {
     DSH_AUTH_SESSION_SECRET_FILE: secretFile,
     DSH_AUTH_SESSION_RENEWAL_SECONDS: '1',
   }
-  dshProcess = child('dsh', ['web', '--port', String(dshPort)], { cwd: launchCwd, env: dshEnvironment })
+  dshProcess = child(dshExecutable, ['web', '--port', String(dshPort)], { cwd: launchCwd, env: dshEnvironment })
   await waitUntil(async () => {
     const response = await fetch(`http://127.0.0.1:${String(dshPort)}/auth/login`)
     return response.status === 200
-  }, 'DSH')
+  }, 'DSH', [{ name: 'DSH', process: dshProcess }])
 
   const certificate = join(nginxRoot, 'certificate.pem')
   const key = join(nginxRoot, 'key.pem')
@@ -279,14 +366,21 @@ async function main() {
   ].join('\n'))
   checked('nginx', ['-t', '-p', nginxRoot, '-c', nginxConfig])
   nginxProcess = child('nginx', ['-p', nginxRoot, '-c', nginxConfig, '-g', 'daemon off;'], { cwd: checkout })
-  await waitUntil(async () => (await request(httpsPort, '/auth/login')).status === 200, 'Nginx')
+  await waitUntil(async () => (await request(httpsPort, '/auth/login')).status === 200, 'Nginx', [
+    { name: 'DSH', process: dshProcess },
+    { name: 'Nginx', process: nginxProcess },
+  ])
 
-  chromeProcess = child('google-chrome', [
+  chromeProcess = child(browserExecutable, [
     '--headless=new', '--no-sandbox', '--disable-gpu', '--ignore-certificate-errors',
     '--window-size=1280,900', `--user-data-dir=${join(root, 'chrome')}`,
     `--remote-debugging-port=${String(chromePort)}`, 'about:blank',
   ], { cwd: checkout })
-  await waitUntil(async () => (await fetch(`http://127.0.0.1:${String(chromePort)}/json/version`)).ok, 'Chrome')
+  await waitUntil(async () => (await fetch(`http://127.0.0.1:${String(chromePort)}/json/version`)).ok, 'Chrome', [
+    { name: 'DSH', process: dshProcess },
+    { name: 'Nginx', process: nginxProcess },
+    { name: 'Chrome', process: chromeProcess },
+  ])
 
   const harnessStyled = await request(httpsPort, '/auth/login?lang=en&theme=light', {
     headers: { 'accept-language': 'en-US,en;q=0.9' },
@@ -412,11 +506,11 @@ async function main() {
   assert(await websocketStatus(httpsPort, session.pair) === 101, 'authenticated real WebSocket did not upgrade')
 
   await terminate(dshProcess)
-  dshProcess = child('dsh', ['web', '--port', String(dshPort)], { cwd: launchCwd, env: dshEnvironment })
+  dshProcess = child(dshExecutable, ['web', '--port', String(dshPort)], { cwd: launchCwd, env: dshEnvironment })
   await waitUntil(async () => {
     const response = await fetch(`http://127.0.0.1:${String(dshPort)}/auth/login`)
     return response.status === 200
-  }, 'restarted DSH')
+  }, 'restarted DSH', [{ name: 'DSH', process: dshProcess }])
   const afterRestartSession = await request(httpsPort, '/auth/session', { headers: { cookie: session.pair } })
   const afterRestartIdentity = JSON.parse(afterRestartSession.body.toString('utf8'))
   assert(

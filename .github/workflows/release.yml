@@ -99,6 +99,15 @@ jobs:
           TARBALL="release/dsh-auth-${RELEASE_VERSION}.tgz"
           node scripts/installer-e2e.mjs "$TARBALL"
 
+      - name: Run packed authentication E2E through DSH, Nginx, and Chrome
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          RELEASE_VERSION="${RELEASE_TAG#v}"
+          TARBALL="release/dsh-auth-${RELEASE_VERSION}.tgz"
+          pnpm run test:e2e -- "$TARBALL"
+
       - name: Upload the verified release artifact and manifest
         uses: actions/upload-artifact@v4
         with:

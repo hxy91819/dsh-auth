@@ -102,15 +102,23 @@
     "build": "tsc -p tsconfig.build.json && tsdown && node scripts/mark-bin.mjs",
     "clean": "tsc --build --clean tsconfig.build.json",
     "test": "vitest run",
-    "test:integration:real": "node scripts/real-integration.mjs",
+    "test:e2e": "node scripts/real-integration.mjs",
+    "test:integration:real": "pnpm run test:e2e",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "check:nginx": "pnpm run build && node scripts/check-nginx.mjs",
     "check": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build",
     "prepack": "tsc --build --clean tsconfig.build.json && pnpm run build"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@deepseek-ai/dsh-subprocess-local",
+      "node-pty"
+    ]
+  },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh": "0.1.0-rc.6",
     "@deepseek-ai/dsh-client-locale": "0.1.0-rc.6",
     "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.6",
     "@deepseek-ai/dsh-client-ui-primitives": "0.1.0-rc.6",

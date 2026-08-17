@@ -28,4 +28,5 @@ jobs:
       - run: pnpm pack --pack-destination packed
       - run: node scripts/pack-smoke.mjs packed/dsh-auth-*.tgz
       - run: node scripts/installer-e2e.mjs packed/dsh-auth-*.tgz
+      - run: pnpm run test:e2e -- packed/dsh-auth-*.tgz
       - run: npm pack --dry-run
