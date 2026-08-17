@@ -22,7 +22,7 @@ For the first migration run, keep any existing npm publishing access setting nee
 
 ## One-time GitHub configuration
 
-Create the GitHub Environment named exactly `npm-release`. Require approval from at least one trusted maintainer or release-review team, and enable the environment option that prevents the same person from approving their own deployment when a second reviewer is available. Restrict the environment to selected tags matching `v*.*.*`; do not allow arbitrary branches to deploy it.
+Create the GitHub Environment named exactly `npm-release`. Restrict the environment to selected tags matching `v*.*.*`; do not allow arbitrary branches to deploy it. A single-maintainer project may omit required reviewers. TODO: when the project gains another maintainer, require approval from at least one trusted maintainer or release-review team and prevent release authors from approving their own deployments.
 
 Protect `main` with pull requests, the normal CI checks, no force-push, and no deletion. Add a tag ruleset for `v*.*.*` that restricts tag creation, updates, and deletion to maintainers or the release automation owners. The release workflow still validates the exact stable SemVer form and main ancestry, so the ruleset is defense in depth rather than a replacement for those checks.
 
@@ -41,7 +41,7 @@ The workflow does not need write permissions for repository contents, packages, 
 
 1. Update `package.json` and the lockfile when the dependency graph changes, run the local checks in `AGENTS.md`, and commit the change on `main`.
 2. Create and push an annotated stable tag whose version exactly matches `package.json`, for example `v0.1.13`. Do not create a prerelease tag for this workflow.
-3. In GitHub Actions, dispatch **Release** and enter that exact tag. Approve the `npm-release` environment when requested.
+3. In GitHub Actions, dispatch **Release** and enter that exact tag. If reviewer protection is enabled after the project gains another maintainer, have an eligible maintainer approve the `npm-release` deployment.
 4. Inspect the preflight logs and uploaded manifest. It records the tag, commit SHA, package version, tarball filename, and SHA-256. The publish job rechecks all five values before the version-absent check and OIDC publish.
 5. Confirm the official registry version, `latest` dist-tag, and fresh registry install/bin smoke. A failure in these post-publish checks is diagnostic only: npm publication cannot be rolled back automatically, so fix forward with a new version.
 

@@ -24,8 +24,8 @@ Output:
   or subprocess failures exit nonzero. Temporary files are always removed.
 
 Examples:
-  node scripts/installer-e2e.mjs packed/dsh-auth-0.1.12.tgz
-  node scripts/installer-e2e.mjs /tmp/artifacts/dsh-auth-0.1.12.tgz
+  node scripts/installer-e2e.mjs packed/dsh-auth-0.1.13.tgz
+  node scripts/installer-e2e.mjs /tmp/artifacts/dsh-auth-0.1.13.tgz
 `
 
 const input = process.argv[2]
