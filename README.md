@@ -13,8 +13,10 @@ Add a secure single-account login to the DeepSeek Harness Web app. `dsh-auth` ke
 Start with an existing DSH Web systemd service whose upstream listens only on loopback, then run:
 
 ```sh
-sudo npx dsh-auth@0.1.13 setup
+sudo npx dsh-auth@latest setup
 ```
+
+`@latest` resolves the current stable release when `npx` starts, and the installer pins that same version in the selected DSH profile. For controlled production rollout, replace `latest` with the exact version approved by your supply-chain policy.
 
 The interactive installer asks for the exact DSH service, account name, HTTPS hostname, and certificate paths; shows a secret-free plan; reads and confirms the password without echo; and changes the system only after you type the exact confirmation. It installs the pinned bundle into the selected DSH profile, writes permission-restricted file-backed credentials and a systemd `EnvironmentFile` drop-in, renders the Nginx include, runs `nginx -t`, restarts only the named DSH service, then reloads Nginx. It never stores the plaintext password.
 
@@ -23,7 +25,7 @@ If Nginx is missing, the installer detects the operating system first. On the ve
 Normal deployment requires Nginx 1.24 or newer with `ngx_http_auth_request_module`, systemd, Node.js 24.7 or newer, DSH Web 0.1.0-rc.6, and an existing TLS certificate and key. The installer cannot and does not guess a domain or certificate.
 
 ```text
-$ sudo npx dsh-auth@0.1.13 setup
+$ sudo npx dsh-auth@latest setup
 Existing DSH Web systemd unit: dsh-web.service
 Stable user id [admin]:
 Login username [admin]: operator
@@ -44,7 +46,7 @@ Rerunning the same command is idempotent. An existing managed installation with 
 Use `plan` before setup to inspect the same typed plan without reading a password or changing the filesystem:
 
 ```sh
-sudo npx dsh-auth@0.1.13 plan
+sudo npx dsh-auth@latest plan
 ```
 
 ### CLI setup (non-interactive)
@@ -52,7 +54,7 @@ sudo npx dsh-auth@0.1.13 plan
 Non-interactive mode requires stable flags and an explicit Nginx policy. Mount the plaintext password as a temporary `0600` secret file supplied by the platform; `dsh-auth` reads it once to create an Argon2id hash and does not copy the plaintext.
 
 ```sh
-sudo npx dsh-auth@0.1.13 setup \
+sudo npx dsh-auth@latest setup \
   --non-interactive \
   --json \
   --nginx install \
@@ -61,7 +63,6 @@ sudo npx dsh-auth@0.1.13 setup \
   --dsh-home /var/lib/dsh \
   --dsh-bin /usr/local/bin/dsh \
   --profile web \
-  --package dsh-auth@0.1.13 \
   --user-id primary-admin \
   --username operator \
   --roles admin \
@@ -95,7 +96,7 @@ After sign-in, users enter the real Harness Web app with its normal sessions, to
 For an installation created by `setup`, run the interactive reset:
 
 ```sh
-sudo npx dsh-auth@0.1.13 reset-password
+sudo npx dsh-auth@latest reset-password
 ```
 
 After exact confirmation, the command reads and confirms the new password without echo. It atomically replaces the managed Argon2id hash, rotates the session secret, revokes all existing sessions, and restarts the recorded DSH service only when it is active. A failed restart restores both previous credential files.
@@ -103,7 +104,7 @@ After exact confirmation, the command reads and confirms the new password withou
 Automation must provide the password through stdin or a temporary `0600` file and explicitly authorize the operation:
 
 ```sh
-sudo npx dsh-auth@0.1.13 reset-password \
+sudo npx dsh-auth@latest reset-password \
   --non-interactive \
   --json \
   --authorize-password-reset \
@@ -117,7 +118,7 @@ The command never accepts a password value in argv and does not print the passwo
 Plain HTTP remains authenticated but exposes credentials and sessions to network interception. It is accepted only with an explicit `--mode http` and a literal loopback, RFC1918, or ULA listen address:
 
 ```sh
-sudo npx dsh-auth@0.1.13 setup \
+sudo npx dsh-auth@latest setup \
   --nginx require \
   --mode http \
   --listen-address 10.0.0.20 \
@@ -131,15 +132,15 @@ Do not use this mode on an untrusted network. HTTPS is the production default.
 `doctor` checks the ownership record, file permissions, the exact DSH service, root-executable safety, Nginx version and module support, `nginx -t`, and service state:
 
 ```sh
-sudo npx dsh-auth@0.1.13 doctor
-sudo npx dsh-auth@0.1.13 doctor --json
+sudo npx dsh-auth@latest doctor
+sudo npx dsh-auth@latest doctor --json
 ```
 
 `uninstall --dry-run` lists only files and profile changes proven by the ownership record. Interactive uninstall requires typing `uninstall`; automation requires the exact `--authorize-uninstall` flag. Nginx is always retained as a shared system package, even when setup originally installed it.
 
 ```sh
-sudo npx dsh-auth@0.1.13 uninstall --dry-run
-sudo npx dsh-auth@0.1.13 uninstall
+sudo npx dsh-auth@latest uninstall --dry-run
+sudo npx dsh-auth@latest uninstall
 ```
 
 ## Exit codes
@@ -161,9 +162,11 @@ JSON output uses schema version 1 and includes the command, status, exit code, r
 
 Build and pin the exact npm tarball, then install it into the DSH profile without registry access:
 
+Replace `X.Y.Z` with the version in the packed artifact's filename.
+
 ```sh
 corepack pnpm pack --pack-destination packed
-dsh plugin --profile web add --offline --config.auto-install-peers=false /artifacts/dsh-auth-0.1.13.tgz
+dsh plugin --profile web add --offline --config.auto-install-peers=false /artifacts/dsh-auth-X.Y.Z.tgz
 ```
 
 Generate deterministic runtime files without invoking systemd, a package manager, or a host Nginx binary:
@@ -173,7 +176,7 @@ dsh-auth setup \
   --non-interactive \
   --nginx skip \
   --output-dir /image/dsh-auth \
-  --package /artifacts/dsh-auth-0.1.13.tgz \
+  --package /artifacts/dsh-auth-X.Y.Z.tgz \
   --user-id primary-admin \
   --username operator \
   --password-file /run/secrets/dsh-auth-password \
@@ -204,8 +207,10 @@ corepack pnpm run check
 corepack pnpm run check:nginx
 corepack pnpm run test:e2e
 corepack pnpm pack --pack-destination packed
-node scripts/installer-e2e.mjs packed/dsh-auth-0.1.13.tgz
+node scripts/installer-e2e.mjs packed/dsh-auth-X.Y.Z.tgz
 ```
+
+Replace `X.Y.Z` with the version in `package.json`.
 
 `test:e2e` packs the current checkout, installs it into a disposable DSH profile, and drives a real TLS Nginx edge plus a headless browser. It verifies unauthenticated denial, login, the protected SPA/API/download/WebSocket paths, session renewal and restart persistence, and sidebar sign-out revocation. It requires Nginx, OpenSSL, `ss`, and Chrome or Chromium; set `DSH_E2E_CHROME_BIN` when the browser is not installed at a standard Linux path.
 
