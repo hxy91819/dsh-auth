@@ -1,0 +1,182 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable vX.Y.Z tag to publish
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: npm-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: 24.15.0
+  PNPM_VERSION: 10.14.0
+  NPM_REGISTRY: https://registry.npmjs.org/
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the exact release tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node 24 without a package cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Validate the stable tag and main ancestry
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node scripts/release-validation.mjs source --tag "$RELEASE_TAG"
+
+      - name: Install Nginx and PTY support
+        run: sudo apt-get update
+
+      - name: Install Nginx and PTY support packages
+        run: sudo apt-get install --yes nginx util-linux
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run repository checks
+        run: pnpm run check
+
+      - name: Run Nginx configuration checks
+        run: pnpm run check:nginx
+
+      - name: Run tracked-file privacy gate
+        run: node scripts/release-validation.mjs privacy
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Create and inspect the single release artifact
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          node scripts/release-validation.mjs pack \
+            --tag "$RELEASE_TAG" \
+            --directory release \
+            --manifest release/manifest.json \
+            --report release/pack-report.json
+
+      - name: Run offline packed-bin smoke
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          RELEASE_VERSION="${RELEASE_TAG#v}"
+          TARBALL="release/dsh-auth-${RELEASE_VERSION}.tgz"
+          node scripts/pack-smoke.mjs "$TARBALL"
+
+      - name: Run packed interactive and non-interactive PTY E2E
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          RELEASE_VERSION="${RELEASE_TAG#v}"
+          TARBALL="release/dsh-auth-${RELEASE_VERSION}.tgz"
+          node scripts/installer-e2e.mjs "$TARBALL"
+
+      - name: Upload the verified release artifact and manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-auth-release
+          path: |
+            release/*.tgz
+            release/manifest.json
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: npm-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the exact release tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node 24 without a package cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Download the preflight artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dsh-auth-release
+          path: release
+
+      - name: Revalidate tag, artifact, manifest, and SHA-256
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node scripts/release-validation.mjs artifact-verify --tag "$RELEASE_TAG" --directory release --manifest release/manifest.json
+
+      - name: Create an empty npm user config
+        env:
+          NPM_USERCONFIG: ${{ runner.temp }}/dsh-auth.npmrc
+        run: |
+          printf '%s\n' 'registry=https://registry.npmjs.org/' > "$NPM_USERCONFIG"
+          chmod 600 "$NPM_USERCONFIG"
+
+      - name: Install an npm CLI with Trusted Publishing support
+        env:
+          NPM_USERCONFIG: ${{ runner.temp }}/dsh-auth.npmrc
+        run: npm --userconfig "$NPM_USERCONFIG" install --global npm@11.5.1 --no-audit --no-fund
+
+      - name: Require the exact version to be absent
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node scripts/release-validation.mjs registry-absent --tag "$RELEASE_TAG"
+
+      - name: Publish the exact tarball with npm Trusted Publishing
+        env:
+          NPM_USERCONFIG: ${{ runner.temp }}/dsh-auth.npmrc
+          RELEASE_TAG: ${{ inputs.tag }}
+          NPM_REGISTRY: ${{ env.NPM_REGISTRY }}
+        run: |
+          set -euo pipefail
+          RELEASE_VERSION="${RELEASE_TAG#v}"
+          TARBALL="release/dsh-auth-${RELEASE_VERSION}.tgz"
+          npm --userconfig "$NPM_USERCONFIG" publish "$TARBALL" \
+            --access public \
+            --tag latest \
+            --provenance \
+            --registry "$NPM_REGISTRY"
+
+      - name: Verify the published version and latest tag (publication cannot be rolled back)
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          node scripts/release-validation.mjs registry-published --tag "$RELEASE_TAG"
+          node scripts/release-validation.mjs registry-smoke --tag "$RELEASE_TAG"
