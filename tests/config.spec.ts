@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -24,8 +24,8 @@ describe('configuration', () => {
     roots.push(root)
     const hashFile = join(root, 'hash')
     const secretFile = join(root, 'secret')
-    writeFileSync(hashFile, `${credentials.hash}\n`, { mode: 0o600 })
-    writeFileSync(secretFile, `${randomBytes(48).toString('base64url')}\n`, { mode: 0o600 })
+    writeFileSync(hashFile, `${credentials.hash}\n`, { mode: 0o640 })
+    writeFileSync(secretFile, `${randomBytes(48).toString('base64url')}\n`, { mode: 0o640 })
 
     const config = resolveConfig({
       userId: 'stable-id',
@@ -57,5 +57,27 @@ describe('configuration', () => {
     })).toThrow(/sessionRenewalSeconds/u)
     expect(resolveConfig({ ...base, secureCookies: false }).secureCookies).toBe(false)
     expect(() => resolveConfig({ ...base, secureCookies: 'false' })).toThrow(/secureCookies/u)
+  }, 30_000)
+
+  it('rejects exposed or symbolic-link credential files', async () => {
+    const credentials = await testCredentials()
+    const root = mkdtempSync(join(tmpdir(), 'dsh-auth-config-security-'))
+    roots.push(root)
+    const hashFile = join(root, 'hash')
+    const secretFile = join(root, 'secret')
+    const linkedSecretFile = join(root, 'secret-link')
+    writeFileSync(hashFile, `${credentials.hash}\n`, { mode: 0o600 })
+    writeFileSync(secretFile, `${credentials.secret}\n`, { mode: 0o600 })
+    symlinkSync(secretFile, linkedSecretFile)
+
+    chmodSync(hashFile, 0o644)
+    expect(() => resolveConfig({
+      userId: 'u', username: 'name', passwordHashFile: hashFile, sessionSecretFile: secretFile,
+    })).toThrow(/any access by others/u)
+
+    chmodSync(hashFile, 0o640)
+    expect(() => resolveConfig({
+      userId: 'u', username: 'name', passwordHashFile: hashFile, sessionSecretFile: linkedSecretFile,
+    })).toThrow(/sessionSecretFile cannot be read/u)
   }, 30_000)
 })

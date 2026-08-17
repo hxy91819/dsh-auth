@@ -35,6 +35,8 @@ describe('Nginx renderer', () => {
   it('renders explicit trusted-network HTTP without TLS claims', () => {
     const rendered = renderNginxConfig(request('http'))
     expect(rendered).toContain('listen 10.0.0.20:8080;')
+    expect(rendered).toContain('"10.0.0.20" 1;')
+    expect(rendered).toContain('if ($dsh_public_host_allowed = 0) { return 421; }')
     expect(rendered).not.toContain('ssl_certificate')
     expect(rendered).not.toContain('Strict-Transport-Security')
     expect(rendered).toContain('auth_request /_dsh_auth_verify;')

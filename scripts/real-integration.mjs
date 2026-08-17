@@ -491,7 +491,7 @@ async function main() {
   })
   const createdResponse = await request(httpsPort, '/api/session.create', {
     method: 'POST',
-    headers: { cookie: session.pair, 'content-type': 'application/json' },
+    headers: { ...commonPostHeaders, cookie: session.pair, 'content-type': 'application/json' },
     body: rpcBody,
   })
   assert(createdResponse.status === 200, 'authenticated real API was unavailable')

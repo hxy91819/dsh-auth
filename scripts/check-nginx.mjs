@@ -1,9 +1,45 @@
-/** Validate the legacy template and both installer-rendered edge modes with disposable files. */
+/**
+ * Validate generated Nginx syntax and the plain-HTTP Host fence with disposable files.
+ *
+ * Usage: node scripts/check-nginx.mjs [--help]
+ * Options: --help, -h prints this contract without running checks.
+ * Output: one success line and exit 0, or a diagnostic error and non-zero exit.
+ * Examples: node scripts/check-nginx.mjs; corepack pnpm run check:nginx
+ */
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { request as httpRequest } from 'node:http'
+import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { spawnSync } from 'node:child_process'
-import { renderNginxConfig } from '../lib/installer/nginx.js'
+import { spawn, spawnSync } from 'node:child_process'
+
+const HELP = `Usage: node scripts/check-nginx.mjs [options]
+
+Description:
+  Validate the legacy template and installer-rendered HTTPS/HTTP Nginx configs,
+  then start a disposable HTTP edge and verify that an unconfigured Host is rejected.
+
+Options:
+  -h, --help  Show this help text.
+
+Outputs:
+  Prints a success summary to stdout. Validation failures go to stderr via the
+  uncaught error and return a non-zero exit code. All temporary files are removed.
+
+Examples:
+  node scripts/check-nginx.mjs
+  corepack pnpm run check:nginx
+`
+
+if (process.argv.length > 2) {
+  if (process.argv.length === 3 && (process.argv[2] === '--help' || process.argv[2] === '-h')) {
+    process.stdout.write(HELP)
+    process.exit(0)
+  }
+  throw new Error(`unsupported arguments: ${process.argv.slice(2).join(' ')}`)
+}
+
+const { renderNginxConfig } = await import('../lib/installer/nginx.js')
 
 const root = mkdtempSync(join(tmpdir(), 'dsh-auth-nginx-'))
 
@@ -26,6 +62,63 @@ function validate(name, include) {
     '',
   ].join('\n'))
   run('nginx', ['-t', '-p', root, '-c', config])
+  return config
+}
+
+async function availablePort() {
+  const server = createServer()
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const address = server.address()
+  if (address === null || typeof address === 'string') throw new Error('failed to reserve a disposable TCP port')
+  await new Promise((resolve, reject) => server.close(error => error === undefined ? resolve() : reject(error)))
+  return address.port
+}
+
+async function verifyHttpHostFence(common) {
+  const port = await availablePort()
+  const include = renderNginxConfig({
+    ...common,
+    mode: 'http',
+    listenAddress: '127.0.0.1',
+    httpPort: port,
+  })
+  const config = validate('installer-http-host-fence', include)
+  const child = spawn('nginx', ['-p', root, '-c', config, '-g', 'daemon off;'], {
+    stdio: ['ignore', 'ignore', 'pipe'],
+  })
+  let stderr = ''
+  child.stderr.setEncoding('utf8')
+  child.stderr.on('data', chunk => { stderr += chunk })
+  try {
+    let response
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      if (child.exitCode !== null) throw new Error(`disposable nginx exited early\n${stderr}`)
+      try {
+        response = await new Promise((resolve, reject) => {
+          const request = httpRequest({ host: '127.0.0.1', port, path: '/', headers: { host: 'attacker.invalid' } }, resolve)
+          request.once('error', reject)
+          request.end()
+        })
+        break
+      } catch {
+        await new Promise(resolve => setTimeout(resolve, 20))
+      }
+    }
+    response?.resume()
+    if (response?.statusCode !== 421) {
+      throw new Error(`plain HTTP Host fence returned ${String(response?.statusCode ?? 'no response')}, expected 421`)
+    }
+  } finally {
+    if (child.exitCode === null) {
+      await new Promise((resolve) => {
+        child.once('exit', resolve)
+        child.kill('SIGTERM')
+      })
+    }
+  }
 }
 
 try {
@@ -77,7 +170,8 @@ try {
     mode: 'http',
     listenAddress: '127.0.0.1',
   }))
-  process.stdout.write('Legacy and installer HTTPS/HTTP Nginx configurations are valid.\n')
+  await verifyHttpHostFence(common)
+  process.stdout.write('Legacy and installer HTTPS/HTTP Nginx configurations and the HTTP Host fence are valid.\n')
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

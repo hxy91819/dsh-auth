@@ -76,6 +76,15 @@ function hasSameOrigin(req: IncomingMessage, config: ResolvedConfig): boolean {
   }
 }
 
+function protectedRequestOriginAllowed(req: IncomingMessage, config: ResolvedConfig): boolean {
+  const originalMethod = headerValue(req, 'x-original-method') ?? 'GET'
+  const originalUpgrade = headerValue(req, 'x-original-upgrade')
+  if ((originalMethod === 'GET' || originalMethod === 'HEAD') && originalUpgrade === undefined) return true
+  const fetchSite = headerValue(req, 'sec-fetch-site')
+  if (fetchSite !== undefined && fetchSite !== 'same-origin' && fetchSite !== 'none') return false
+  return hasSameOrigin(req, config)
+}
+
 /** Keep redirects on this origin and preserve only an absolute path/query. */
 export function safeReturnTarget(value: string | null | undefined): string {
   if (value === undefined || value === null || value.length === 0 || value.length > 4096) return '/'
@@ -385,6 +394,10 @@ export class AuthApplication {
   private verify(req: IncomingMessage, res: ServerResponse): void {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       write(res, 405, 'method not allowed', { allow: 'GET, HEAD', 'cache-control': 'no-store' })
+      return
+    }
+    if (!protectedRequestOriginAllowed(req, this.config)) {
+      write(res, 403, 'cross-origin request denied', { 'cache-control': 'no-store' })
       return
     }
     const authenticated = this.sessions.authenticate(req, this.now())
