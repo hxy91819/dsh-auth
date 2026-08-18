@@ -16,6 +16,26 @@ coverage: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPT
 
 动态状态统一见[《项目进展》](../项目进展.md)。
 
+## 全局设计
+
+用户只管理一个 `dsh-auth` 发布物。维护者先从固定官方输入制作自包含候选，再将同一份候选用于 npm、GitHub Release、私有镜像和离线归档。setup 不下载 Caddy；它在修改主机前选择并校验当前架构的内置二进制。
+
+```mermaid
+%%{init: {"securityLevel": "strict", "htmlLabels": false}}%%
+flowchart LR
+    M["维护者：固定并校验官方 Caddy"] --> R["单一 dsh-auth 候选：插件与 x64/ARM64 Caddy"]
+    R --> D["npm、GitHub Release、私有镜像与离线归档"]
+    D --> I["setup：本地选择并校验当前架构"]
+    B["浏览器或云控制台"] --> C["受管 Caddy：唯一公网入口"]
+    I --> C
+    I --> H["Harness 与 dsh-auth 插件：仅监听 loopback"]
+    C -->|"内部 forward_auth"| H
+    C -->|"认证后的 HTTP、下载、SSE 与 WebSocket"| H
+    H --> S["认证状态：管理员、会话与一次性令牌"]
+```
+
+Caddy 由项目固定版本并独占管理，不探测或复用用户已有网关。它负责 TLS、公网请求边界、反向代理和实时连接。dsh-auth 插件运行在 Harness 内，负责登录、会话、CSRF 和一次性令牌。Harness 只监听 loopback，绕过 Caddy 的公网路径不在支持边界内。
+
 ## 成功标准
 
 | 门禁 | Epic 成功条件 |
@@ -41,8 +61,6 @@ coverage: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPT
 - 管理员内部 ID 和角色固定为 `admin`；本期不实现普通用户。
 - 密码初始化和令牌初始化是显式二选一；令牌能力启用后长期保留。
 - 令牌会话与密码会话共用现有 72 小时滚动策略和安全 Cookie。
-- Caddy 由项目固定版本、独占配置和独立服务管理，不探测或复用主机已有 Caddy/Nginx。
-- `dsh-auth` 主包是唯一安装和发布单元，同时携带 Linux x64/ARM64 Caddy；不发布独立平台包，也不在 setup 时下载。
 - 不实现浏览器内修改既有密码、云厂商用户映射、审计后台或旧版自动迁移。
 - 自定义失败文案只支持纯文本，不支持 HTML、品牌组件或外部链接。
 - 根 README 仍只面向公共安装和运维，不承载本项目动态状态。

@@ -1,6 +1,6 @@
 ---
 story: STORY-06
-intent_version: 2
+intent_version: 4
 refreshed: 2026-08-18
 code_baseline: 4b26ad2621c0e8696cb3257a6fa73acb968731f9
 owns: [RELEASE_ACCEPTANCE]
@@ -18,6 +18,7 @@ verifies: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPT
 
 ## 决策边界
 
+- 人读 Story 的「关键决策」1～5 是已确认产品边界；本卡只记录执行和证据。
 - 本 Story 修复验收发现的缺陷和缺失测试，但不新增产品能力或改变冻结接口；需要改变时停止并插入 Story 或 REPLAN。
 - 不把 mock-only 测试当作真实 Caddy、浏览器、systemd 或容器证据。
 - 领取时再次解析 npm latest；若与锁定版不同，先撤销发布 readiness 并刷新 Harness 基线。
@@ -50,6 +51,14 @@ verifies: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPT
 - npm latest `@deepseek-ai/dsh` = `0.1.0-rc.7`，与锁定 Harness 一致；Caddy 仍为 `v2.11.4`。用户已确认主包自包含双架构 Caddy，不再发布独立 `dsh-auth-caddy-linux-*` 包。下一正式修复版为 `dsh-auth@0.1.15`。
 - 工作树 `/data/code/dsh-auth-story-06`，分支 `feature/story-06-release-acceptance`。主仓 `main` 与 `origin/main` 同步于基线；STORY-05 worktree 只读保留。
 - 前置：Node `v24.15.0`、pnpm `10.14.0`、OpenSSL `3.0.12`、`ss`、systemd 255、Chrome `/usr/bin/google-chrome`。Caddy 二进制不在 PATH，E2E 使用校验后的测试预备器。
+
+## 执行清单
+
+- [x] 固定验收时 npm latest，完成锁定/latest Harness 全量检查。
+- [x] 完成代码健康、功能、构建、包结构和 Caddy 检查。
+- [x] 完成密码与令牌两种初始化的真实 E2E 和失败注入。
+- [x] 完成 systemd、容器、doctor、uninstall 和重装验收。
+- [x] 检查打包产物、Git 元数据、日志和证据，形成发布结论。
 
 ## 执行步骤
 
@@ -90,6 +99,15 @@ git diff --check
 
 另保存自包含 Caddy/TLS、容器 smoke、v1 重装、doctor/reset/uninstall、秘密扫描和 Git metadata 检查。交接报告必须给出 SEC 26/26、FUN 13/13、COMPONENT 6/6、RELEASE 1/1；任何跳过项保持未通过。
 
+验收记录（2026-08-18）：
+
+- 验收发现 `lib/` 被 `.gitignore` 排除后，`npm pack` 只打出 15 个文件、没有 CLI。已增加 `.npmignore`（不忽略 `lib/`）和回归测试；修复后 tarball 77 files，`pack-smoke` 与 `installer-e2e` 退出 0。
+- Chrome fragment 兑换在 `replaceState` 后发送 `Origin: null`。token POST 在有效 CSRF 且 `Sec-Fetch-Site` 为 same-origin/none/缺省时接受；密码登录与 logout 仍用精确同源。
+- 锁定/latest Harness、password/login-token、Caddy manual+internal E2E 均退出 0。gitleaks 与 privacy 通过。Git 作者仅为批准公开身份与 Dependabot。
+- 本地 packer 写入主包 `vendor/caddy` 双架构布局；`npm pack` 产出 82 files / 32.9 MB，含 x64+ARM64 Caddy。`pack-smoke` 与 `installer-e2e` 对 `dsh-auth-0.1.15.tgz` 离线通过，不注入第二包。独立平台包方案已撤销。
+- live systemd：在现有 DSH Web 单元上卸载 v1 Nginx 安装后执行 v2 setup。`doctor --json` 退出 0；未认证 `/` 重定向到登录；公网 `/auth/verify` 为 404；loopback Harness 仍只监听本机；主机 Nginx `:80` 未改动。验收中修复 DynamicUser `STATE_DIRECTORY`、Caddyfile bind-mount 与 manual TLS 源证书校验。证据不记录主机标识、公网地址或秘密路径。
+- SEC-26 / FUN-12 / FUN-10 已关闭。`dsh-auth@0.1.15` 已发布为 npm `latest`，GitHub Release 含同一 tarball。未弃用 `0.1.14`。RELEASE 1/1。
+
 ## 停止条件
 
 - 候选提交在验收期间变化，或出现并行认证/Caddy/installer 修改。
@@ -98,15 +116,6 @@ git diff --check
 - 任一 token、密码、私有路径、服务名或非公开邮箱进入包、日志、文档或 Git metadata。
 - 修复需要改变公开 v2 接口、认证政策、状态 schema、部署边界或 Story 意图。
 - 任何 SEC/FUN 场景无可复现证据，或 cleanup 不能证明现有服务未受影响。
-
-## 进度（2026-08-18）
-
-- 验收发现 `lib/` 被 `.gitignore` 排除后，`npm pack` 只打出 15 个文件、没有 CLI。已增加 `.npmignore`（不忽略 `lib/`）和回归测试；修复后 tarball 77 files，`pack-smoke` 与 `installer-e2e` 退出 0。
-- Chrome fragment 兑换在 `replaceState` 后发送 `Origin: null`。token POST 在有效 CSRF 且 `Sec-Fetch-Site` 为 same-origin/none/缺省时接受；密码登录与 logout 仍用精确同源。
-- 锁定/latest Harness、password/login-token、Caddy manual+internal E2E 均退出 0。gitleaks 与 privacy 通过。Git 作者仅为批准公开身份与 Dependabot。
-- 本地 packer 写入主包 `vendor/caddy` 双架构布局；`npm pack` 产出 82 files / 32.9 MB，含 x64+ARM64 Caddy。`pack-smoke` 与 `installer-e2e` 对 `dsh-auth-0.1.15.tgz` 离线通过，不注入第二包。独立平台包方案已撤销。
-- live systemd：在现有 DSH Web 单元上卸载 v1 Nginx 安装后执行 v2 setup。`doctor --json` 退出 0；未认证 `/` 重定向到登录；公网 `/auth/verify` 为 404；loopback Harness 仍只监听本机；主机 Nginx `:80` 未改动。验收中修复 DynamicUser `STATE_DIRECTORY`、Caddyfile bind-mount 与 manual TLS 源证书校验。证据不记录主机标识、公网地址或秘密路径。
-- SEC-26 / FUN-12 / FUN-10 已关闭。`dsh-auth@0.1.15` 已发布为 npm `latest`，GitHub Release 含同一 tarball。未弃用 `0.1.14`。RELEASE 1/1。
 
 ## 交接
 
