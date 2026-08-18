@@ -179,6 +179,25 @@ export class FakeInstallerHost implements InstallerHost {
     return { uid: entry.uid, gid: entry.gid, mode: entry.mode, size: entry.content.length, isDirectory: entry.directory }
   }
 
+  inspectDirectory(path: string): ReturnType<InstallerHost['inspectDirectory']> {
+    const stat = this.stat(path)
+    if (!stat.isDirectory) throw new Error('not a real directory')
+    return { uid: stat.uid, gid: stat.gid, mode: stat.mode }
+  }
+
+  readOpenFile(path: string, maxBytes: number): ReturnType<InstallerHost['readOpenFile']> {
+    const entry = this.entries.get(path)
+    if (entry === undefined || entry.directory) throw new Error('not a regular file')
+    const content = entry.content.toString('utf8')
+    return {
+      content: content.length > maxBytes ? content.slice(0, maxBytes + 1) : content,
+      uid: entry.uid,
+      gid: entry.gid,
+      mode: entry.mode,
+      size: entry.content.length,
+    }
+  }
+
   mkdir(path: string, mode: number): void {
     if (this.entries.has(path)) throw new Error(`EEXIST: ${path}`)
     this.addDirectory(path, mode)
@@ -187,7 +206,7 @@ export class FakeInstallerHost implements InstallerHost {
   writeNewFile(path: string, content: string | Buffer, mode: number): void {
     if (this.entries.has(path)) throw new Error(`EEXIST: ${path}`)
     if (!this.entries.get(dirname(path))?.directory) throw new Error(`ENOENT: ${dirname(path)}`)
-    this.addFile(path, content, mode)
+    this.addFile(path, content, mode, this.uid, this.uid)
   }
 
   replaceFile(path: string, content: string, mode: number): void {

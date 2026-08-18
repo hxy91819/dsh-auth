@@ -189,6 +189,8 @@ export interface InstallerHost {
   fsyncFile?(path: string): void
   fsyncDirectory?(path: string): void
   stat(path: string): { readonly uid: number; readonly gid: number; readonly mode: number; readonly size: number; readonly isDirectory: boolean }
+  inspectDirectory(path: string): { readonly uid: number; readonly gid: number; readonly mode: number }
+  readOpenFile(path: string, maxBytes: number): { readonly content: string; readonly uid: number; readonly gid: number; readonly mode: number; readonly size: number }
   mkdir(path: string, mode: number): void
   writeNewFile(path: string, content: string | Buffer, mode: number): void
   replaceFile(path: string, content: string, mode: number): void

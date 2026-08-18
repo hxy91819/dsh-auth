@@ -2,6 +2,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } fr
 import { isIP } from 'node:net'
 import { dirname, isAbsolute, join } from 'node:path'
 import type { StandardSchemaV1 } from '@standard-schema/spec'
+import { inspectTokenDirectory } from './login-token-store.js'
 
 /** Public authentication prefix is fixed for installer, Caddy, and browser URLs. */
 const AUTH_BASE_PATH = '/auth'
@@ -181,6 +182,22 @@ function inspectAuthStateFile(path: string): string {
   }
 }
 
+function inspectLoginTokenDirectory(path: string): string {
+  try {
+    const directory = inspectTokenDirectory(path)
+    if (process.platform !== 'win32') {
+      if ((directory.mode & 0o777) !== 0o700) throw new Error('permissions must be 0700')
+      const uid = process.geteuid?.()
+      const gid = process.getegid?.()
+      if (uid !== undefined && directory.uid !== uid) throw new Error('must be owned by the service user')
+      if (gid !== undefined && directory.gid !== gid) throw new Error('must be owned by the service group')
+    }
+    return path
+  } catch (error) {
+    throw new Error(`loginTokenDirectory cannot be used: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
 function plainTextMessage(input: Record<string, unknown>, key: string): string | undefined {
   const value = optionalString(input, key)
   if (value === undefined) return undefined
@@ -224,6 +241,7 @@ export function resolveConfig(value: unknown): ResolvedConfig {
     if (loginTokenDirectory !== join(dirname(authStateFile), 'login-tokens')) {
       throw new Error('loginTokenDirectory must be the login-tokens directory beside authStateFile')
     }
+    inspectLoginTokenDirectory(loginTokenDirectory)
   } else if (loginTokenDirectory !== undefined) {
     throw new Error('loginTokenDirectory is only accepted when loginTokenEnabled is true')
   }
