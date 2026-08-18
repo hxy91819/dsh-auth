@@ -1,6 +1,6 @@
 ---
 story: STORY-02
-intent_version: 2
+intent_version: 3
 refreshed: 2026-08-18
 code_baseline: 4a0fe68b0fabfe74d37f1148fb6e78a05b3a2076
 owns: [INSTALLER_V2]
@@ -14,13 +14,13 @@ verifies: [AUTH_STATE]
 
 ## 目标与完成信号
 
-把企业版 v2 的 setup、plan、Cordis/env、Caddy 平台包与服务、受管路径、doctor、reset-password、uninstall 和容器输出变成一套可冻结契约。完成时不依赖或接管用户网关，两种初始化均能生成正确状态，schema v1 安全拒绝，所有计划和非签发 JSON 保持 secret-free。
+把企业版 v2 的 setup、plan、Cordis/env、受管 Caddy 与服务、受管路径、doctor、reset-password、uninstall 和容器输出变成一套可冻结契约。完成时不依赖或接管用户网关，两种初始化均能生成正确状态，schema v1 安全拒绝，所有计划和非签发 JSON 保持 secret-free。
 
 ## 决策边界
 
 - 完整公开面以[接口与参数契约](./接口与参数契约.md)为准；不得保留旧用户、角色、路径或 JSON 别名。
 - 删除 `--nginx`、`--authorize-nginx-install` 及全部 Nginx 探测、安装、复用和兼容别名。
-- Caddy 固定 `v2.11.4`，只来自精确平台包；安装器不联网下载二进制，也不探测系统 Caddy。
+- Caddy 固定 `v2.11.4`，只来自项目发布的已校验内容；安装器不联网下载二进制，也不探测系统 Caddy。最终发布形态由 STORY-06 按人读 Story 中已确认的单包决策完成。
 - HTTPS 使用 `--tls automatic|manual`；automatic 拒绝证书参数，manual 要求证书和私钥。
 - 本 Story 创建 token 目录但不生成 token，不实现 `/auth/token`。
 - v1 只诊断和指导重装，不自动删除、覆盖、迁移或调用卸载。
@@ -32,7 +32,7 @@ verifies: [AUTH_STATE]
 
 `SetupRequest` v2 删除 userId/roles，加入 adminBootstrap、adminUsername、loginTokenEnabled 和双语文案。password 源继续只存在执行请求，不进入 fingerprint/install-state；plan 从不读取密码。设置 fingerprint 包含所有非秘密 v2 选择。
 
-installer 按 `process.platform/process.arch` 解析精确 Caddy 平台包，验证 manifest、官方 checksum、项目 checksum 和许可证后复制到项目自有路径。缺包、版本不符或篡改均在变更系统前失败。生成关闭 Admin API 的受管配置和独立 `dsh-auth-caddy.service`；使用 DynamicUser、最小 bind capability、systemd credentials 与受管 state/config 目录。
+installer 按 `process.platform/process.arch` 选择项目提供的 Caddy 内容，验证 manifest、官方 checksum、项目 checksum 和许可证后复制到项目自有路径。缺失、版本不符或篡改均在变更系统前失败。生成关闭 Admin API 的受管配置和独立 `dsh-auth-caddy.service`；使用 DynamicUser、最小 bind capability、systemd credentials 与受管 state/config 目录。
 
 installer 用 STORY-01 的 schema 创建 auth-state。automatic TLS 由 Caddy 管理证书；manual 通过 systemd credentials 只读证书和私钥。计划在 apply 前确认公网端口空闲，冲突时不停止、修改或接管任何服务。journal/rollback 同时覆盖 Caddy 二进制、配置、credentials、unit、端口与原服务状态。
 
@@ -43,7 +43,7 @@ installer 用 STORY-01 的 schema 创建 auth-state。automatic TLS 由 Caddy �
 - [核心决策](./核心决策.md)、[接口与参数契约](./接口与参数契约.md)、[门禁](./门禁.md)。
 - STORY-01 auth-state 交接和 STORY-01.1 Caddy 配置/分发交接。
 - [安全矩阵](./安全威胁与验收矩阵.md) SEC-09、18、20、21、26、FUN-01、02、03、10、12、13。
-- 代码入口：`src/cli.ts`、`src/config.ts`、`src/installer/`、平台包、`cordis.patch.yml`、`cordis.overlay.yml`、`deploy/`、`tests/installer-*.spec.ts`、`tests/config.spec.ts`、`tests/plugin.spec.ts`。
+- 代码入口：`src/cli.ts`、`src/config.ts`、`src/installer/`、主包 Caddy 内容、`cordis.patch.yml`、`cordis.overlay.yml`、`deploy/`、`tests/installer-*.spec.ts`、`tests/config.spec.ts`、`tests/plugin.spec.ts`。
 - Harness 基线：锁定 `0.1.0-rc.7`，领取时 npm latest 必须一致。
 - 当前参数优化意图：JSON/prompt 解耦、`--dsh-executable`、默认值一致、output-dir 推导、统一 password-stdin、等号语法和全局 flag 前置。
 
@@ -95,7 +95,7 @@ corepack pnpm run typecheck
 git diff --check
 ```
 
-2026-08-18 验证：上述命令及全量 `vitest run`（90/90）均退出 0。未提交；公开 README 仍留给 STORY-06。npm 平台包尚未发布，安装器按 optional dependency 名称解析本地包，测试使用内存平台包。
+2026-08-18 验证：上述命令及全量 `vitest run`（90/90）均退出 0。原实现按独立包名解析 Caddy；用户随后否决该发布形态，因此只保留通用的内容校验、配置、服务和回滚证据。主包内置来源、双架构选择与离线安装证据已撤销，交由 STORY-06 复验。
 
 ## 停止条件
 
@@ -106,4 +106,4 @@ git diff --check
 
 ## 交接
 
-交付 v2 Config/CLI/installer、Caddy 平台包与服务、受管路径、doctor/reset/uninstall、容器产物、行为测试、起止提交和干净状态。给 STORY-03 固定：install-state 中的 public origin、authStateFile、token enabled、service UID/GID 字段，以及容器显式参数校验入口。
+交付 v2 Config/CLI/installer、受管 Caddy 与服务、受管路径、doctor/reset/uninstall、容器产物、行为测试、起止提交和干净状态。给 STORY-03 固定：install-state 中的 public origin、authStateFile、token enabled、service UID/GID 字段，以及容器显式参数校验入口。给 STORY-06 留下主包 Caddy 来源和发布候选复验。

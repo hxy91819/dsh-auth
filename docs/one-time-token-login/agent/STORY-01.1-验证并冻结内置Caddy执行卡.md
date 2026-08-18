@@ -87,7 +87,7 @@ git diff --check
 
 ## 交接
 
-交付固定 Caddy 来源/checksum/license、受测试配置、协议与性能证据、起止提交和干净状态。给 STORY-02 固定平台包内容、配置输入、服务启动参数、端口/TLS规则、doctor 检查和不存在自定义模块的结论。
+交付固定 Caddy 来源/checksum/license、受测试配置、协议与性能证据、起止提交和干净状态。给 STORY-02 固定二进制内容、配置输入、服务启动参数、端口/TLS规则、doctor 检查和不存在自定义模块的结论；本 Story 不决定 npm 包或 Release 的数量。
 
 - 结果：标准 Caddy `v2.11.4` 足以实现边缘安全边界，不需要 Go 模块或完整 Gateway。
 - 起止版本：`88ca83ee462aab9c12afe6fd78c91e281a00c7b3` → `09b00badaa7d4f8af71bb3ccdc97c57f3ea2e384`。
@@ -97,4 +97,4 @@ git diff --check
 - 性能：[原始 JSON](./evidence/edge-benchmark-2026-08-18T062356-259Z.json)，SHA-256 `149fb54ec08fa2e2e0c38c6fe6b36c2a29bed1a3948b4a9050a888243e873d37`；吞吐比 1.334，p95 比 0.811，5xx 为 0，两边 SSE/WS 均通过。
 - 清理：每个检查拥有临时进程、端口、证书和状态目录并在结束时删除；证据不含密码、Cookie 或 token。
 - 验证：`check`（89/89）、`check:caddy`、双 TLS `test:e2e:caddy`、`benchmark:edge`、`check:nginx`、Nginx `test:e2e`、规划结构检查、`git diff --check` 和 `npm pack --dry-run` 均退出 0；包内共 68 个文件。
-- STORY-02 输入：平台包只装未修改官方二进制、LICENSE、manifest 和第三方声明；安装器渲染本模板，使用独立状态目录并在启动前执行 checksum/version/config 校验。
+- STORY-02 输入：发布内容只使用未修改官方二进制、LICENSE、manifest 和第三方声明；安装器渲染本模板，使用独立状态目录并在启动前执行 checksum/version/config 校验。最终分发形态由用户确认后冻结为一个自包含主包。
