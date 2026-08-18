@@ -20,50 +20,63 @@ import { validateAbsolutePath, validateSetupRequest } from './installer/validati
 
 const HELP = `Usage:
   dsh-auth --help
+  dsh-auth --version
   dsh-auth setup [options]
   dsh-auth plan [options]
   dsh-auth doctor [--json]
-  dsh-auth reset-password [--password-stdin|--password-file PATH] [--authorize-password-reset] [--json]
-  dsh-auth uninstall [--dry-run] [--authorize-uninstall] [--json]
-  dsh-auth hash [--stdin]
+  dsh-auth reset-password [--non-interactive] [--json]
+                          [--password-stdin|--password-file PATH]
+                          [--authorize-password-reset]
+  dsh-auth uninstall [--non-interactive] [--json] [--dry-run]
+                     [--authorize-uninstall]
+  dsh-auth hash [--password-stdin]
   dsh-auth secret
 
+Global options:
+  --help, -h                        print this help and exit
+  --version                         print the CLI version and exit
+  --json                            emit one JSON document
+  --non-interactive                 disable prompts on a TTY
+
 Setup options:
-  --help                            print this help and exit
-  --non-interactive                 required in automation; use flags instead of prompts
-  --json                            optional; emit one machine-readable JSON document
-  --dry-run                         optional; alias for the plan command
-  --nginx require|install|skip      required Nginx policy
-  --authorize-nginx-install         required with --nginx install
+  --dry-run                         alias for the plan command
+  --nginx require|install|skip      Nginx policy (default: require; skip with --output-dir)
+  --authorize-nginx-install         required when setup would install Nginx
   --dsh-service NAME.service        required for system setup; omit only with --output-dir
   --dsh-home /absolute/path         optional; Harness home when discovery cannot infer it
-  --dsh-bin /absolute/path          optional; DSH executable when discovery cannot infer it
+  --dsh-executable /absolute/path   optional; DSH executable when discovery cannot infer it
   --profile NAME                    optional DSH profile (default: web)
   --package dsh-auth@VERSION|/x.tgz optional pinned registry or offline source
-  --user-id ID --username NAME      required account identity
-  --roles ID[,ID...]                optional roles (default: admin)
-  --password-stdin                  first-time setup; read the password from stdin
-  --password-file /absolute/path    first-time setup; read a 0600 plaintext secret file
-  --mode https|http                 required public edge mode
+  --user-id ID --username NAME      required account identity when not prompting
+  --roles ID[,ID...]                optional comma-separated roles (default: admin)
+  --password-stdin                  password from stdin; required for a ready setup
+  --password-file /absolute/path    password from a 0600 secret file; choose one source
+  --mode https|http                 public edge mode (default: https)
   --upstream 127.0.0.1:PORT         optional loopback DSH listener (default: 127.0.0.1:3080)
-  --listen-address IP               required edge bind address
-  --http-port PORT                  optional HTTP/redirect port
-  --https-port PORT                 optional HTTPS port
-  --server-name HOST                required HTTPS hostname
-  --certificate /absolute/path      required HTTPS certificate
-  --certificate-key /absolute/path  required HTTPS private key
-  --output-dir /absolute/path       optional offline/container files; requires --nginx skip
+  --listen-address IP               edge bind address (default: 0.0.0.0 for HTTPS)
+  --http-port PORT                  optional HTTP/redirect port (default: 80, or 8080 for HTTP)
+  --https-port PORT                 optional HTTPS port (default: 443)
+  --server-name HOST                required with --mode https
+  --certificate /absolute/path      required with --mode https
+  --certificate-key /absolute/path  required with --mode https
+  --output-dir /absolute/path       optional offline/container files; implies --nginx skip
 
-Non-interactive setup requires --non-interactive, --nginx, --mode, --user-id,
---username, --listen-address, and either --password-stdin or --password-file.
-System setup also requires --dsh-service. HTTPS also requires --server-name,
---certificate, and --certificate-key. Remaining flags have defaults or apply
-only with --nginx install, --mode https, or --output-dir.
+When stdin and stdout are TTYs and --non-interactive is not set, setup prompts
+for missing values. Otherwise it requires --user-id and --username. System
+setup also requires --dsh-service. HTTPS also requires --server-name,
+--certificate, and --certificate-key. HTTP requires --listen-address. A ready
+setup also requires exactly one of --password-stdin or --password-file; plan
+and unchanged reruns do not.
+
+Flags accept a space-separated --name value form or --name=value. Duplicate
+flags and unknown flags fail with exit code 2. Global flags may precede the
+command. --json does not disable prompts; automation must pass
+--non-interactive.
 
 Plain HTTP is accepted only on loopback or RFC1918/ULA addresses. Nginx package
-installation and uninstall each require their exact authorization flag in
-non-interactive mode. Password reset requires --authorize-password-reset in
-non-interactive mode; --yes and inline password options do not exist.
+installation and uninstall each require their exact authorization flag when
+prompts are disabled. Password reset requires --authorize-password-reset when
+prompts are disabled; --yes and inline password options do not exist.
 `
 
 interface CliIo {
@@ -148,32 +161,70 @@ interface ParsedArguments {
 }
 
 const VALUE_OPTIONS = new Set([
-  '--nginx', '--dsh-service', '--dsh-home', '--dsh-bin', '--profile', '--package', '--user-id', '--username', '--roles',
+  '--nginx', '--dsh-service', '--dsh-home', '--dsh-executable', '--profile', '--package', '--user-id', '--username', '--roles',
   '--password-file', '--mode', '--upstream', '--listen-address', '--http-port', '--https-port', '--server-name', '--certificate',
   '--certificate-key', '--output-dir',
 ])
-const BOOLEAN_OPTIONS = new Set(['--non-interactive', '--json', '--dry-run', '--authorize-nginx-install', '--authorize-uninstall', '--authorize-password-reset', '--password-stdin', '--help'])
+const BOOLEAN_OPTIONS = new Set(['--non-interactive', '--json', '--dry-run', '--authorize-nginx-install', '--authorize-uninstall', '--authorize-password-reset', '--password-stdin', '--help', '-h', '--version'])
+
+interface OptionToken {
+  readonly name: string
+  readonly inlineValue?: string
+}
+
+function optionToken(token: string): OptionToken {
+  const separator = token.startsWith('--') ? token.indexOf('=') : -1
+  return separator === -1
+    ? { name: token }
+    : { name: token.slice(0, separator), inlineValue: token.slice(separator + 1) }
+}
+
+function addValueOption(argv: readonly string[], index: number, option: OptionToken, values: Map<string, string>): number {
+  if (values.has(option.name)) throw new InstallerError(`duplicate option ${option.name}`, ExitCode.usage)
+  if (option.inlineValue !== undefined) {
+    if (option.inlineValue.length === 0) throw new InstallerError(`${option.name} requires a value`, ExitCode.usage)
+    values.set(option.name, option.inlineValue)
+    return index
+  }
+  const value = argv[index + 1]
+  if (value === undefined || value.startsWith('-')) throw new InstallerError(`${option.name} requires a value`, ExitCode.usage)
+  values.set(option.name, value)
+  return index + 1
+}
+
+function addBooleanOption(option: OptionToken, flags: Set<string>): void {
+  if (option.inlineValue !== undefined) throw new InstallerError(`${option.name} does not take a value`, ExitCode.usage)
+  if (flags.has(option.name)) throw new InstallerError(`duplicate option ${option.name}`, ExitCode.usage)
+  flags.add(option.name)
+}
+
+function unknownOption(name: string): InstallerError {
+  if (name === '--dsh-bin') return new InstallerError('unknown option --dsh-bin; use --dsh-executable', ExitCode.usage)
+  if (name === '--stdin') return new InstallerError('unknown option --stdin; use --password-stdin', ExitCode.usage)
+  return new InstallerError(`unknown option ${name}`, ExitCode.usage)
+}
 
 function parseArguments(argv: readonly string[]): ParsedArguments {
-  const [command, ...tokens] = argv
   const values = new Map<string, string>()
   const flags = new Set<string>()
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index] ?? ''
-    if (VALUE_OPTIONS.has(token)) {
-      if (values.has(token)) throw new InstallerError(`duplicate option ${token}`, ExitCode.usage)
-      const value = tokens[index + 1]
-      if (value === undefined || value.startsWith('--')) throw new InstallerError(`${token} requires a value`, ExitCode.usage)
-      values.set(token, value)
-      index += 1
+  let command: string | undefined
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index] ?? ''
+    if (!token.startsWith('-')) {
+      if (command !== undefined) throw new InstallerError(`unexpected argument ${token}`, ExitCode.usage)
+      command = token
       continue
     }
-    if (BOOLEAN_OPTIONS.has(token)) {
-      if (flags.has(token)) throw new InstallerError(`duplicate option ${token}`, ExitCode.usage)
-      flags.add(token)
+    const option = optionToken(token)
+    if (VALUE_OPTIONS.has(option.name)) {
+      index = addValueOption(argv, index, option, values)
       continue
     }
-    throw new InstallerError(`unknown option ${token}`, ExitCode.usage)
+    if (BOOLEAN_OPTIONS.has(option.name)) {
+      addBooleanOption(option, flags)
+      continue
+    }
+    throw unknownOption(option.name)
   }
   return { ...(command === undefined ? {} : { command }), values, flags }
 }
@@ -267,20 +318,30 @@ function assertRequiredSetupInputs(inputs: SetupInputs, output: boolean): assert
   readonly username: string
   readonly listenAddress: string
 } {
-  if (inputs.mode === undefined || inputs.nginxPolicy === undefined || inputs.userId === undefined || inputs.username === undefined || inputs.listenAddress === undefined) {
-    throw new InstallerError('non-interactive setup requires --mode, --nginx, --user-id, --username, and --listen-address', ExitCode.usage)
-  }
+  if (inputs.userId === undefined || inputs.username === undefined) throw new InstallerError('non-interactive setup requires --user-id and --username', ExitCode.usage)
+  if (inputs.listenAddress === undefined) throw new InstallerError('non-interactive HTTP setup requires --listen-address', ExitCode.usage)
+  if (inputs.mode === undefined || inputs.nginxPolicy === undefined) throw new InstallerError('setup defaults could not be resolved', ExitCode.execution)
   if (!output && inputs.dshService === undefined) throw new InstallerError('non-interactive system setup requires --dsh-service', ExitCode.usage)
+}
+
+function withSetupDefaults(inputs: SetupInputs, output: boolean): SetupInputs {
+  const mode = inputs.mode ?? 'https'
+  return {
+    ...inputs,
+    mode,
+    nginxPolicy: inputs.nginxPolicy ?? (output ? 'skip' : 'require'),
+    listenAddress: inputs.listenAddress ?? (mode === 'https' ? '0.0.0.0' : undefined),
+  }
 }
 
 async function setupRequest(parsed: ParsedArguments, io: CliIo, host: InstallerHost, interactive: boolean): Promise<SetupRequest> {
   const values = parsed.values
   const outputDirectory = values.get('--output-dir')
-  const inputs = interactive
+  const collected = interactive
     ? await collectInteractiveSetupInputs(io, host, parsedSetupInputs(parsed), outputDirectory !== undefined)
     : parsedSetupInputs(parsed)
+  const inputs = withSetupDefaults(collected, outputDirectory !== undefined)
   assertRequiredSetupInputs(inputs, outputDirectory !== undefined)
-
   const passwordFile = values.get('--password-file')
   const passwordStdin = parsed.flags.has('--password-stdin')
   if (passwordFile !== undefined && passwordStdin) throw new InstallerError('choose exactly one password input source', ExitCode.usage)
@@ -288,7 +349,7 @@ async function setupRequest(parsed: ParsedArguments, io: CliIo, host: InstallerH
     ? { kind: 'file', path: passwordFile }
     : passwordStdin ? { kind: 'stdin' } : interactive ? { kind: 'interactive' } : undefined
   const dshHome = values.get('--dsh-home')
-  const dshExecutable = values.get('--dsh-bin')
+  const dshExecutable = values.get('--dsh-executable')
   return validateSetupRequest({
     mode: inputs.mode,
     nginxPolicy: inputs.nginxPolicy,
@@ -376,7 +437,7 @@ async function runResetPassword(parsed: ParsedArguments, io: CliIo, host: Instal
   const unknown = [...parsed.values.keys(), ...parsed.flags].filter(option => !allowed.has(option))
   if (unknown.length > 0) throw new InstallerError(`reset-password does not accept ${unknown.join(', ')}`, ExitCode.usage)
   const json = parsed.flags.has('--json')
-  const interactive = io.interactive && !parsed.flags.has('--non-interactive') && !json
+  const interactive = io.interactive && !parsed.flags.has('--non-interactive')
   const source = passwordSource(parsed, interactive)
   validatePasswordSource(host, source, 'reset-password')
   if (interactive) {
@@ -435,7 +496,7 @@ async function runSetupOrPlan(parsed: ParsedArguments, io: CliIo, host: Installe
   const invalid = [...parsed.flags].filter(option => option === '--authorize-uninstall' || option === '--authorize-password-reset')
   if (invalid.length > 0) throw new InstallerError(`${command} does not accept ${invalid.join(', ')}`, ExitCode.usage)
   const json = parsed.flags.has('--json')
-  const interactive = io.interactive && !parsed.flags.has('--non-interactive') && !json
+  const interactive = io.interactive && !parsed.flags.has('--non-interactive')
   let request = await setupRequest(parsed, io, host, interactive)
   let discovery = discoverSetupHost(host, request)
 
@@ -465,7 +526,7 @@ async function runLegacy(parsed: ParsedArguments, io: CliIo): Promise<number> {
   }
   if (command === 'hash') {
     const unexpected = [...parsed.values.keys(), ...parsed.flags].filter(option => option !== '--password-stdin')
-    if (unexpected.length > 0) throw new InstallerError('hash accepts only --stdin', ExitCode.usage)
+    if (unexpected.length > 0) throw new InstallerError('hash accepts only --password-stdin', ExitCode.usage)
     const stdin = parsed.flags.has('--password-stdin')
     const first = stdin ? await io.readStdin() : await io.readHidden('Password: ')
     if (first.length === 0) throw new InstallerError('password must not be empty', ExitCode.usage)
@@ -478,12 +539,6 @@ async function runLegacy(parsed: ParsedArguments, io: CliIo): Promise<number> {
     return ExitCode.success
   }
   throw new InstallerError('unknown command', ExitCode.usage)
-}
-
-function normalizedArguments(argv: readonly string[]): readonly string[] {
-  if (argv[0] === '--help') return ['help']
-  if (argv[0] === 'hash' && argv[1] === '--stdin') return ['hash', '--password-stdin', ...argv.slice(2)]
-  return argv
 }
 
 function assertAcceptedOptions(parsed: ParsedArguments, accepted: readonly string[], message: string): void {
@@ -500,8 +555,7 @@ function runDoctor(parsed: ParsedArguments, io: CliIo, host: InstallerHost): num
 }
 
 async function authorizeUninstall(parsed: ParsedArguments, io: CliIo, plan: InstallationPlan): Promise<boolean> {
-  const json = parsed.flags.has('--json')
-  if (io.interactive && !parsed.flags.has('--non-interactive') && !json) {
+  if (io.interactive && !parsed.flags.has('--non-interactive')) {
     io.writeOut(renderPlan(plan))
     return (await io.readLine('Type uninstall to remove only the recorded files: ')).trim() === 'uninstall'
   }
@@ -512,7 +566,7 @@ async function authorizeUninstall(parsed: ParsedArguments, io: CliIo, plan: Inst
 }
 
 async function runUninstall(parsed: ParsedArguments, io: CliIo, host: InstallerHost): Promise<number> {
-  assertAcceptedOptions(parsed, ['--json', '--dry-run', '--authorize-uninstall', '--non-interactive'], 'uninstall accepts only --dry-run, --authorize-uninstall, and --json')
+  assertAcceptedOptions(parsed, ['--json', '--dry-run', '--authorize-uninstall', '--non-interactive'], 'uninstall accepts only --dry-run, --authorize-uninstall, --non-interactive, and --json')
   const result = prepareUninstall(host)
   const json = parsed.flags.has('--json')
   if (parsed.flags.has('--dry-run') || result.plan.status === 'unchanged') {
@@ -527,7 +581,15 @@ async function runUninstall(parsed: ParsedArguments, io: CliIo, host: InstallerH
 }
 
 async function dispatchCommand(parsed: ParsedArguments, io: CliIo, host: InstallerHost): Promise<number> {
-  if (parsed.flags.has('--help') || parsed.command === undefined || parsed.command === 'help') {
+  if (parsed.flags.has('--help') || parsed.flags.has('-h') || parsed.command === 'help') {
+    io.writeOut(HELP)
+    return ExitCode.success
+  }
+  if (parsed.flags.has('--version')) {
+    io.writeOut(`${packageVersion()}\n`)
+    return ExitCode.success
+  }
+  if (parsed.command === undefined) {
     io.writeOut(HELP)
     return ExitCode.success
   }
@@ -558,7 +620,7 @@ function writeCliFailure(argv: readonly string[], io: CliIo, error: unknown): nu
 /** Execute the public CLI against injectable I/O and host operations. */
 export async function runCli(argv: readonly string[], io: CliIo = new ProcessCliIo(), host: InstallerHost = new NodeInstallerHost()): Promise<number> {
   try {
-    return await dispatchCommand(parseArguments(normalizedArguments(argv)), io, host)
+    return await dispatchCommand(parseArguments(argv), io, host)
   } catch (error) {
     return writeCliFailure(argv, io, error)
   }

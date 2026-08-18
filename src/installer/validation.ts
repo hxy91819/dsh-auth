@@ -123,7 +123,7 @@ function validateNginxPolicy(input: SetupRequest): void {
     usage('--nginx skip is allowed only with --output-dir')
   }
   if (input.outputDirectory !== undefined && input.nginxPolicy !== 'skip') {
-    usage('--output-dir requires --nginx skip')
+    usage('--output-dir does not accept --nginx require or --nginx install')
   }
   if (input.authorizeNginxInstall && input.nginxPolicy !== 'install') {
     usage('--authorize-nginx-install requires --nginx install')

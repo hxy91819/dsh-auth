@@ -58,13 +58,18 @@ sudo dsh-auth plan
 
 Non-interactive mode requires stable flags and an explicit Nginx policy. Mount the plaintext password as a temporary `0600` secret file supplied by the platform; `dsh-auth` reads it once to create an Argon2id hash and does not copy the plaintext.
 
-Print the command list, setup options, and which non-interactive flags are required:
+These command names, flag names, `--name value` or `--name=value` syntax, JSON schema version 1, and exit codes are the public automation contract. Global flags may precede the command. New flags and diagnostic codes may be added. Renaming, removing, or changing the meaning of an existing flag, JSON field, or exit code is a breaking change.
+
+Print the frozen usage text:
 
 ```sh
 dsh-auth --help
+dsh-auth --version
 ```
 
-`dsh-auth setup --help` prints the same text. The example below is a complete HTTPS system install. Several flags in it are optional pins; the table after it marks what automation must supply.
+`-h` is an alias for `--help`. `dsh-auth setup --help` prints the same usage text. The example below is a complete HTTPS system install. Several flags in it are optional pins; the table after it marks what automation must supply.
+
+Prompts run only when stdin and stdout are both TTYs and `--non-interactive` is not set. `--json` is output format only and does not disable prompts.
 
 ```sh
 sudo dsh-auth setup \
@@ -74,7 +79,7 @@ sudo dsh-auth setup \
   --authorize-nginx-install \
   --dsh-service dsh-web.service \
   --dsh-home /var/lib/dsh \
-  --dsh-bin /usr/local/bin/dsh \
+  --dsh-executable /usr/local/bin/dsh \
   --profile web \
   --user-id primary-admin \
   --username operator \
@@ -90,30 +95,42 @@ sudo dsh-auth setup \
 
 | Flag | Required | Default | Description |
 |---|---|---|---|
-| `--help` | no | | Print usage and exit. Accepted as `dsh-auth --help` or `dsh-auth setup --help`. |
-| `--non-interactive` | yes | | Disable prompts. Missing required flags fail with exit code 2. |
-| `--nginx` | yes | | `require`, `install`, or `skip`. |
-| `--mode` | yes | | `https` or `http`. |
-| `--user-id` | yes | | Stable account id written into configuration. |
-| `--username` | yes | | Login name. |
-| `--listen-address` | yes | | Edge bind address. |
+| `--help`, `-h` | no | | Print usage and exit. |
+| `--version` | no | | Print the CLI version and exit. |
+| `--non-interactive` | on a TTY | | Disable prompts. |
+| `--json` | no | | Emit one JSON document. Does not disable prompts. |
+| `--nginx` | no | `require` (`skip` with `--output-dir`) | `require`, `install`, or `skip`. |
+| `--mode` | no | `https` | `https` or `http`. |
+| `--user-id` | when not prompting | | Stable account id written into configuration. |
+| `--username` | when not prompting | | Login name. |
+| `--listen-address` | HTTP | `0.0.0.0` for HTTPS | Literal IP bind address. HTTP still requires an explicit private or loopback address. |
 | `--dsh-service` | system setup | | Exact existing DSH Web systemd unit. Omit only with `--output-dir`. |
-| `--password-file` or `--password-stdin` | first-time `setup` | | Password source. Not used by `plan`. Unchanged reruns skip it. |
+| `--password-file` or `--password-stdin` | ready `setup` | | Password source. Not used by `plan`. Unchanged reruns skip it. |
 | `--server-name` | `--mode https` | | Public HTTPS hostname. |
 | `--certificate` | `--mode https` | | Absolute TLS certificate path. |
 | `--certificate-key` | `--mode https` | | Absolute TLS private-key path. |
-| `--authorize-nginx-install` | `--nginx install` | | Authorize the supported OS package commands. |
-| `--json` | no | | Emit one machine-readable JSON document. |
-| `--dry-run` | no | | Alias for `plan`. |
+| `--authorize-nginx-install` | `setup` that would install Nginx | | Authorize the supported OS package commands. Not required for `plan`, or when Nginx is already present. |
+| `--dry-run` | no | | On `setup`, alias for `plan`. On `uninstall`, list owned removals without changing the host. |
 | `--dsh-home` | no | discovered | Harness home when the unit does not infer it. |
-| `--dsh-bin` | no | discovered | DSH executable when the unit does not infer it. |
+| `--dsh-executable` | no | discovered | DSH executable file when the unit does not infer it. Not a directory. |
 | `--profile` | no | `web` | DSH profile name. |
 | `--roles` | no | `admin` | Comma-separated role ids. |
-| `--upstream` | no | `127.0.0.1:3080` | Loopback DSH listener. |
-| `--package` | no | `dsh-auth@<this version>` | Pinned registry spec or absolute `.tgz`. |
+| `--upstream` | no | `127.0.0.1:3080` | Loopback DSH listener (`127.0.0.1` or `[::1]`). |
+| `--package` | no | `dsh-auth@<CLI version>` | Pinned registry spec or absolute `.tgz`. |
 | `--http-port` | no | `80` (`8080` for HTTP) | HTTP or HTTPS-redirect port. |
 | `--https-port` | no | `443` | HTTPS listen port. |
-| `--output-dir` | with `--nginx skip` | | Offline or container render directory. |
+| `--output-dir` | no | | Offline or container render directory. Implies `--nginx skip`. |
+
+Other commands accept a smaller frozen flag set:
+
+| Command | Required when not prompting | Optional |
+|---|---|---|
+| `plan` | Same setup flags, without a password source | `--json`, `--non-interactive` |
+| `doctor` | | `--json` |
+| `reset-password` | `--password-file` or `--password-stdin`; `--authorize-password-reset` | `--json`, `--non-interactive` |
+| `uninstall` | `--authorize-uninstall` | `--json`, `--non-interactive`, `--dry-run` |
+| `hash` | | `--password-stdin` |
+| `secret` | | |
 
 Use `--nginx require` when the image or provisioning layer already installs Nginx; missing or incompatible Nginx then returns exit code 3 and a JSON diagnostic. `--nginx install` never installs anything without `--authorize-nginx-install`. `--nginx skip` is accepted only with `--output-dir`, where no service or system Nginx action occurs.
 
@@ -214,14 +231,11 @@ Generate deterministic runtime files without invoking systemd, a package manager
 ```sh
 dsh-auth setup \
   --non-interactive \
-  --nginx skip \
   --output-dir /image/dsh-auth \
   --package /artifacts/dsh-auth-X.Y.Z.tgz \
   --user-id primary-admin \
   --username operator \
   --password-file /run/secrets/dsh-auth-password \
-  --mode https \
-  --listen-address 0.0.0.0 \
   --server-name harness.example.com \
   --certificate /run/tls/fullchain.pem \
   --certificate-key /run/tls/privkey.pem

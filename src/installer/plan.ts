@@ -200,7 +200,7 @@ function systemDiagnostics(host: InstallerHost, request: SetupRequest, discovery
     diagnostics.push({ code: 'ROOT_REQUIRED', severity: 'error', message: 'System setup requires root to manage systemd and Nginx files.', remediation: 'Run setup through sudo, or use --output-dir without system changes.' })
   }
   if (discovery.dshService === undefined) {
-    diagnostics.push({ code: 'DSH_SERVICE_REQUIRED', severity: 'error', message: 'An explicit DSH Web systemd service is required.', remediation: 'Pass the exact unit with --dsh-service and, when discovery cannot infer them, --dsh-home and --dsh-bin.' })
+      diagnostics.push({ code: 'DSH_SERVICE_REQUIRED', severity: 'error', message: 'An explicit DSH Web systemd service is required.', remediation: 'Pass the exact unit with --dsh-service and, when discovery cannot infer them, --dsh-home and --dsh-executable.' })
   }
   const nginx = discovery.nginx
   if (!nginx.installed) {

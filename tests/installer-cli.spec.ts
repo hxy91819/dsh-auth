@@ -1,23 +1,54 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { runCli } from '../src/cli.js'
 import { FakeCliIo, FakeInstallerHost } from './installer-helpers.js'
 
 const OUTPUT_ARGS = [
-  '--non-interactive', '--json', '--nginx', 'skip', '--output-dir', '/export/dsh-auth', '--mode', 'http',
+  '--non-interactive', '--json', '--output-dir', '/export/dsh-auth', '--mode', 'http',
   '--listen-address', '127.0.0.1', '--user-id', 'admin', '--username', 'admin',
 ] as const
 
 describe('installer CLI', () => {
-  it('prints help for --help and lists required non-interactive setup flags', async () => {
-    const io = new FakeCliIo(false)
+  const FROZEN_FLAGS = [
+    '--help', '--version', '--non-interactive', '--json', '--dry-run',
+    '--nginx', '--authorize-nginx-install', '--dsh-service', '--dsh-home', '--dsh-executable',
+    '--profile', '--package', '--user-id', '--username', '--roles',
+    '--password-stdin', '--password-file', '--mode', '--upstream', '--listen-address',
+    '--http-port', '--https-port', '--server-name', '--certificate', '--certificate-key',
+    '--output-dir', '--authorize-password-reset', '--authorize-uninstall',
+  ] as const
 
-    expect(await runCli(['--help'], io, new FakeInstallerHost())).toBe(0)
-
-    const text = io.outputs.join('')
+  it('prints frozen help for --help and -h', async () => {
+    const helpIo = new FakeCliIo(false)
+    expect(await runCli(['--help'], helpIo, new FakeInstallerHost())).toBe(0)
+    const text = helpIo.outputs.join('')
     expect(text).toContain('dsh-auth --help')
-    expect(text).toContain('--non-interactive                 required in automation')
-    expect(text).toContain('Non-interactive setup requires --non-interactive, --nginx, --mode, --user-id')
-    expect(text).toContain('Remaining flags have defaults')
+    expect(text).toContain('dsh-auth --version')
+    expect(text).toContain('When stdin and stdout are TTYs')
+    expect(text).toContain('setup also requires exactly one of --password-stdin')
+    expect(text).toContain('--name=value')
+    expect(text).toContain('--json does not disable prompts')
+    expect(text).toContain('--help, -h')
+    expect(text).toContain('dsh-auth hash [--password-stdin]')
+    for (const flag of FROZEN_FLAGS) expect(text).toContain(flag)
+
+    const aliasIo = new FakeCliIo(false)
+    expect(await runCli(['-h'], aliasIo, new FakeInstallerHost())).toBe(0)
+    expect(aliasIo.outputs.join('')).toBe(text)
+  })
+
+  it('prints the package version for --version', async () => {
+    const version = `${(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { readonly version: string }).version}\n`
+    const io = new FakeCliIo(false)
+    expect(await runCli(['--version'], io, new FakeInstallerHost())).toBe(0)
+    expect(io.outputs.join('')).toBe(version)
+
+    const setupIo = new FakeCliIo(false)
+    expect(await runCli(['setup', '--version'], setupIo, new FakeInstallerHost())).toBe(0)
+    expect(setupIo.outputs.join('')).toBe(version)
+
+    const unknown = new FakeCliIo(false)
+    expect(await runCli(['version'], unknown, new FakeInstallerHost())).toBe(2)
   })
 
   it('emits a secret-free JSON plan without reading stdin or writing files', async () => {
@@ -52,7 +83,7 @@ describe('installer CLI', () => {
     host.addDirectory('/export')
     const io = new FakeCliIo(true, ['', '', 'http', '127.0.0.1', 'install'], ['interactive-password', 'interactive-password'])
 
-    const exitCode = await runCli(['setup', '--output-dir', '/export/interactive', '--nginx', 'skip'], io, host)
+    const exitCode = await runCli(['setup', '--output-dir', '/export/interactive'], io, host)
 
     expect(exitCode).toBe(0)
     expect(io.hiddenReads).toBe(2)
@@ -175,11 +206,42 @@ describe('installer CLI', () => {
 
   it('does not discard trailing hash options or accept uninstall authorization during setup', async () => {
     const hashIo = new FakeCliIo(false, [], [], 'hash-password')
-    await expect(runCli(['hash', '--stdin', '--json'], hashIo, new FakeInstallerHost())).resolves.toBe(2)
+    await expect(runCli(['hash', '--stdin'], hashIo, new FakeInstallerHost())).resolves.toBe(2)
+    expect(hashIo.errors.join('')).toContain('--password-stdin')
     expect(hashIo.stdinReads).toBe(0)
 
     const setupIo = new FakeCliIo(false)
     await expect(runCli(['plan', ...OUTPUT_ARGS, '--authorize-uninstall'], setupIo, new FakeInstallerHost())).resolves.toBe(2)
     await expect(runCli(['plan', ...OUTPUT_ARGS, '--authorize-password-reset'], setupIo, new FakeInstallerHost())).resolves.toBe(2)
+    const binIo = new FakeCliIo(false)
+    await expect(runCli(['plan', '--dsh-bin', '/usr/local/bin/dsh'], binIo, new FakeInstallerHost())).resolves.toBe(2)
+    expect(binIo.errors.join('')).toContain('--dsh-executable')
+    await expect(runCli(['hash', '--password-stdin', '--json'], hashIo, new FakeInstallerHost())).resolves.toBe(2)
   })
+
+  it('accepts --name=value flags before the command and output-dir without --nginx skip', async () => {
+    const host = new FakeInstallerHost()
+    host.addDirectory('/export')
+    const io = new FakeCliIo(false)
+
+    const exitCode = await runCli([
+      '--json', 'plan', '--non-interactive', '--output-dir=/export/dsh-auth',
+      '--mode=http', '--listen-address=127.0.0.1', '--user-id=admin', '--username=admin',
+    ], io, host)
+
+    expect(exitCode).toBe(0)
+    expect(JSON.parse(io.outputs.join(''))).toMatchObject({ command: 'plan', exitCode: 0 })
+  })
+
+  it('keeps --json from disabling TTY prompts', async () => {
+    const host = new FakeInstallerHost()
+    host.addDirectory('/export')
+    const io = new FakeCliIo(true, ['', '', 'http', '127.0.0.1', 'install'], ['json-prompt-password', 'json-prompt-password'])
+
+    const exitCode = await runCli(['setup', '--json', '--output-dir', '/export/json-prompt'], io, host)
+
+    expect(exitCode).toBe(0)
+    expect(io.hiddenReads).toBe(2)
+    expect(JSON.parse(io.outputs.at(-1) ?? '')).toMatchObject({ command: 'setup', status: 'success' })
+  }, 30_000)
 })

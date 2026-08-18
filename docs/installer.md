@@ -8,7 +8,7 @@ Read this document before changing `setup`, `plan`, `doctor`, `reset-password`, 
 
 `doctor` is read-only. `reset-password` reads the same validated ownership record, replaces only the two managed credential files, rotates the session secret to revoke sessions, and restores both files if an active DSH service cannot restart. `uninstall` reads the state record and removes only recorded files and the profile package installed by the recorded setup. The legacy `hash` and `secret` commands remain narrow credential helpers; they are not part of installation planning.
 
-JSON schema version 1 and exit codes are public automation interfaces. New diagnostic codes may be added; existing meanings and fields require an explicit compatibility decision.
+CLI command names, flag names, `--name value` or `--name=value` syntax, JSON schema version 1, and exit codes are public automation interfaces. Global flags may precede the command. `--json` is output format only and does not disable prompts. JSON documents include the command, status, exit code, redacted actions, and structured diagnostics. New flags and diagnostic codes may be added. Renaming, removing, or changing the meaning of an existing flag, JSON field, or exit code requires an explicit compatibility decision.
 
 ## State machine
 
