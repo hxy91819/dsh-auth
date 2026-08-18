@@ -1,0 +1,23 @@
+# npm uses this file instead of .gitignore. Keep published lib/ visible.
+# Directory or worktree symlink; a trailing slash would not ignore the symlink.
+node_modules
+coverage/
+.tmp/
+*.tgz
+*.log
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+cookie-jar*
+password-hash
+session-secret
+dsh-auth-sessions.json
+secrets/
+pnpm-debug.log*
+npm-debug.log*
+.DS_Store

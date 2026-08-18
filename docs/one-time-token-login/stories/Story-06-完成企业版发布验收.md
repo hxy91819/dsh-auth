@@ -3,9 +3,9 @@ kind: story
 id: STORY-06
 epic: EPIC-ONE-TIME-TOKEN-LOGIN
 title: 完成企业版发布验收
-status: todo
+status: in_progress
 gate: RELEASE
-owner: 待领取
+owner: Cursor
 depends_on: [STORY-05]
 blocker: 无
 updated: 2026-08-18
@@ -32,9 +32,9 @@ intent_version: 2
 
 ## TODO
 
-- [ ] 固定验收时 npm latest，并完成锁定/latest Harness 全量检查。
-- [ ] 完成统一代码健康、功能、构建、包结构和 Caddy 检查。
-- [ ] 完成密码与令牌两种初始化的真实 E2E 和失败注入。
+- [x] 固定验收时 npm latest，并完成锁定/latest Harness 全量检查。
+- [x] 完成统一代码健康、功能、构建、包结构和 Caddy 检查。
+- [x] 完成密码与令牌两种初始化的真实 E2E 和失败注入。
 - [ ] 完成 systemd、容器、doctor、uninstall 和重装验收。
 - [ ] 检查打包产物、Git 元数据、日志和证据并形成发布结论。
 

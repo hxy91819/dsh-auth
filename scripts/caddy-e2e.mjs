@@ -78,6 +78,7 @@ function runE2e(caddy, tls, tarball) {
       DSH_E2E_EDGE: 'caddy',
       DSH_E2E_CADDY_BIN: caddy,
       DSH_E2E_CADDY_TLS: tls,
+      DSH_E2E_BOOTSTRAP: 'password',
     },
   })
   if (result.error !== undefined) throw result.error

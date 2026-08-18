@@ -100,6 +100,14 @@ function hasSameOrigin(req: IncomingMessage, config: ResolvedConfig): boolean {
   }
 }
 
+/** Chrome sends Origin null after history.replaceState on the fragment bridge; CSRF still binds the POST. */
+function hasTokenPostOrigin(req: IncomingMessage, config: ResolvedConfig): boolean {
+  if (hasSameOrigin(req, config)) return true
+  if (headerValue(req, 'origin') !== 'null') return false
+  const fetchSite = headerValue(req, 'sec-fetch-site')
+  return fetchSite === undefined || fetchSite === 'same-origin' || fetchSite === 'none'
+}
+
 function protectedRequestOriginAllowed(req: IncomingMessage, config: ResolvedConfig): boolean {
   const originalMethod = headerValue(req, 'x-original-method') ?? 'GET'
   const originalUpgrade = headerValue(req, 'x-original-upgrade')
@@ -533,7 +541,7 @@ export class AuthApplication {
       writeTokenHtml(res, 429, tokenRateLimitedPage(preferences), { 'retry-after': String(retryAfter) })
       return
     }
-    if (!hasSameOrigin(req, this.config)) throw new HttpError(403, 'cross-origin request denied')
+    if (!hasTokenPostOrigin(req, this.config)) throw new HttpError(403, 'cross-origin request denied')
     if (!this.validCsrf(req, form.get('csrf'))) throw new HttpError(403, 'invalid CSRF token')
     const submitted = form.get('token')
     if (submitted === null || submitted.length === 0 || submitted.length > 256

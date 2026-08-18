@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -106,6 +106,16 @@ describe('release validation', () => {
     expect(() => validateGitHubReleaseMetadata({ ...release, body: 'Other notes' }, identity.tag, 'Release notes')).toThrow(/final stable/u)
     expect(() => validateGitHubReleaseMetadata({ ...release, assets: [...release.assets, { name: 'notes.md', size: 1, state: 'uploaded' }] }, identity.tag, 'Release notes')).toThrow(/asset set/u)
     expect(() => validateGitHubReleaseMetadata({ ...release, assets: [{ name: identity.filename, size: 0, state: 'new' }] }, identity.tag, 'Release notes')).toThrow(/incomplete/u)
+  })
+
+  it('keeps compiled lib files publishable while git still ignores the build tree', () => {
+    const gitignore = readFileSync('.gitignore', 'utf8')
+    const npmignore = readFileSync('.npmignore', 'utf8')
+    const manifest: unknown = JSON.parse(readFileSync('package.json', 'utf8'))
+    const files = manifest !== null && typeof manifest === 'object' && 'files' in manifest ? manifest.files : undefined
+    expect(gitignore.split('\n')).toContain('lib/')
+    expect(npmignore.split('\n').some(line => line === 'lib/' || line === 'lib')).toBe(false)
+    expect(files).toEqual(expect.arrayContaining(['lib/**/*.js', 'lib/**/*.d.ts']))
   })
 
   it('requires safe published files and the complete pack dry-run report', () => {

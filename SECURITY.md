@@ -4,7 +4,7 @@
 
 Until the first stable release, only the latest source revision and the latest released `0.x` artifact receive security fixes. Older prereleases may contain known vulnerabilities and should not remain deployed.
 
-Keep `dsh-auth`, DeepSeek Harness, Node.js, Nginx, and the operating system on supported versions. A deployment using an unreviewed Harness version is outside the tested compatibility and security boundary.
+Keep `dsh-auth`, DeepSeek Harness, Node.js, Caddy, and the operating system on supported versions. A deployment using an unreviewed Harness version is outside the tested compatibility and security boundary.
 
 ## Reporting a vulnerability
 
@@ -20,25 +20,25 @@ This package provides authentication, not tenant isolation or fine-grained autho
 
 ## Trust boundaries
 
-### Public network to Nginx
+### Public network to Caddy
 
-Nginx is the only supported public listener and is the authentication enforcement point. It terminates TLS, validates the public Host, applies request limits and security headers, calls the internal authentication subrequest, and proxies authenticated HTTP, downloads, SSE, and WebSocket handshakes.
+Caddy is the only supported public listener and is the authentication enforcement point. It terminates TLS, validates the public Host, applies request limits and security headers, calls the internal authentication subrequest, and proxies authenticated HTTP, downloads, SSE, and WebSocket handshakes.
 
-Every public path other than the intended `/auth/*` interface must pass `auth_request`. This includes the SPA fallback, `/api`, `/api/*`, `/api/session.export`, `/api/events.mux`, `/api/events.host`, `/plugins/*`, and `/plugins/events`. The upstream `/auth/verify` endpoint must remain reachable only through Nginx's `internal` location and must return not found when requested publicly.
+Every public path other than the intended `/auth/*` interface must pass `forward_auth`. This includes the SPA fallback, `/api`, `/api/*`, `/api/session.export`, `/api/events.mux`, `/api/events.host`, `/plugins/*`, and `/plugins/events`. The upstream `/auth/verify` endpoint must remain reachable only through Caddy's internal `forward_auth` subrequest and must return not found when requested publicly.
 
 The generated HTTPS configuration accepts only the configured public hostname. Plain HTTP accepts only the configured literal private or loopback IP. Protected state-changing requests and browser WebSocket handshakes require an exact public Origin or Referer after trusted-proxy resolution; sibling subdomains are not trusted origins.
 
-### Nginx to Harness
+### Caddy to Harness
 
-Harness must bind only to the configured loopback address and port. Do not expose that port through another interface, reverse proxy, container port publication, SSH tunnel, service mesh route, or load balancer that bypasses Nginx. Check both IPv4 and IPv6 reachability after every deployment change.
+Harness must bind only to the configured loopback address and port. Do not expose that port through another interface, reverse proxy, container port publication, SSH tunnel, service mesh route, or load balancer that bypasses Caddy. Check both IPv4 and IPv6 reachability after every deployment change.
 
-Loopback is a network exposure control, not a local-user security boundary. Any local process that can connect directly to the Harness port bypasses the Nginx authentication gate. Deploy on a dedicated host or in a network namespace/container that does not contain mutually untrusted users or workloads. If the host threat model includes hostile local users, add operating-system isolation that prevents them from reaching the upstream port; `dsh-auth` alone is insufficient.
+Loopback is a network exposure control, not a local-user security boundary. Any local process that can connect directly to the Harness port bypasses the Caddy authentication gate. Deploy on a dedicated host or in a network namespace/container that does not contain mutually untrusted users or workloads. If the host threat model includes hostile local users, add operating-system isolation that prevents them from reaching the upstream port; `dsh-auth` alone is insufficient.
 
 Only explicitly configured proxy IP addresses are trusted to supply `X-Forwarded-*` and client-address headers. Adding a public, shared, or attacker-reachable address to `DSH_AUTH_TRUSTED_PROXY_ADDRESSES` allows that peer to influence Origin checks and login rate-limit identity.
 
 ### Application and host
 
-The DSH process, Cordis loader, installed plugins, Nginx worker and configuration, Node.js runtime, service account, and host root account are trusted computing base. Compromise of any of them can bypass authentication, capture passwords or sessions, alter proxied responses, or access Harness data directly.
+The DSH process, Cordis loader, installed plugins, Caddy worker and configuration, Node.js runtime, service account, and host root account are trusted computing base. Compromise of any of them can bypass authentication, capture passwords or sessions, alter proxied responses, or access Harness data directly.
 
 All authenticated application content shares one browser origin. An XSS vulnerability in Harness or any same-origin plugin can act with the current authenticated session; `HttpOnly` cookies prevent direct cookie reads but do not prevent same-origin requests. `dsh-auth` does not sandbox third-party plugins.
 
@@ -46,24 +46,24 @@ All authenticated application content shares one browser origin. An XSS vulnerab
 
 A production deployment is within the supported boundary only while all of these conditions hold:
 
-- Nginx is the sole externally reachable listener and uses `ngx_http_auth_request_module`.
+- Caddy is the sole externally reachable listener and uses the project-owned `v2.11.4` binary from the matching platform package.
 - Harness listens on the exact configured loopback upstream and is not reachable through any bypass path.
-- HTTPS is used with a valid certificate and key, TLS 1.2 or newer, and the configured public hostname. TLS must not be silently downgraded between the browser and Nginx.
+- HTTPS is used with a valid certificate and key, TLS 1.2 or newer, and the configured public hostname. TLS must not be silently downgraded between the browser and Caddy.
 - Production cookies remain `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, host-only, and `__Host-` prefixed.
 - `/auth/verify` remains internal, and the catch-all protected location continues to cover current and future Harness routes.
-- Nginx overwrites proxy identity headers as rendered; an outer proxy must not be added without explicitly reviewing Host, scheme, client-address, and Origin handling.
-- The password hash, session secret, installer state, environment file, and session store retain their required ownership and modes.
-- System time is trustworthy enough for session expiry, idle expiry, cookie expiry, and TLS validation.
-- Operators run `dsh-auth doctor` and `nginx -t` after changes to Nginx, systemd, the DSH profile, permissions, or managed files.
+- Caddy overwrites proxy identity headers as rendered; an outer proxy must not be added without explicitly reviewing Host, scheme, client-address, and Origin handling.
+- The authentication state, session secret, installer state, environment file, and login-token directory retain their required ownership and modes.
+- System time is trustworthy enough for session expiry, idle expiry, cookie expiry, token expiry, and TLS validation.
+- Operators run `dsh-auth doctor` after changes to Caddy, systemd, the DSH profile, permissions, or managed files.
 
 Removing or weakening any invariant requires a new security review. Do not compensate for a broken boundary with obscurity, an unadvertised port, or a strong password alone.
 
 ## Authentication and browser protections
 
 - Passwords are verified against a resource-bounded Argon2id hash. Login failures do not reveal whether the username or password was incorrect.
-- Login attempts are rate-limited at both Nginx and application layers. Rate limiting reduces online guessing and resource abuse but is not a denial-of-service guarantee against distributed sources.
+- Login attempts are rate-limited at the application layer. Rate limiting reduces online guessing and resource abuse but is not a denial-of-service guarantee against distributed sources.
 - Login and logout use signed double-submit CSRF values and exact Origin/Referer validation.
-- Protected unsafe methods and browser WebSocket handshakes are checked at the authentication subrequest before Nginx rewrites the upstream Origin expected by Harness.
+- Protected unsafe methods and browser WebSocket handshakes are checked at the authentication subrequest before Caddy rewrites the upstream Origin expected by Harness.
 - Return targets accept only absolute paths on the current origin. Authentication and account responses use `no-store`; HTML receives a restrictive CSP and framing protections.
 - Session cookies contain signed opaque random tokens. Authentication also requires a matching server-side session record, allowing logout and administrative secret rotation to revoke sessions.
 
@@ -73,11 +73,11 @@ Authentication secrets are not bearer API tokens and the package does not expose
 
 Keep `DSH_AUTH_SESSION_STORE_FILE` on local storage owned by the DSH service user. The plugin creates it with mode `0600` and refuses group- or world-accessible state on POSIX systems. Do not publish, share, or place the file in a repository.
 
-One session store supports one DSH process. Do not share it between concurrent processes or replicas; multiple replicas require a coordinated session provider with equivalent atomicity, expiry, capacity, and revocation guarantees.
+One authentication-state document supports one DSH process. Do not share it between concurrent processes or replicas; multiple replicas require a coordinated session provider with equivalent atomicity, expiry, capacity, and revocation guarantees.
 
-Treat backups and snapshots of the session store as sensitive. Restoring an older store while retaining the same session secret can restore a previously valid server-side session record. Rotate the session secret after restoring session state, cloning a machine, or recovering from an untrusted snapshot.
+Treat backups and snapshots of the authentication state as sensitive. Restoring an older document while retaining the same session secret can restore a previously valid server-side session record. Rotate the session secret after restoring authentication state, cloning a machine, or recovering from an untrusted snapshot.
 
-Logout revokes the stored session and clears browser cookies. Rotating the session secret invalidates every existing cookie and persisted session. A standard Nginx `auth_request` cannot terminate a WebSocket that has already upgraded; revocation applies to its next handshake. Deployments requiring immediate stream termination need a connection-aware edge.
+Logout revokes the stored session and clears browser cookies. Rotating the session secret invalidates every existing cookie and persisted session. A standard reverse-proxy authentication check cannot terminate a WebSocket that has already upgraded; revocation applies to its next handshake. Deployments requiring immediate stream termination need a connection-aware edge.
 
 ## Passwords, secrets, and managed files
 
@@ -93,9 +93,9 @@ The session secret protects cookie and CSRF signatures and must be generated ran
 
 ## Root installer boundary
 
-System `setup`, `reset-password`, and `uninstall` run with root authority. The installer validates paths, service names, profile names, Nginx inputs, ownership records, root-executed binaries, and writable path components before mutation. Commands use fixed executables and argv arrays rather than shell interpolation.
+System `setup`, `reset-password`, and `uninstall` run with root authority. The installer validates paths, service names, profile names, Caddy inputs, ownership records, root-executed binaries, and writable path components before mutation. Commands use fixed executables and argv arrays rather than shell interpolation.
 
-Review `dsh-auth plan` before authorizing setup. Automatic Nginx installation is limited to explicit supported operating-system recipes and configured system repositories. Nginx is a shared package and is never removed by uninstall.
+Review `dsh-auth plan` before authorizing setup. Caddy is installed only from the exact optional platform package already present on the host. Setup never downloads a binary and never probes, reloads, or reuses a user Caddy or Nginx service.
 
 The installer owns only paths recorded in its validated state. Existing files or packages that it cannot prove ownership of are conflicts. Do not edit managed files in place or fabricate an ownership record. Use `--output-dir` when building images or generating artifacts without granting service-manager or host-filesystem authority.
 
@@ -105,10 +105,10 @@ Installer safety does not protect against a malicious package artifact, compromi
 
 - Plain HTTP on an untrusted network. HTTP mode provides a login flow but cannot prevent interception or modification of credentials and sessions.
 - Mutually untrusted local users or workloads that can reach the Harness loopback port.
-- A compromised DSH service account, root account, Nginx process/configuration, Cordis plugin, Harness package, or same-origin browser application.
+- A compromised DSH service account, root account, Caddy process/configuration, Cordis plugin, Harness package, or same-origin browser application.
 - Immediate revocation of already-open WebSockets.
 - Multi-account policy, registration, account recovery, MFA, SSO, per-user authorization, tenant isolation, and audit-grade identity attribution.
-- Multiple concurrent DSH processes sharing the JSON session store.
+- Multiple concurrent DSH processes sharing the JSON authentication-state document.
 - Protection of data after an authenticated user or agent intentionally exports it, writes it to an unsafe location, or sends it through a configured tool or model provider.
 - Availability against host exhaustion, a sufficiently distributed denial-of-service attack, or failure of external TLS, DNS, package-registry, and operating-system infrastructure.
 
@@ -120,8 +120,8 @@ For suspected compromise:
 2. Preserve the installer state, relevant configuration, and redacted logs for investigation.
 3. Rotate the session secret to revoke browser sessions. Replace the password if it or its hash may have been exposed.
 4. Stop trusting restored or copied session state; archive it securely and start with an empty store after rotation.
-5. Inspect Nginx routes, alternate listeners, systemd units, DSH profiles, plugin inventory, file ownership, and recent package changes.
-6. Update DSH, Node.js, Nginx, `dsh-auth`, and the operating system to fixed versions, then run `dsh-auth doctor`, `nginx -t`, and the deployment's external reachability checks.
+5. Inspect Caddy routes, alternate listeners, systemd units, DSH profiles, plugin inventory, file ownership, and recent package changes.
+6. Update DSH, Node.js, Caddy, `dsh-auth`, and the operating system to fixed versions, then run `dsh-auth doctor` and the deployment's external reachability checks.
 7. Re-enable public traffic only after the original boundary is restored and credentials issued before containment are considered invalid.
 
 Do not publish incident artifacts without removing cookies, hashes, secrets, private paths, hostnames, account identifiers, and user data.

@@ -248,6 +248,13 @@ describe('token redemption', () => {
     expect((await redeem(harness.baseUrl, issued.token)).status).toBe(303)
   })
 
+  it('accepts Chrome Origin null after replaceState when CSRF is valid', async () => {
+    const credentials = await testCredentials()
+    const harness = await tokenHarness(credentials, { configured: false })
+    const issued = harness.store.issue({ ttlSeconds: 300 })
+    expect((await redeem(harness.baseUrl, issued.token, { origin: 'null' })).status).toBe(303)
+  })
+
   it('rate-limits independently from the password limiter', async () => {
     const credentials = await testCredentials()
     const harness = await tokenHarness(credentials, { config: { loginTokenWindowSeconds: 60, loginTokenMaxAttempts: 2, loginTokenBlockSeconds: 300 } })

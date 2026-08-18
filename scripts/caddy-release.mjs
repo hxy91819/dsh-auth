@@ -79,7 +79,10 @@ export async function prepareCaddyRelease(outputDirectory, platform = currentCad
     if (digest('sha256', readFileSync(license)) !== manifest.licenseSha256) throw new Error('Caddy license SHA-256 mismatch')
     chmodSync(binary, 0o755)
     chmodSync(license, 0o644)
-    const version = checked(binary, ['version']).trim().split(/\s+/u)[0]
+    // Cross-arch packing can only verify hashes; execute the binary on this host only.
+    const version = platform === currentCaddyPlatform()
+      ? checked(binary, ['version']).trim().split(/\s+/u)[0]
+      : `v${manifest.caddyVersion}`
     if (version !== `v${manifest.caddyVersion}`) throw new Error(`unexpected Caddy version: ${version}`)
     rmSync(archive)
     const receipt = {

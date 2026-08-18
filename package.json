@@ -119,6 +119,7 @@
     "report:code-health": "mkdir -p .tmp/code-health/production .tmp/code-health/report && eslint src --format json --output-file .tmp/code-health/production/eslint.json && eslint tests scripts --format json --output-file .tmp/code-health/report/eslint.json && jscpd --config jscpd-report.json",
     "check:nginx": "pnpm run build && node scripts/check-nginx.mjs",
     "check:caddy": "pnpm run build && node scripts/check-caddy.mjs",
+    "pack:caddy": "node scripts/pack-caddy-platform.mjs",
     "benchmark:edge": "node scripts/edge-benchmark.mjs",
     "check": "pnpm run check:code-health && pnpm run check:functional",
     "prepack": "tsc --build --clean tsconfig.build.json && pnpm run build"

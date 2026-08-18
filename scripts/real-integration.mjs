@@ -4,7 +4,7 @@
  */
 import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:net'
-import { accessSync, constants, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { accessSync, chmodSync, constants, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
@@ -14,6 +14,7 @@ import https from 'node:https'
 import http2 from 'node:http2'
 import WebSocket from 'ws'
 import { renderCaddyfile } from './caddy-config.mjs'
+import { prepareCaddyRelease } from './caddy-release.mjs'
 
 const checkout = resolve(import.meta.dirname, '..')
 const HELP = `Usage:
@@ -22,9 +23,9 @@ const HELP = `Usage:
 
 Description:
   Pack the current checkout when PATH.tgz is omitted, install that artifact
-  into a disposable DSH profile, and verify the real TLS edge, authentication
-  flows, protected HTTP/API/download/WebSocket routes, session persistence,
-  and browser sign-out behavior.
+  into a disposable DSH profile, and verify the real Caddy TLS edge, v2
+  authentication state, password and login-token journeys, protected routes,
+  session persistence, and browser sign-out behavior.
 
 Arguments:
   PATH.tgz  Optional local package artifact. It must resolve to a .tgz file.
@@ -33,9 +34,10 @@ Environment:
   DSH_E2E_CWD         Absolute DSH workspace path (default: repository root).
   DSH_E2E_DSH_BIN     Absolute DSH executable (default: local dependency).
   DSH_E2E_CHROME_BIN  Absolute Chrome/Chromium executable (default: auto-detect).
-  DSH_E2E_EDGE        nginx or caddy (default: nginx).
-  DSH_E2E_CADDY_BIN   Absolute Caddy executable (required for caddy).
+  DSH_E2E_EDGE        caddy or nginx (default: caddy).
+  DSH_E2E_CADDY_BIN   Absolute Caddy executable (default: verified test binary).
   DSH_E2E_CADDY_TLS   manual or internal (default: manual).
+  DSH_E2E_BOOTSTRAP   password or login-token (default: login-token).
 
 Outputs:
   Writes a JSON behavior summary to stdout and exits 0 on success. Failures
@@ -45,7 +47,7 @@ Outputs:
 Examples:
   corepack pnpm run test:e2e
   DSH_E2E_CHROME_BIN=/usr/bin/chromium node scripts/real-integration.mjs packed/dsh-auth-0.1.13.tgz
-  DSH_E2E_EDGE=caddy DSH_E2E_CADDY_BIN=/opt/dsh-auth/caddy node scripts/real-integration.mjs
+  DSH_E2E_BOOTSTRAP=password DSH_E2E_EDGE=caddy node scripts/real-integration.mjs
 `
 
 const args = process.argv.slice(2).filter(argument => argument !== '--')
@@ -91,23 +93,77 @@ const dshExecutable = executable(
   'DSH executable',
 )
 const browserExecutable = chromeExecutable()
-const edgeRuntime = process.env.DSH_E2E_EDGE ?? 'nginx'
+const edgeRuntime = process.env.DSH_E2E_EDGE ?? 'caddy'
 if (edgeRuntime !== 'nginx' && edgeRuntime !== 'caddy') throw new Error('DSH_E2E_EDGE must be nginx or caddy')
-const caddyExecutable = edgeRuntime === 'caddy'
-  ? executable(process.env.DSH_E2E_CADDY_BIN ?? '', 'DSH_E2E_CADDY_BIN')
-  : undefined
+const requestedCaddy = process.env.DSH_E2E_CADDY_BIN
 const caddyTls = process.env.DSH_E2E_CADDY_TLS ?? 'manual'
 if (caddyTls !== 'manual' && caddyTls !== 'internal') throw new Error('DSH_E2E_CADDY_TLS must be manual or internal')
+const bootstrap = process.env.DSH_E2E_BOOTSTRAP ?? 'login-token'
+if (bootstrap !== 'password' && bootstrap !== 'login-token') {
+  throw new Error('DSH_E2E_BOOTSTRAP must be password or login-token')
+}
 const root = mkdtempSync(join(tmpdir(), 'dsh-auth-real-integration-'))
 const home = join(root, 'dsh-home')
-const secrets = join(root, 'secrets')
-const nginxRoot = join(root, 'nginx')
+const secrets = join(root, 'managed')
+const nginxRoot = join(root, 'edge')
 mkdirSync(secrets, { mode: 0o700 })
+mkdirSync(join(secrets, 'state', 'login-tokens'), { recursive: true, mode: 0o700 })
+chmodSync(join(secrets, 'state', 'login-tokens'), 0o700)
 mkdirSync(nginxRoot, { recursive: true })
 
 let dshProcess
 let edgeProcess
 let chromeProcess
+let caddyExecutable
+
+function issueLoginToken(authStateFile, origin) {
+  const result = spawnSync(process.execPath, [
+    join(checkout, 'lib/cli.js'), 'issue-login-token',
+    '--non-interactive', '--authorize-login-token-issue', '--json',
+    '--auth-state-file', authStateFile,
+    '--public-origin', origin,
+  ], { encoding: 'utf8', cwd: checkout })
+  if (result.error !== undefined) throw result.error
+  if (result.status !== 0) throw new Error(`issue-login-token failed\n${result.stdout}${result.stderr}`)
+  assert(!result.stderr.includes('dsh_otl_v1_'), 'token issue leaked a bearer secret to stderr')
+  const document = JSON.parse(result.stdout)
+  assert(document.schemaVersion === 2 && document.status === 'success' && typeof document.token === 'string', 'token issue JSON was not a v2 success document')
+  assert(document.loginUrl === `${origin}/auth/token#token=${document.token}`, 'token issue URL did not use the fragment contract')
+  return document
+}
+
+async function resolveCaddyBinary() {
+  if (edgeRuntime !== 'caddy') return undefined
+  if (requestedCaddy !== undefined) return executable(requestedCaddy, 'DSH_E2E_CADDY_BIN')
+  return (await prepareCaddyRelease(join(root, 'caddy-runtime'))).binary
+}
+
+function writeAuthLayout(authState, passwordHash, sessionSecret, configured) {
+  const stateDirectory = join(secrets, 'state')
+  const authStateFile = join(stateDirectory, 'auth-state.json')
+  const tokenDirectory = join(stateDirectory, 'login-tokens')
+  const secretFile = join(secrets, 'session-secret')
+  const environmentFile = join(secrets, 'dsh-auth.env')
+  writeFileSync(secretFile, `${sessionSecret}\n`, { mode: 0o600 })
+  const document = configured
+    ? authState.createAuthStateDocument(authState.authStateSecretId(Buffer.from(sessionSecret)), {
+      username: 'integration-account',
+      passwordHash,
+      configuredAt: Date.now(),
+    })
+    : authState.createAuthStateDocument(authState.authStateSecretId(Buffer.from(sessionSecret)))
+  writeFileSync(authStateFile, `${JSON.stringify(document)}\n`, { mode: 0o600 })
+  chmodSync(authStateFile, 0o600)
+  chmodSync(tokenDirectory, 0o700)
+  writeFileSync(environmentFile, [
+    `DSH_AUTH_STATE_FILE="${authStateFile}"`,
+    `DSH_AUTH_SESSION_SECRET_FILE="${secretFile}"`,
+    'DSH_AUTH_LOGIN_TOKEN_ENABLED=true',
+    `DSH_AUTH_LOGIN_TOKEN_DIRECTORY="${tokenDirectory}"`,
+    '',
+  ].join('\n'), { mode: 0o600 })
+  return { authStateFile, tokenDirectory, secretFile }
+}
 
 function checked(command, args, options = {}) {
   const result = spawnSync(command, args, { encoding: 'utf8', ...options })
@@ -354,25 +410,107 @@ async function openBrowser(chromePort, targetUrl) {
   }
   await send('Runtime.enable')
   await send('Page.enable')
-  return { evaluate, close: () => { socket.close() } }
+  await send('Network.enable')
+  return {
+    evaluate,
+    navigate: url => send('Page.navigate', { url }),
+    clearCookies: () => send('Network.clearBrowserCookies'),
+    close: () => { socket.close() },
+  }
 }
 
 async function waitForBrowser(evaluate, expression, label) {
-  await waitUntil(async () => await evaluate(expression) === true, label)
+  try {
+    await waitUntil(async () => await evaluate(expression) === true, label)
+  } catch (error) {
+    let extra = ''
+    try {
+      extra = `; browser at ${JSON.stringify(await evaluate('({ href: location.href, text: (document.body && document.body.innerText || "").slice(0, 240) })'))}`
+    } catch (inspectError) {
+      extra = `; inspect failed: ${inspectError instanceof Error ? inspectError.message : String(inspectError)}`
+    }
+    throw new Error(`${error instanceof Error ? error.message : String(error)}${extra}`)
+  }
 }
 
-// eslint-disable-next-line max-lines-per-function, max-statements -- 真实 E2E 按部署→认证→重启→浏览器的时间顺序编排，步骤顺序即验收契约；阈值 2026-08 新增，重估于 STORY-06 发布验收（届时需适配 v2 authStateFile 配置）。
+async function completeTokenOnboarding(httpsPort, chromePort, authStateFile, username, password) {
+  const origin = `https://localhost:${String(httpsPort)}`
+  const loginPage = await request(httpsPort, '/auth/login')
+  const loginHtml = loginPage.body.toString('utf8')
+  assert(loginPage.status === 200 && !loginHtml.includes('name="password"'), 'unset administrator still rendered a password form')
+  const bridge = await request(httpsPort, '/auth/token')
+  const bridgeHtml = bridge.body.toString('utf8')
+  assert(bridge.status === 200 && bridgeHtml.includes('token-bootstrap.js'), 'token bridge page was not public')
+  const probe = issueLoginToken(authStateFile, origin)
+  const probeCsrf = cookiePair(bridge.headers['set-cookie'], '__Host-dsh_auth_csrf')
+  const probeToken = /<meta name="dsh-auth-csrf" content="([^"]*)">/u.exec(bridgeHtml)?.[1]
+  assert(probeToken !== undefined, 'token bridge CSRF meta was missing')
+  const redeemed = await request(httpsPort, '/auth/token', {
+    method: 'POST',
+    headers: {
+      origin,
+      'content-type': 'application/x-www-form-urlencoded',
+      cookie: probeCsrf.pair,
+    },
+    body: form({ csrf: probeToken.replaceAll('&amp;', '&'), token: probe.token }),
+  })
+  assert(
+    redeemed.status === 303 && redeemed.headers.location === '/auth/admin/setup?returnTo=%2F',
+    `container-issued token did not redeem (${String(redeemed.status)} ${String(redeemed.headers.location)} ${redeemed.body.toString('utf8').slice(0, 180)})`,
+  )
+  const first = issueLoginToken(authStateFile, origin)
+  const browser = await openBrowser(chromePort, `${origin}/auth/login`)
+  try {
+    await waitForBrowser(browser.evaluate, 'location.pathname === "/auth/login"', 'token flow starting login page')
+    await browser.evaluate(`location.replace(${JSON.stringify(first.loginUrl)})`)
+    await waitForBrowser(
+      browser.evaluate,
+      'location.pathname === "/auth/admin/setup" && location.hash === "" && document.querySelector("form") !== null',
+      'first token setup page',
+    )
+    await browser.evaluate('document.querySelector("a.button.secondary")?.click()')
+    await waitForBrowser(browser.evaluate, 'location.pathname === "/" && document.querySelector(".dsh-auth-logout") !== null', 'Later returnTo')
+    await browser.evaluate('document.querySelector(".dsh-auth-logout")?.click()')
+    await waitForBrowser(browser.evaluate, 'location.pathname === "/auth/login"', 'sign out after Later')
+    const second = issueLoginToken(authStateFile, origin)
+    await browser.evaluate(`location.replace(${JSON.stringify(second.loginUrl)})`)
+    await waitForBrowser(
+      browser.evaluate,
+      'location.pathname === "/auth/admin/setup" && document.querySelector("form") !== null',
+      'second token setup page',
+    )
+    await browser.evaluate(`(() => {
+      const usernameInput = document.querySelector('input[name="username"]')
+      const passwordInput = document.querySelector('input[name="password"]')
+      const confirm = document.querySelector('input[name="confirmPassword"]')
+      const form = document.querySelector('form')
+      if (!(usernameInput instanceof HTMLInputElement) || !(passwordInput instanceof HTMLInputElement) || !(confirm instanceof HTMLInputElement) || !(form instanceof HTMLFormElement)) return false
+      usernameInput.value = ${JSON.stringify(username)}
+      passwordInput.value = ${JSON.stringify(password)}
+      confirm.value = ${JSON.stringify(password)}
+      form.requestSubmit()
+      return true
+    })()`)
+    await waitForBrowser(browser.evaluate, 'location.pathname === "/" && document.querySelector(".dsh-auth-logout") !== null', 'setup saved returnTo')
+    await browser.clearCookies()
+  } finally {
+    browser.close()
+  }
+}
+
+// eslint-disable-next-line max-lines-per-function, max-statements -- 真实 E2E 按部署→令牌或密码登录→受保护资源→重启→浏览器的时间顺序编排；STORY-06 将契约改为 v2 authStateFile 与默认 Caddy。
 async function main() {
   const tarball = packageTarball()
   const harnessVersion = checked(dshExecutable, ['--version']).trim()
   if (harnessVersion.length === 0) throw new Error('DSH executable returned an empty version')
+  caddyExecutable = await resolveCaddyBinary()
   const { hashPassword } = await import('../lib/password.js')
+  const authState = await import('../lib/auth-state.js')
   const password = randomBytes(24).toString('base64url')
   const passwordHash = await hashPassword(password)
-  const hashFile = join(secrets, 'password-hash')
-  const secretFile = join(secrets, 'session-secret')
-  writeFileSync(hashFile, `${passwordHash}\n`, { mode: 0o600 })
-  writeFileSync(secretFile, `${randomBytes(48).toString('base64url')}\n`, { mode: 0o600 })
+  const sessionSecret = randomBytes(48).toString('base64url')
+  const layout = writeAuthLayout(authState, passwordHash, sessionSecret, bootstrap === 'password')
+  const username = bootstrap === 'password' ? 'integration-account' : 'operator-admin'
 
   checked(dshExecutable, [
     'plugin', '--profile', 'web', 'add', '--offline', '--config.auto-install-peers=false', tarball,
@@ -387,12 +525,11 @@ async function main() {
   const dshEnvironment = {
     ...process.env,
     DSH_HOME: home,
-    DSH_AUTH_USER_ID: 'integration-user',
-    DSH_AUTH_USERNAME: 'integration-account',
-    DSH_AUTH_ROLES: 'admin,operator',
-    DSH_AUTH_TRUSTED_PROXY_ADDRESSES: edgeRuntime === 'nginx' ? '127.0.0.2' : '127.0.0.1',
-    DSH_AUTH_PASSWORD_HASH_FILE: hashFile,
-    DSH_AUTH_SESSION_SECRET_FILE: secretFile,
+    DSH_AUTH_STATE_FILE: layout.authStateFile,
+    DSH_AUTH_SESSION_SECRET_FILE: layout.secretFile,
+    DSH_AUTH_LOGIN_TOKEN_ENABLED: 'true',
+    DSH_AUTH_LOGIN_TOKEN_DIRECTORY: layout.tokenDirectory,
+    DSH_AUTH_TRUSTED_PROXY_ADDRESSES: edgeRuntime === 'nginx' ? '127.0.0.2' : '127.0.0.1,::1',
     DSH_AUTH_SESSION_RENEWAL_SECONDS: '1',
   }
   dshProcess = child(dshExecutable, ['web', '--port', String(dshPort)], { cwd: launchCwd, env: dshEnvironment })
@@ -523,6 +660,10 @@ async function main() {
   })
   assert(oversizedLogin.status === 413, `${edgeRuntime} did not reject an oversized authentication body`)
 
+  if (bootstrap === 'login-token') {
+    await completeTokenOnboarding(httpsPort, chromePort, layout.authStateFile, username, password)
+  }
+
   const login = await request(httpsPort, '/auth/login?returnTo=%2Fworkspace')
   const loginHtml = login.body.toString('utf8')
   const csrf = cookiePair(login.headers['set-cookie'], '__Host-dsh_auth_csrf')
@@ -534,7 +675,7 @@ async function main() {
     method: 'POST',
     headers: { ...commonPostHeaders, cookie: csrf.pair },
     body: form({
-      csrf: hidden(loginHtml, 'csrf'), returnTo: '/workspace', username: 'integration-account',
+      csrf: hidden(loginHtml, 'csrf'), returnTo: '/workspace', username,
       password: randomBytes(24).toString('base64url'),
     }),
   })
@@ -547,7 +688,7 @@ async function main() {
     method: 'POST',
     headers: { ...commonPostHeaders, cookie: freshCsrf.pair },
     body: form({
-      csrf: hidden(freshHtml, 'csrf'), returnTo: '/workspace', username: 'integration-account', password,
+      csrf: hidden(freshHtml, 'csrf'), returnTo: '/workspace', username, password,
     }),
   })
   assert(accepted.status === 303 && accepted.headers.location === '/workspace', 'correct login did not return to the SPA path')
@@ -625,7 +766,7 @@ async function main() {
       const password = document.querySelector('input[name="password"]')
       const form = document.querySelector('form')
       if (!(username instanceof HTMLInputElement) || !(password instanceof HTMLInputElement) || !(form instanceof HTMLFormElement)) return false
-      username.value = ${JSON.stringify('integration-account')}
+      username.value = ${JSON.stringify(username)}
       password.value = ${JSON.stringify(password)}
       form.requestSubmit()
       return true
@@ -677,6 +818,7 @@ async function main() {
     packageInstall: 'offline tarball',
     harnessVersion,
     edgeRuntime,
+    bootstrap,
     http2: 200,
     harnessUiSettings: 'live locale/theme sync',
     canonicalHttpRedirect: httpRedirect.status,
@@ -699,6 +841,7 @@ async function main() {
     logoutRevocation: 401,
     tamperedCookie: 401,
     dshBind: '127.0.0.1',
+    ...(bootstrap === 'login-token' ? { tokenOnboarding: 'later then setup', containerTokenIssue: 'json v2' } : {}),
   }, undefined, 2) + '\n')
 }
 

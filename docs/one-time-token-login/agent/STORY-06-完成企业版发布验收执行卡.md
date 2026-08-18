@@ -1,15 +1,15 @@
 ---
 story: STORY-06
 intent_version: 2
-refreshed: 待领取
-code_baseline: 待领取
+refreshed: 2026-08-18
+code_baseline: 4b26ad2621c0e8696cb3257a6fa73acb968731f9
 owns: [RELEASE_ACCEPTANCE]
 verifies: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPTION, ADMIN_ONBOARDING]
 ---
 
 # STORY-06 完成企业版发布验收执行卡
 
-- 状态：可领取，依赖 STORY-05 已完成
+- 状态：进行中（2026-08-18，Cursor，feature/story-06-release-acceptance）
 - 对应：[STORY-06 完成企业版发布验收](../stories/Story-06-完成企业版发布验收.md)
 
 ## 目标与完成信号
@@ -43,6 +43,13 @@ verifies: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPT
 ## 领取检查
 
 确认 STORY-01、01.1 至 05 均 done、COMPONENT 6/6、交接提交形成线性候选。解析 npm latest；不同于精确锁定时停止并先刷新基线。检查主仓/远端/worktrees/status，无并行认证或发布修改；创建专用验收 worktree。确认 Caddy、OpenSSL、`ss` 和 Chrome/Chromium 前置条件，再开始长测试。
+
+领取记录（2026-08-18）：
+
+- STORY-01 至 05 done，COMPONENT 6/6。线性候选：`43ed0ca`（STORY-05）合入 `main` 后加 `4b26ad2`（VISION 文档）。验收基线 `4b26ad2621c0e8696cb3257a6fa73acb968731f9`。
+- npm latest `@deepseek-ai/dsh` = `0.1.0-rc.7`，与锁定 Harness 一致；Caddy 仍为 `v2.11.4`。平台包 `dsh-auth-caddy-linux-x64/arm64@2.11.4-dsh.1` 尚未出现在 npm。
+- 工作树 `/data/code/dsh-auth-story-06`，分支 `feature/story-06-release-acceptance`。主仓 `main` 与 `origin/main` 同步于基线；STORY-05 worktree 只读保留。
+- 前置：Node `v24.15.0`、pnpm `10.14.0`、OpenSSL `3.0.12`、`ss`、systemd 255、Chrome `/usr/bin/google-chrome`。Caddy 二进制不在 PATH，E2E 使用校验后的测试预备器。
 
 ## 执行步骤
 
@@ -91,6 +98,14 @@ git diff --check
 - 任一 token、密码、私有路径、服务名或非公开邮箱进入包、日志、文档或 Git metadata。
 - 修复需要改变公开 v2 接口、认证政策、状态 schema、部署边界或 Story 意图。
 - 任何 SEC/FUN 场景无可复现证据，或 cleanup 不能证明现有服务未受影响。
+
+## 进度（2026-08-18）
+
+- 验收发现 `lib/` 被 `.gitignore` 排除后，`npm pack` 只打出 15 个文件、没有 CLI。已增加 `.npmignore`（不忽略 `lib/`）和回归测试；修复后 tarball 77 files，`pack-smoke` 与 `installer-e2e` 退出 0。
+- Chrome fragment 兑换在 `replaceState` 后发送 `Origin: null`。token POST 在有效 CSRF 且 `Sec-Fetch-Site` 为 same-origin/none/缺省时接受；密码登录与 logout 仍用精确同源。
+- 锁定/latest Harness、password/login-token、Caddy manual+internal E2E 均退出 0。gitleaks 与 privacy 通过。Git 作者仅为批准公开身份与 Dependabot。
+- 本地 `pack:caddy` 已生成 x64/arm64 可校验布局。跨架构不再执行对方二进制，只核 SHA。npm 上仍无 `dsh-auth-caddy-linux-*@2.11.4-dsh.1`。
+- 未做会改写主机 `/etc` 的 live systemd setup。SEC-26 / FUN-12 阻塞；FUN-10 live 重装为部分。RELEASE 保持 0/1。
 
 ## 交接
 
