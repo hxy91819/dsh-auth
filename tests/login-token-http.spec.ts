@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -36,6 +36,7 @@ async function tokenHarness(
   roots.push(root)
   const directory = join(root, 'login-tokens')
   mkdirSync(directory, { mode: 0o700 })
+  chmodSync(directory, 0o700)
   const authStateFile = join(root, 'auth-state.json')
   const document = options.configured === false
     ? createAuthStateDocument(authStateSecretId(Buffer.from(credentials.secret)))

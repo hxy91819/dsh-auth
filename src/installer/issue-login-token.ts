@@ -24,11 +24,16 @@ function requireStateFile(host: InstallerHost, path: string): void {
 }
 
 function requireTokenDirectory(host: InstallerHost, path: string, uid: number, gid: number): void {
-  if (!host.fileExists(path) || !host.stat(path).isDirectory || host.realpath(path) !== path) {
+  let directory
+  try {
+    directory = host.inspectDirectory(path)
+  } catch {
     conflict(`the login token directory is missing or not a real directory: ${path}`, 'LOGIN_TOKEN_DIRECTORY_INVALID')
   }
-  const stat = host.stat(path)
-  if ((stat.mode & 0o777) !== 0o700 || stat.uid !== uid || stat.gid !== gid) {
+  if (host.realpath(path) !== path) {
+    conflict(`the login token directory is missing or not a real directory: ${path}`, 'LOGIN_TOKEN_DIRECTORY_INVALID')
+  }
+  if ((directory.mode & 0o777) !== 0o700 || directory.uid !== uid || directory.gid !== gid) {
     conflict('the login token directory has unexpected permissions or ownership', 'LOGIN_TOKEN_DIRECTORY_INVALID')
   }
 }

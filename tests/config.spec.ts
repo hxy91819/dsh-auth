@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, chownSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -89,5 +89,45 @@ describe('configuration', () => {
     expect(() => resolveConfig({
       authStateFile, sessionSecretFile: linkedSecretFile,
     })).toThrow(/sessionSecretFile cannot be read/u)
+  }, 30_000)
+
+  it('accepts a service-owned 0700 login token directory and rejects unsafe ones', async () => {
+    const credentials = await testCredentials()
+    const root = mkdtempSync(join(tmpdir(), 'dsh-auth-config-tokens-'))
+    roots.push(root)
+    const secretFile = join(root, 'secret')
+    const authStateFile = join(root, 'auth-state.json')
+    const loginTokenDirectory = join(root, 'login-tokens')
+    writeFileSync(secretFile, `${credentials.secret}\n`, { mode: 0o600 })
+    writeFileSync(authStateFile, '{}\n', { mode: 0o600 })
+    const enabled = { authStateFile, sessionSecretFile: secretFile, loginTokenEnabled: true, loginTokenDirectory }
+
+    expect(() => resolveConfig(enabled)).toThrow(/loginTokenDirectory cannot be used/u)
+
+    writeFileSync(loginTokenDirectory, 'not-a-directory\n', { mode: 0o700 })
+    expect(() => resolveConfig(enabled)).toThrow(/not a real directory/u)
+    rmSync(loginTokenDirectory)
+
+    mkdirSync(join(root, 'real-tokens'), { mode: 0o700 })
+    chmodSync(join(root, 'real-tokens'), 0o700)
+    symlinkSync(join(root, 'real-tokens'), loginTokenDirectory)
+    expect(() => resolveConfig(enabled)).toThrow(/symbolic links are not allowed|not a real directory/u)
+    rmSync(loginTokenDirectory)
+
+    mkdirSync(loginTokenDirectory, { mode: 0o777 })
+    chmodSync(loginTokenDirectory, 0o777)
+    expect(() => resolveConfig(enabled)).toThrow(/permissions must be 0700/u)
+    chmodSync(loginTokenDirectory, 0o770)
+    expect(() => resolveConfig(enabled)).toThrow(/permissions must be 0700/u)
+
+    chmodSync(loginTokenDirectory, 0o700)
+    const config = resolveConfig(enabled)
+    expect(config.loginTokenEnabled).toBe(true)
+    expect(config.loginTokenDirectory).toBe(loginTokenDirectory)
+
+    if (process.geteuid?.() === 0) {
+      chownSync(loginTokenDirectory, 4242, 4243)
+      expect(() => resolveConfig(enabled)).toThrow(/must be owned by the service/u)
+    }
   }, 30_000)
 })
