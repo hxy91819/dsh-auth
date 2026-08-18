@@ -5,12 +5,14 @@
 ## 执行入口
 
 ```sh
-corepack pnpm run check:code-health  # 阻断型静态检查
+corepack pnpm run check:code-health  # 正确性 lint、健康度、重复、import 和死代码
 corepack pnpm run report:code-health # 生成生产与开发辅助范围的 JSON 报告
 corepack pnpm run check              # 静态检查、类型检查、测试、构建和包结构检查
 ```
 
-CI 的 `Code Health` job 独立运行阻断检查，并将 `.tmp/code-health/` 中的生产结果及测试/脚本报告保留 90 天。分析器无法执行、配置无效或发现 ESLint 正确性错误时检查失败；测试和脚本中的健康度规则仅产生 warning。
+CI 的 `Code Health` job 独立运行这些检查，并将 `.tmp/code-health/` 中的生产结果及测试/脚本报告保留 90 天。分析器无法执行、配置无效或发现 ESLint 正确性错误时检查失败；测试和脚本中的健康度规则仅产生 warning。
+
+行数、复杂度、重复是建议，不是必须重构的信号。引入该发现的 commit 负责处理：判断拆分是否值得；不值得则在同一 commit 用精确到规则和符号的屏蔽注释留下原因。架构边界、无法解析的 import、未声明依赖和正确性 lint 仍须修复，不用健康度屏蔽代替。
 
 ## 固定工具版本
 
@@ -61,4 +63,4 @@ Knip 明确登记所有动态或环境入口：
 
 `./client` 采用 DSH 官方自定义模块加载器格式，publint 仍负责阻断包结构错误；不启用与该格式不兼容的 `arethetypeswrong` 硬门禁。
 
-禁止整文件关闭门禁。未来确有必要的例外必须精确到规则和符号，并在代码附近记录设计理由、批准人和到期条件。
+屏蔽精确到规则和符号，并在注释中写下保留现状的原因。不用整文件关闭健康度规则。

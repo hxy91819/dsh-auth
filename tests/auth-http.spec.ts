@@ -68,6 +68,7 @@ async function submitLogin(
   })
 }
 
+// eslint-disable-next-line max-lines-per-function -- 行为场景按真实认证旅程排序，断言依赖顺序；阈值 2026-08 新增，待 token 登录场景并入本文件时再拆分（STORY-05/06）。
 describe('observable authentication flow', () => {
   it('keeps password login unavailable while administrator credentials are unset', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-auth-unconfigured-'))

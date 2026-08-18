@@ -23,6 +23,7 @@ function outputHost(): FakeInstallerHost {
   return host
 }
 
+// eslint-disable-next-line max-lines-per-function -- 覆盖冻结 help/JSON/交互/回滚的公共 CLI 契约，逐用例共享下方模块级 fixture；阈值 2026-08 新增，重排需与契约表同步。
 describe('installer CLI', () => {
   it('prints frozen help for --help and -h from the same flag table', async () => {
     const helpIo = new FakeCliIo(false)
@@ -495,7 +496,9 @@ describe('issue-login-token CLI', () => {
     expect(await runCli([...ISSUE_ARGS, '--auth-state-file', 'relative/state.json', '--public-origin', 'https://auth.example.test'], io, host)).toBe(2)
     expect(host.listDirectory('/var/lib/dsh-auth/login-tokens')).toHaveLength(0)
   }, 30_000)
+})
 
+describe('issue-login-token CLI container mode', () => {
   it('issues for the container owner and for root with matching ownership', async () => {
     const ownerHost = containerHost(1000)
     const ownerIo = new FakeCliIo(false)

@@ -40,13 +40,15 @@ Tests assert observable behavior. Add decision-oriented comments only when code 
 
 ## Verification
 
-Run the narrowest focused test while iterating. Before handing off a code change, complete:
+Run the narrowest focused test while iterating. Before commit, complete:
 
 ```sh
 corepack pnpm run check
 corepack pnpm run check:caddy
 git diff --check
 ```
+
+`pnpm run check` is code health plus functional checks, not Caddy, Nginx, or E2E. Each commit owns the size, complexity, and duplication findings it introduces. Treat those reports as advice: judge whether a split is worth it; if the current shape should stay, add a precise per-rule suppression comment with the reason in the same commit.
 
 Run `corepack pnpm run test:e2e` for changes to authentication policy, edge routing, browser integration, session persistence, packaging, or release behavior. The command owns a disposable DSH profile, secrets, processes, and ports; it requires local Nginx, OpenSSL, `ss`, and Chrome or Chromium and leaves existing services untouched.
 

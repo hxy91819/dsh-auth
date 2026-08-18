@@ -361,6 +361,7 @@ async function waitForBrowser(evaluate, expression, label) {
   await waitUntil(async () => await evaluate(expression) === true, label)
 }
 
+// eslint-disable-next-line max-lines-per-function, max-statements -- 真实 E2E 按部署→认证→重启→浏览器的时间顺序编排，步骤顺序即验收契约；阈值 2026-08 新增，重估于 STORY-06 发布验收（届时需适配 v2 authStateFile 配置）。
 async function main() {
   const tarball = packageTarball()
   const harnessVersion = checked(dshExecutable, ['--version']).trim()

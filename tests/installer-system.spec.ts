@@ -23,6 +23,7 @@ function authPasswordHash(host: FakeInstallerHost): string {
   return document.administrator.passwordHash
 }
 
+// eslint-disable-next-line max-lines-per-function -- 系统 setup/回滚/doctor 事务矩阵按状态机顺序断言，拆分会掩盖故障传播路径；阈值 2026-08 新增，重估于 STORY-06 发布验收。
 describe('system installer transactions', () => {
   it('rejects a user-writable DSH_HOME for a root service before mutations', async () => {
     const host = readyHost()
