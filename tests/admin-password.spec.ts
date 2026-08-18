@@ -105,6 +105,11 @@ describe('authenticated administrator password change', () => {
     expect((await fetch(`${harness.baseUrl}/auth/admin/password`, { method: 'PUT' })).status).toBe(405)
 
     const session = await login(harness.baseUrl, harness.credentials)
+    const unsafe = await openPasswordPage(harness.baseUrl, session, 'javascript:alert(1)')
+    expect(unsafe.status).toBe(200)
+    expect(hiddenValue(unsafe.html, 'returnTo')).toBe('/')
+    expect(unsafe.html).toContain('href="/"')
+    expect(unsafe.html).not.toContain('javascript:')
     const page = await openPasswordPage(harness.baseUrl, session, '/workspace')
     expect(page.status).toBe(200)
     expect(page.html).toContain('<h1>Reset password</h1>')

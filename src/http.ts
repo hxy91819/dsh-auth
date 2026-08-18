@@ -101,7 +101,11 @@ export function safeReturnTarget(value: string | null | undefined): string {
   try {
     const parsed = new URL(value, 'https://dsh-auth.invalid')
     if (parsed.origin !== 'https://dsh-auth.invalid') return '/'
-    return `${parsed.pathname}${parsed.search}${parsed.hash}`
+    const target = `${parsed.pathname}${parsed.search}${parsed.hash}`
+    // Re-check the reconstructed path so href/redirect sinks keep a same-origin
+    // relative URL after URL parsing, not only the pre-parse input.
+    if (!target.startsWith('/') || target.startsWith('//') || target.includes('\\')) return '/'
+    return target
   } catch {
     return '/'
   }
