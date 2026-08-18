@@ -1,15 +1,15 @@
 ---
 story: STORY-01.1
 intent_version: 1
-refreshed: 待领取
-code_baseline: 待领取
+refreshed: 2026-08-18
+code_baseline: 88ca83ee462aab9c12afe6fd78c91e281a00c7b3
 owns: [EDGE_RUNTIME]
 verifies: [AUTH_STATE]
 ---
 
 # STORY-01.1 验证并冻结内置 Caddy 执行卡
 
-- 状态：可领取
+- 状态：已完成
 - 对应：[STORY-01.1 验证并冻结内置 Caddy](../stories/Story-01.1-验证并冻结内置Caddy.md)
 
 ## 目标与完成信号
@@ -88,3 +88,13 @@ git diff --check
 ## 交接
 
 交付固定 Caddy 来源/checksum/license、受测试配置、协议与性能证据、起止提交和干净状态。给 STORY-02 固定平台包内容、配置输入、服务启动参数、端口/TLS规则、doctor 检查和不存在自定义模块的结论。
+
+- 结果：标准 Caddy `v2.11.4` 足以实现边缘安全边界，不需要 Go 模块或完整 Gateway。
+- 起止版本：`88ca83ee462aab9c12afe6fd78c91e281a00c7b3` → `09b00badaa7d4f8af71bb3ccdc97c57f3ea2e384`。
+- 固定输入：官方 release、linux-x64/linux-arm64 archive 与 binary checksum、许可证 checksum、关闭 Admin API 的受管模板。
+- 首次失败：依次发现客户端 SNI、Host catch-all、空 Upgrade、绝对登录跳转和鉴权子请求 Upgrade 继承差异；均以最终协议行为修复并复验。
+- 协议：manual 与 `tls internal` 均通过 rc.7 真实 E2E；HTTP/2、303/401、公开 verify 404、Header 覆盖、续期 Cookie、SSE、WebSocket、下载和回环监听成立。
+- 性能：[原始 JSON](./evidence/edge-benchmark-2026-08-18T062356-259Z.json)，SHA-256 `149fb54ec08fa2e2e0c38c6fe6b36c2a29bed1a3948b4a9050a888243e873d37`；吞吐比 1.334，p95 比 0.811，5xx 为 0，两边 SSE/WS 均通过。
+- 清理：每个检查拥有临时进程、端口、证书和状态目录并在结束时删除；证据不含密码、Cookie 或 token。
+- 验证：`check`（89/89）、`check:caddy`、双 TLS `test:e2e:caddy`、`benchmark:edge`、`check:nginx`、Nginx `test:e2e`、规划结构检查、`git diff --check` 和 `npm pack --dry-run` 均退出 0；包内共 68 个文件。
+- STORY-02 输入：平台包只装未修改官方二进制、LICENSE、manifest 和第三方声明；安装器渲染本模板，使用独立状态目录并在启动前执行 checksum/version/config 校验。

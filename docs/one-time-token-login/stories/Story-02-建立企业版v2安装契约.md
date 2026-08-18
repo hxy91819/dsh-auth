@@ -3,11 +3,11 @@ kind: story
 id: STORY-02
 epic: EPIC-ONE-TIME-TOKEN-LOGIN
 title: 建立企业版 v2 安装契约
-status: blocked
+status: todo
 gate: COMPONENT
 owner: 待领取
 depends_on: [STORY-01.1]
-blocker: STORY-01.1 未完成
+blocker: 无
 updated: 2026-08-18
 intent_version: 2
 ---
