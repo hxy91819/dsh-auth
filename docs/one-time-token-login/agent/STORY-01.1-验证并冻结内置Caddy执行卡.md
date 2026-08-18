@@ -9,7 +9,7 @@ verifies: [AUTH_STATE]
 
 # STORY-01.1 验证并冻结内置 Caddy 执行卡
 
-- 状态：阻塞，依赖 STORY-01
+- 状态：可领取
 - 对应：[STORY-01.1 验证并冻结内置 Caddy](../stories/Story-01.1-验证并冻结内置Caddy.md)
 
 ## 目标与完成信号

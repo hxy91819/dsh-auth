@@ -9,7 +9,7 @@ verifies: []
 
 # STORY-01 建立统一管理员认证状态执行卡
 
-- 状态：进行中
+- 状态：已完成
 - 对应：[STORY-01 建立统一管理员认证状态](../stories/Story-01-建立统一管理员认证状态.md)
 
 ## 目标与完成信号
@@ -78,6 +78,8 @@ git diff --check
 
 证据记录起止提交、状态 schema 样例、故障注入分母、并发结果、现有 session 行为测试、命令退出码和工作区状态。不得保存真实密码、hash、session secret 或 token。
 
+实际结果：起点 `5bb2c21`，实现提交 `46721cb`。依赖安装前的首次测试因新 worktree 缺少 `vitest` 退出 1；锁文件安装后旧行为 10/10。最终聚焦 13/13、全量 89/89、`check`、`check:nginx`、`test:e2e` 和 `git diff --check` 均退出 0；真实 E2E 运行 Harness `0.1.0-rc.7`。
+
 ## 停止条件
 
 - 可领取基线仍包含重叠未提交改动或与接口契约冲突的新实现。
@@ -87,4 +89,6 @@ git diff --check
 
 ## 交接
 
-交付认证状态模块、更新后的 SessionStore、聚焦测试、命令/退出码、故障注入计数、起止提交和干净 Git 状态。明确给 STORY-02 的唯一输入：v2 Config resolved 字段、受管 auth-state 初始文档、文件 owner/mode 和 reset-password 所需原子边界。
+已交付 `src/auth-state.ts`、更新后的 SessionStore 和 6 个认证状态/持久会话测试。状态严格使用 schema v2、`0600`、当前服务 owner、原子替换和动态管理员身份；旧 schema 失败关闭。临时测试与 E2E 资产均已清理，分支提交后干净。
+
+给 STORY-01.1 的唯一输入：`/auth/verify` 继续以 204 表示成功，以 401 和 `x-dsh-auth-login` 表示未认证；续期 Cookie 与固定 `admin` 身份 Header 来自统一状态。给 STORY-02 的输入：`authStateFile` resolved 字段、schema v2 初始文档和 reset-password 的原子状态边界。

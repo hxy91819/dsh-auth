@@ -5,9 +5,9 @@
 ## 当前状态
 
 - 方案基线：`9885c1850958eaf92bd6c9fbf7c34cae6fe13e3e`，仅用于证明初次规划时的代码形态。
-- live head：`0c30e11`，Harness `0.1.0-rc.7` 基线、锁定/latest E2E 和发布门禁已提交；npm latest 复核为 rc.7。
+- live head：`46721cb`，STORY-01 统一管理员认证状态已完成；Harness 锁定/latest 基线仍为 `0.1.0-rc.7`。
 - 兼容证据：官方 `dsh-v0.1.0-rc.7` tag 为 `99f6f02fecdb7dff40c3fbc9470f5907c29f74ca`；只读 checkout 位于 `/data/code/deepseek-harness-compat-dsh-v0.1.0-rc.7`。
-- READY：2/2 已通过。STORY-01 可领取；领取时仍须复核 npm latest、最新主线和共享工作区状态。
+- READY：2/2 已通过，COMPONENT 1/6。STORY-01.1 可领取；领取时仍须复核 npm latest、最新主线和共享工作区状态。
 - 本规划 worktree 只承载文档，不能作为功能实现 worktree 复用。
 
 ## 权威资料
