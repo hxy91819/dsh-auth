@@ -298,6 +298,8 @@ async function waitForBrowser(evaluate, expression, label) {
 
 async function main() {
   const tarball = packageTarball()
+  const harnessVersion = checked(dshExecutable, ['--version']).trim()
+  if (harnessVersion.length === 0) throw new Error('DSH executable returned an empty version')
   const { hashPassword } = await import('../lib/password.js')
   const password = randomBytes(24).toString('base64url')
   const passwordHash = await hashPassword(password)
@@ -578,6 +580,7 @@ async function main() {
 
   process.stdout.write(JSON.stringify({
     packageInstall: 'offline tarball',
+    harnessVersion,
     harnessUiSettings: 'live locale/theme sync',
     canonicalHttpRedirect: httpRedirect.status,
     unknownHost: unknownHost.status,

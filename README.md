@@ -27,7 +27,7 @@ The interactive installer asks for the exact DSH service, account name, HTTPS ho
 
 If Nginx is missing, the installer detects the operating system first. On the verified Ubuntu 24.04 baseline it can show and, after a separate `install-nginx` confirmation, run fixed `apt-get` argv. It uses only configured system repositories. Other systems fail closed with a copyable remediation; no `curl | sh` path exists.
 
-Normal deployment requires Nginx 1.24 or newer with `ngx_http_auth_request_module`, systemd, Node.js 24.7 or newer, DSH Web 0.1.0-rc.6, and an existing TLS certificate and key. The installer cannot and does not guess a domain or certificate.
+Normal deployment requires Nginx 1.24 or newer with `ngx_http_auth_request_module`, systemd, Node.js 24.7 or newer, DSH Web 0.1.0-rc.7, and an existing TLS certificate and key. The installer cannot and does not guess a domain or certificate.
 
 ```text
 $ sudo dsh-auth setup

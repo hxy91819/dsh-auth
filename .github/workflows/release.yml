@@ -132,6 +132,15 @@ jobs:
           TARBALL="release/dsh-auth-${RELEASE_VERSION}.tgz"
           pnpm run test:e2e -- "$TARBALL"
 
+      - name: Require and test the current npm latest Harness
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          RELEASE_VERSION="${RELEASE_TAG#v}"
+          TARBALL="release/dsh-auth-${RELEASE_VERSION}.tgz"
+          pnpm run test:e2e:latest-dsh -- "$TARBALL"
+
       - name: Upload the verified release artifact and manifest
         uses: actions/upload-artifact@v7
         with:
