@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { chmodSync, chownSync, closeSync, constants, existsSync, fsyncSync, lstatSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, chownSync, closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, openSync, readdirSync, readFileSync, readSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** Versioned bearer prefix that separates this token format from future revisions. */
@@ -37,12 +37,30 @@ export class LoginTokenError extends Error {
   }
 }
 
+/** Descriptor-backed directory metadata; the last path component is not followed. */
+export interface InspectedTokenDirectory {
+  readonly uid: number
+  readonly gid: number
+  readonly mode: number
+}
+
+/** Descriptor-backed regular-file contents; the last path component is not followed. */
+export interface OpenedTokenFile {
+  readonly content: string
+  readonly uid: number
+  readonly gid: number
+  readonly mode: number
+  readonly size: number
+}
+
 /** Filesystem port shared with the installer host; no installer import required. */
 export interface TokenStoreHost {
   listDirectory(path: string): readonly string[]
   fileExists(path: string): boolean
   stat(path: string): { readonly uid: number; readonly gid: number; readonly mode: number; readonly size: number; readonly isDirectory: boolean }
+  inspectDirectory(path: string): InspectedTokenDirectory
   readFile(path: string): string
+  readOpenFile(path: string, maxBytes: number): OpenedTokenFile
   writeNewFile(path: string, content: string | Buffer, mode: number): void
   renameFile(from: string, to: string): void
   chmod(path: string, mode: number): void
@@ -70,6 +88,66 @@ export interface LoginTokenStoreOptions {
   readonly random?: () => Buffer
 }
 
+function systemErrorCode(error: unknown): string | undefined {
+  return error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : undefined
+}
+
+function throwSafeFsError(error: unknown, fallback: string): never {
+  if (error instanceof Error && systemErrorCode(error) === undefined) throw error
+  const code = systemErrorCode(error)
+  if (code === 'ELOOP') throw new Error('symbolic links are not allowed')
+  throw new Error(fallback)
+}
+
+function noFollowFlags(extra = 0): number {
+  const nonblock = process.platform === 'win32' ? 0 : constants.O_NONBLOCK
+  return extra | constants.O_RDONLY | nonblock | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW)
+}
+
+/** Open a directory without following a final symlink and return its owner and mode. */
+export function inspectTokenDirectory(path: string): InspectedTokenDirectory {
+  let descriptor: number | undefined
+  try {
+    if (process.platform === 'win32' && lstatSync(path).isSymbolicLink()) throw new Error('not a real directory')
+    descriptor = openSync(path, noFollowFlags(constants.O_DIRECTORY))
+    const stat = fstatSync(descriptor)
+    if (!stat.isDirectory()) throw new Error('not a real directory')
+    closeSync(descriptor)
+    descriptor = undefined
+    return { uid: stat.uid, gid: stat.gid, mode: stat.mode & 0o7777 }
+  } catch (error) {
+    if (descriptor !== undefined) closeSync(descriptor)
+    throwSafeFsError(error, 'not a real directory')
+  }
+}
+
+/** Open a regular file without following a final symlink, then fstat and bound-read that descriptor. */
+export function readOpenTokenFile(path: string, maxBytes: number): OpenedTokenFile {
+  let descriptor: number | undefined
+  try {
+    if (process.platform === 'win32' && lstatSync(path).isSymbolicLink()) throw new Error('not a regular file')
+    descriptor = openSync(path, noFollowFlags())
+    const stat = fstatSync(descriptor)
+    if (!stat.isFile()) throw new Error('not a regular file')
+    if (stat.size === 0 || stat.size > maxBytes) throw new Error('unexpected size')
+    const buffer = Buffer.alloc(maxBytes + 1)
+    const bytes = readSync(descriptor, buffer, 0, maxBytes + 1, 0)
+    if (bytes === 0 || bytes > maxBytes) throw new Error('unexpected size')
+    closeSync(descriptor)
+    descriptor = undefined
+    return {
+      content: buffer.toString('utf8', 0, bytes),
+      uid: stat.uid,
+      gid: stat.gid,
+      mode: stat.mode & 0o7777,
+      size: stat.size,
+    }
+  } catch (error) {
+    if (descriptor !== undefined) closeSync(descriptor)
+    throwSafeFsError(error, 'not a regular file')
+  }
+}
+
 /** Real-filesystem host used by the running plugin process, independent of the installer CLI. */
 export function createNodeTokenHost(): TokenStoreHost {
   return {
@@ -83,9 +161,11 @@ export function createNodeTokenHost(): TokenStoreHost {
       const value = lstatSync(path)
       return { uid: value.uid, gid: value.gid, mode: value.mode & 0o7777, size: value.size, isDirectory: value.isDirectory() }
     },
+    inspectDirectory: inspectTokenDirectory,
     readFile(path) {
       return readFileSync(path, 'utf8')
     },
+    readOpenFile: readOpenTokenFile,
     writeNewFile(path, content, mode) {
       const descriptor = openSync(path, 'wx', mode)
       try {
@@ -179,10 +259,6 @@ function serializeMetadata(metadata: LoginTokenMetadata): string {
   return `${JSON.stringify({ schemaVersion: 1, issuedAt: metadata.issuedAt, expiresAt: metadata.expiresAt })}\n`
 }
 
-function errorCode(error: unknown): string | undefined {
-  return error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : undefined
-}
-
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
@@ -192,7 +268,7 @@ function processExists(pid: number): boolean {
     process.kill(pid, 0)
     return true
   } catch (error) {
-    return errorCode(error) !== 'ESRCH'
+    return systemErrorCode(error) !== 'ESRCH'
   }
 }
 
@@ -223,14 +299,16 @@ export class LoginTokenStore {
     if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < LOGIN_TOKEN_TTL_SECONDS.min || ttlSeconds > LOGIN_TOKEN_TTL_SECONDS.max) {
       throw new LoginTokenError('usage', 'LOGIN_TOKEN_TTL_INVALID', `login token TTL must be ${String(LOGIN_TOKEN_TTL_SECONDS.min)}-${String(LOGIN_TOKEN_TTL_SECONDS.max)} seconds`)
     }
+    this.requireDirectory()
     return this.withIssueLock(() => this.publishIssuedToken(input.ttlSeconds, input.owner))
   }
 
-  private publishIssuedToken(ttlSeconds: number, owner: { readonly uid: number; readonly gid: number } | undefined): IssuedLoginToken {
+  private publishIssuedToken(ttlSeconds: number, requestedOwner: { readonly uid: number; readonly gid: number } | undefined): IssuedLoginToken {
     const issuedAt = this.now()
     const expiresAt = issuedAt + ttlSeconds * 1000
-    this.cleanExpired(issuedAt)
-    if (this.countActive(issuedAt) >= LOGIN_TOKEN_CAPACITY) {
+    const owner = this.requireDirectory()
+    this.cleanExpired(issuedAt, owner)
+    if (this.countActive(issuedAt, owner) >= LOGIN_TOKEN_CAPACITY) {
       throw new LoginTokenError('capacity', 'LOGIN_TOKEN_CAPACITY_EXCEEDED', `the login token directory already holds ${String(LOGIN_TOKEN_CAPACITY)} unexpired tokens`)
     }
     for (let attempt = 0; attempt < MAX_GENERATION_ATTEMPTS; attempt += 1) {
@@ -242,7 +320,7 @@ export class LoginTokenStore {
       try {
         this.host.writeNewFile(temporary, serializeMetadata({ issuedAt, expiresAt }), TOKEN_FILE_MODE)
         this.host.fsyncFile?.(temporary)
-        if (owner !== undefined) this.host.chown(temporary, owner.uid, owner.gid)
+        if (requestedOwner !== undefined) this.host.chown(temporary, requestedOwner.uid, requestedOwner.gid)
       } catch {
         this.removeQuietly(temporary)
         throw new LoginTokenError('execution', 'LOGIN_TOKEN_WRITE_FAILED', 'login token metadata could not be written')
@@ -282,7 +360,7 @@ export class LoginTokenStore {
         this.host.writeNewFile(lockPath, payload, TOKEN_FILE_MODE)
         return payload
       } catch (error) {
-        if (errorCode(error) !== 'EEXIST') {
+        if (systemErrorCode(error) !== 'EEXIST') {
           throw new LoginTokenError('execution', 'LOGIN_TOKEN_LOCK_FAILED', 'the login token issue lock could not be created')
         }
       }
@@ -323,7 +401,8 @@ export class LoginTokenStore {
   claim(token: string): LoginTokenClaim {
     if (!LOGIN_TOKEN_PATTERN.test(token)) return { status: 'invalid' }
     const now = this.now()
-    this.cleanExpired(now)
+    const owner = this.requireDirectory()
+    this.cleanExpired(now, owner)
     const digest = digestHex(token)
     const path = join(this.directory, digest)
     const consumingPath = join(this.directory, `${CONSUMING_PREFIX}${digest}`)
@@ -335,7 +414,7 @@ export class LoginTokenStore {
     }
     let metadata: LoginTokenMetadata
     try {
-      metadata = this.readManagedMetadata(consumingPath)
+      metadata = this.readManagedMetadata(consumingPath, owner)
     } catch {
       return { status: 'invalid' }
     }
@@ -349,28 +428,50 @@ export class LoginTokenStore {
   }
 
   /** Remove only strictly named managed files whose recorded expiry has passed. */
-  private cleanExpired(now: number): void {
+  private cleanExpired(now: number, owner: InspectedTokenDirectory): void {
     for (const entry of this.managedEntries()) {
-      const metadata = this.readManagedMetadata(entry.path)
+      const metadata = this.readManagedMetadata(entry.path, owner)
       if (metadata.expiresAt <= now) this.host.removeFile(entry.path)
     }
   }
 
-  private countActive(now: number): number {
+  private countActive(now: number, owner: InspectedTokenDirectory): number {
     let count = 0
     for (const entry of this.managedEntries()) {
-      const metadata = this.readManagedMetadata(entry.path)
+      const metadata = this.readManagedMetadata(entry.path, owner)
       if (metadata.expiresAt > now) count += 1
     }
     return count
   }
 
-  private readManagedMetadata(path: string): LoginTokenMetadata {
-    const stat = this.host.stat(path)
-    if (stat.size === 0 || stat.size > MAX_TOKEN_FILE_BYTES) {
+  private requireDirectory(): InspectedTokenDirectory {
+    let directory: InspectedTokenDirectory
+    try {
+      directory = this.host.inspectDirectory(this.directory)
+    } catch {
+      throw new LoginTokenError('conflict', 'LOGIN_TOKEN_DIRECTORY_INVALID', 'the login token directory is not a real 0700 directory')
+    }
+    if (process.platform !== 'win32' && (directory.mode & 0o777) !== 0o700) {
+      throw new LoginTokenError('conflict', 'LOGIN_TOKEN_DIRECTORY_INVALID', 'the login token directory is not a real 0700 directory')
+    }
+    return directory
+  }
+
+  private readManagedMetadata(path: string, owner: InspectedTokenDirectory): LoginTokenMetadata {
+    let file: OpenedTokenFile
+    try {
+      file = this.host.readOpenFile(path, MAX_TOKEN_FILE_BYTES)
+    } catch (error) {
+      if (error instanceof LoginTokenError) throw error
+      throw new LoginTokenError('conflict', 'LOGIN_TOKEN_FILE_INVALID', 'a managed login token file is not safe to use')
+    }
+    if (process.platform !== 'win32' && ((file.mode & 0o777) !== 0o600 || file.uid !== owner.uid || file.gid !== owner.gid)) {
+      throw new LoginTokenError('conflict', 'LOGIN_TOKEN_FILE_INVALID', 'a managed login token file is not safe to use')
+    }
+    if (file.size === 0 || file.size > MAX_TOKEN_FILE_BYTES) {
       throw new LoginTokenError('conflict', 'LOGIN_TOKEN_FILE_INVALID', 'a managed login token file has an unexpected size')
     }
-    return parseMetadata(this.host.readFile(path))
+    return parseMetadata(file.content)
   }
 
   private managedEntries(): readonly ManagedEntry[] {

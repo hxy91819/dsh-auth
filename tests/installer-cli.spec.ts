@@ -545,6 +545,18 @@ describe('issue-login-token CLI container mode', () => {
     const wideIo = new FakeCliIo(false)
     expect(await runCli(containerArgs(), wideIo, wideMode)).toBe(4)
 
+    const wideDir = containerHost(1000)
+    wideDir.chmod('/srv/app/state/login-tokens', 0o777)
+    const wideDirIo = new FakeCliIo(false)
+    expect(await runCli(containerArgs(), wideDirIo, wideDir)).toBe(4)
+    expect(wideDirIo.errors.join('')).toContain('LOGIN_TOKEN_DIRECTORY_INVALID')
+
+    const foreignDir = containerHost(1000)
+    foreignDir.chown('/srv/app/state/login-tokens', 99, 99)
+    const foreignIo = new FakeCliIo(false)
+    expect(await runCli(containerArgs(), foreignIo, foreignDir)).toBe(4)
+    expect(foreignIo.errors.join('')).toContain('LOGIN_TOKEN_DIRECTORY_INVALID')
+
     const missingEnv = containerHost(1000)
     missingEnv.entries.delete('/srv/app/dsh-auth.env')
     const envIo = new FakeCliIo(false)
@@ -575,6 +587,42 @@ describe('issue-login-token CLI container mode', () => {
         '--auth-state-file', join(stateDirectory, 'auth-state.json'), '--public-origin', 'http://127.0.0.1:8080',
       ], io, new NodeInstallerHost())).toBe(4)
       expect(io.errors.join('')).not.toMatch(/dsh_otl_v1_/u)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a world-writable or symlinked token directory on the real filesystem', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-auth-issue-token-dir-'))
+    try {
+      const stateDirectory = join(root, 'state')
+      const tokenDirectory = join(stateDirectory, 'login-tokens')
+      mkdirSync(stateDirectory, { mode: 0o700 })
+      writeFileSync(join(root, 'dsh-auth.env'), 'DSH_AUTH_LOGIN_TOKEN_ENABLED=true\n', { mode: 0o600 })
+      writeFileSync(join(stateDirectory, 'auth-state.json'), '{}\n', { mode: 0o600 })
+      chmodSync(join(stateDirectory, 'auth-state.json'), 0o600)
+
+      mkdirSync(tokenDirectory, { mode: 0o777 })
+      chmodSync(tokenDirectory, 0o777)
+      const wideIo = new FakeCliIo(false)
+      expect(await runCli([
+        'issue-login-token', '--non-interactive', '--authorize-login-token-issue',
+        '--auth-state-file', join(stateDirectory, 'auth-state.json'), '--public-origin', 'http://127.0.0.1:8080',
+      ], wideIo, new NodeInstallerHost())).toBe(4)
+      expect(wideIo.errors.join('')).toContain('LOGIN_TOKEN_DIRECTORY_INVALID')
+      expect(wideIo.errors.join('')).not.toMatch(/dsh_otl_v1_/u)
+
+      rmSync(tokenDirectory, { recursive: true, force: true })
+      mkdirSync(join(root, 'real-tokens'), { mode: 0o700 })
+      chmodSync(join(root, 'real-tokens'), 0o700)
+      symlinkSync(join(root, 'real-tokens'), tokenDirectory)
+      const linkIo = new FakeCliIo(false)
+      expect(await runCli([
+        'issue-login-token', '--non-interactive', '--authorize-login-token-issue',
+        '--auth-state-file', join(stateDirectory, 'auth-state.json'), '--public-origin', 'http://127.0.0.1:8080',
+      ], linkIo, new NodeInstallerHost())).toBe(4)
+      expect(linkIo.errors.join('')).toContain('LOGIN_TOKEN_DIRECTORY_INVALID')
+      expect(linkIo.errors.join('')).not.toMatch(/dsh_otl_v1_/u)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

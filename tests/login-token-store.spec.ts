@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, chownSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -20,6 +20,7 @@ function tokenDirectory(): string {
   roots.push(root)
   const directory = join(root, 'login-tokens')
   mkdirSync(directory, { mode: 0o700 })
+  chmodSync(directory, 0o700)
   return directory
 }
 
@@ -39,6 +40,22 @@ function expectStoreFailure(action: () => unknown): LoginTokenError {
     return error as LoginTokenError
   }
   throw new Error('expected the store to fail')
+}
+
+class SwapBeforeOpenHost extends NodeInstallerHost {
+  override readOpenFile(path: string, maxBytes: number): ReturnType<NodeInstallerHost['readOpenFile']> {
+    try {
+      const target = `${path}.swapped`
+      const current = readFileSync(path)
+      writeFileSync(target, current, { mode: 0o600 })
+      chmodSync(target, 0o600)
+      unlinkSync(path)
+      symlinkSync(target, path)
+    } catch {
+      // If the path is already a symlink or missing, the real open still fail-closes.
+    }
+    return super.readOpenFile(path, maxBytes)
+  }
 }
 
 class FaultyTokenHost extends NodeInstallerHost {
@@ -225,6 +242,81 @@ describe('login token store', () => {
     expect(names).toHaveLength(32)
     expect(names.every(name => /^[0-9a-f]{64}$/u.test(name))).toBe(true)
   }, 30_000)
+})
+
+describe('login token store filesystem safety', () => {
+  it('refuses unsafe token directories before issue or claim', () => {
+    const missingRoot = mkdtempSync(join(tmpdir(), 'dsh-auth-token-missing-'))
+    roots.push(missingRoot)
+    const missing = join(missingRoot, 'login-tokens')
+    expect(expectStoreFailure((): void => { storeFor(missing, () => 0).issue({ ttlSeconds: 60 }) }).code).toBe('LOGIN_TOKEN_DIRECTORY_INVALID')
+
+    const fileAsDirectory = tokenDirectory()
+    const asFile = join(fileAsDirectory, 'not-a-dir')
+    writeFileSync(asFile, 'nope\n', { mode: 0o700 })
+    const fileStore = new LoginTokenStore({ host: new NodeInstallerHost(), directory: asFile, now: () => 0 })
+    expect(expectStoreFailure((): void => { fileStore.issue({ ttlSeconds: 60 }) }).code).toBe('LOGIN_TOKEN_DIRECTORY_INVALID')
+
+    const linkedRoot = mkdtempSync(join(tmpdir(), 'dsh-auth-token-dirlink-'))
+    roots.push(linkedRoot)
+    const realDirectory = join(linkedRoot, 'real')
+    mkdirSync(realDirectory, { mode: 0o700 })
+    chmodSync(realDirectory, 0o700)
+    const linked = join(linkedRoot, 'login-tokens')
+    symlinkSync(realDirectory, linked)
+    expect(expectStoreFailure((): void => { storeFor(linked, () => 0).issue({ ttlSeconds: 60 }) }).code).toBe('LOGIN_TOKEN_DIRECTORY_INVALID')
+
+    const wide = tokenDirectory()
+    chmodSync(wide, 0o777)
+    expect(expectStoreFailure((): void => { storeFor(wide, () => 0).issue({ ttlSeconds: 60 }) }).code).toBe('LOGIN_TOKEN_DIRECTORY_INVALID')
+    chmodSync(wide, 0o770)
+    expect(expectStoreFailure((): void => { storeFor(wide, () => 0).issue({ ttlSeconds: 60 }) }).code).toBe('LOGIN_TOKEN_DIRECTORY_INVALID')
+  })
+
+  it('does not issue or claim digest-named symlinks, wide files, or non-files', () => {
+    const directory = tokenDirectory()
+    const metadata = `${JSON.stringify({ schemaVersion: 1, issuedAt: 0, expiresAt: 60_000 })}\n`
+    const linked = 'a'.repeat(64)
+    const target = join(directory, 'safe-target')
+    writeFileSync(target, metadata, { mode: 0o600 })
+    chmodSync(target, 0o600)
+    symlinkSync(target, join(directory, linked))
+    expect(expectStoreFailure((): void => { storeFor(directory, () => 0).issue({ ttlSeconds: 60 }) }).code).toBe('LOGIN_TOKEN_FILE_INVALID')
+    expect(expectStoreFailure((): void => { storeFor(directory, () => 0).claim(`dsh_otl_v1_${'A'.repeat(43)}`) }).code).toBe('LOGIN_TOKEN_FILE_INVALID')
+    expect(readdirSync(directory)).toContain(linked)
+
+    unlinkSync(join(directory, linked))
+    unlinkSync(target)
+    const wide = 'b'.repeat(64)
+    writeFileSync(join(directory, wide), metadata, { mode: 0o644 })
+    chmodSync(join(directory, wide), 0o644)
+    expect(expectStoreFailure((): void => { storeFor(directory, () => 0).issue({ ttlSeconds: 60 }) }).code).toBe('LOGIN_TOKEN_FILE_INVALID')
+    expect(readFileSync(join(directory, wide), 'utf8')).toBe(metadata)
+
+    unlinkSync(join(directory, wide))
+    const asDirectory = 'c'.repeat(64)
+    mkdirSync(join(directory, asDirectory), { mode: 0o700 })
+    expect(expectStoreFailure((): void => { storeFor(directory, () => 0).issue({ ttlSeconds: 60 }) }).code).toBe('LOGIN_TOKEN_FILE_INVALID')
+    expect(statSync(join(directory, asDirectory)).isDirectory()).toBe(true)
+  })
+
+  it('fails closed when a managed file is replaced with a symlink before the descriptor read', () => {
+    const directory = tokenDirectory()
+    const issued = storeFor(directory, () => 0).issue({ ttlSeconds: 60 })
+    const subject = storeFor(directory, () => 0, undefined, new SwapBeforeOpenHost())
+    expect(expectStoreFailure((): void => { subject.claim(issued.token) }).code).toBe('LOGIN_TOKEN_FILE_INVALID')
+    expect(expectStoreFailure((): void => { subject.issue({ ttlSeconds: 60 }) }).code).toBe('LOGIN_TOKEN_FILE_INVALID')
+  })
+
+  it('rejects a token file owned by another user', () => {
+    if (process.geteuid?.() !== 0) return
+    const directory = tokenDirectory()
+    const issued = storeFor(directory, () => 0).issue({ ttlSeconds: 60 })
+    const path = join(directory, digestOf(issued.token))
+    chownSync(path, 4242, 4243)
+    expect(expectStoreFailure((): void => { storeFor(directory, () => 0).issue({ ttlSeconds: 60 }) }).code).toBe('LOGIN_TOKEN_FILE_INVALID')
+    expect(expectStoreFailure((): void => { storeFor(directory, () => 0).claim(issued.token) }).code).toBe('LOGIN_TOKEN_FILE_INVALID')
+  })
 })
 
 function compileIssueWorker(directory: string): { readonly worker: string } {

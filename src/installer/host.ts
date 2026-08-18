@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import type { CommandResult, CommandSpec, InstallerHost } from './types.js'
+import { inspectTokenDirectory, readOpenTokenFile } from '../login-token-store.js'
 
 function snapshotStat(path: string): ReturnType<InstallerHost['stat']> {
   const value = lstatSync(path)
@@ -84,6 +85,14 @@ export class NodeInstallerHost implements InstallerHost {
 
   stat(path: string): ReturnType<InstallerHost['stat']> {
     return snapshotStat(path)
+  }
+
+  inspectDirectory(path: string): ReturnType<InstallerHost['inspectDirectory']> {
+    return inspectTokenDirectory(path)
+  }
+
+  readOpenFile(path: string, maxBytes: number): ReturnType<InstallerHost['readOpenFile']> {
+    return readOpenTokenFile(path, maxBytes)
   }
 
   mkdir(path: string, mode: number): void {

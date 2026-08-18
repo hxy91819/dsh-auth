@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -40,6 +40,7 @@ async function tokenHarness(
   roots.push(root)
   const directory = join(root, 'login-tokens')
   mkdirSync(directory, { mode: 0o700 })
+  chmodSync(directory, 0o700)
   const authStateFile = join(root, 'auth-state.json')
   const document = options.configured === false
     ? createAuthStateDocument(authStateSecretId(Buffer.from(credentials.secret)))

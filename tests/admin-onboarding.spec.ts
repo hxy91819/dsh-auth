@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Server } from 'node:http'
@@ -38,6 +38,7 @@ async function onboardingHarness(options: { readonly configured?: boolean } = {}
   roots.push(root)
   const directory = join(root, 'login-tokens')
   mkdirSync(directory, { mode: 0o700 })
+  chmodSync(directory, 0o700)
   const authStateFile = join(root, 'auth-state.json')
   const sessionSecretFile = join(root, 'session-secret')
   writeFileSync(sessionSecretFile, `${credentials.secret}\n`, { mode: 0o600 })
@@ -259,6 +260,7 @@ describe('administrator first-time setup mutations', () => {
     roots.push(root)
     const directory = join(root, 'login-tokens')
     mkdirSync(directory, { mode: 0o700 })
+    chmodSync(directory, 0o700)
     const authStateFile = join(root, 'auth-state.json')
     const sessionSecretFile = join(root, 'session-secret')
     writeFileSync(sessionSecretFile, `${credentials.secret}\n`, { mode: 0o600 })
