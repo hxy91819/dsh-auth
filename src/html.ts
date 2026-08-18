@@ -27,6 +27,15 @@ interface UiCopy {
   readonly roles: string
   readonly returnToHarness: string
   readonly signOut: string
+  readonly resetPassword: string
+  readonly resetPasswordTitle: string
+  readonly resetPasswordLede: string
+  readonly resetPasswordSave: string
+  readonly currentPassword: string
+  readonly newPassword: string
+  readonly currentPasswordInvalid: string
+  readonly passwordUpdatedTitle: string
+  readonly passwordUpdatedLede: string
   readonly tokenTitle: string
   readonly tokenLede: string
   readonly tokenNoscript: string
@@ -62,6 +71,15 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     roles: '角色',
     returnToHarness: '返回 Harness',
     signOut: '退出登录',
+    resetPassword: '重设密码',
+    resetPasswordTitle: '重设密码',
+    resetPasswordLede: '输入当前密码并设置新密码。成功后，其他会话将退出。',
+    resetPasswordSave: '保存新密码',
+    currentPassword: '当前密码',
+    newPassword: '新密码',
+    currentPasswordInvalid: '当前密码不正确。',
+    passwordUpdatedTitle: '密码已更新',
+    passwordUpdatedLede: '新密码已生效。其他浏览器会话已退出，当前会话可以继续使用。',
     tokenTitle: '一次性登录',
     tokenLede: '正在完成一次性登录…',
     tokenNoscript: '此登录链接需要启用 JavaScript。请回到云控制台，在允许 JavaScript 的浏览器中重新打开该链接。',
@@ -95,6 +113,15 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     roles: 'Roles',
     returnToHarness: 'Return to Harness',
     signOut: 'Sign out',
+    resetPassword: 'Reset password',
+    resetPasswordTitle: 'Reset password',
+    resetPasswordLede: 'Enter the current password and choose a new one. Other sessions will be signed out after a successful change.',
+    resetPasswordSave: 'Save new password',
+    currentPassword: 'Current password',
+    newPassword: 'New password',
+    currentPasswordInvalid: 'The current password is incorrect.',
+    passwordUpdatedTitle: 'Password updated',
+    passwordUpdatedLede: 'The new password is in effect. Other browser sessions have been signed out. This session can continue.',
     tokenTitle: 'One-time sign-in',
     tokenLede: 'Completing one-time sign-in…',
     tokenNoscript: 'This sign-in link requires JavaScript. Return to your cloud console and reopen the link in a browser with JavaScript enabled.',
@@ -115,6 +142,7 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
 
 export type AuthMessage = 'invalidCredentials' | 'rateLimited'
 export type SetupMessage = 'usernameWhitespace' | 'usernameInvalid' | 'passwordInvalid' | 'passwordMismatch'
+export type PasswordChangeMessage = 'currentPasswordInvalid' | 'passwordInvalid' | 'passwordMismatch' | 'rateLimited'
 
 const STYLE = `
 :root {
@@ -361,6 +389,7 @@ export function accountPage(
       <div class="detail"><dt>${escapeHtml(copy.userId)}</dt><dd>${escapeHtml(session.user.userId)}</dd></div>
       <div class="detail"><dt>${escapeHtml(copy.roles)}</dt><dd>${escapeHtml(roles)}</dd></div>
     </dl></div>
+    ${configured ? `<a class="button secondary" href="${escapeHtml(basePath)}/admin/password">${escapeHtml(copy.resetPassword)}</a>` : ''}
     <a class="button secondary" href="/">${escapeHtml(copy.returnToHarness)}</a>
     <form method="post" action="${escapeHtml(basePath)}/logout">
       <input type="hidden" name="csrf" value="${escapeHtml(csrfToken)}">
@@ -456,6 +485,51 @@ export function adminSetupCompletePage(preferences: UiPreferences, returnTo = '/
   return document(copy.setupCompleteTitle, `<section class="content">
     <h1>${escapeHtml(copy.setupCompleteTitle)}</h1>
     <p class="lede">${escapeHtml(copy.setupCompleteLede)}</p>
+    <a class="button" href="${escapeHtml(returnTo)}">${escapeHtml(copy.returnToHarness)}</a>
+  </section>`, preferences)
+}
+
+/** Render the authenticated password-change form. */
+export function passwordChangePage(
+  basePath: string,
+  returnTo: string,
+  csrfToken: string,
+  preferences: UiPreferences,
+  message?: PasswordChangeMessage,
+): string {
+  const copy = COPY[preferences.language]
+  const notice = message === undefined ? '' : `<p class="notice" role="alert">${escapeHtml(copy[message])}</p>`
+  return document(copy.resetPasswordTitle, `<section class="content">
+    <h1>${escapeHtml(copy.resetPasswordTitle)}</h1>
+    <p class="lede">${escapeHtml(copy.resetPasswordLede)}</p>
+    ${notice}
+    <form class="login-form" method="post" action="${escapeHtml(basePath)}/admin/password">
+      <input type="hidden" name="csrf" value="${escapeHtml(csrfToken)}">
+      <input type="hidden" name="returnTo" value="${escapeHtml(returnTo)}">
+      <div class="field">
+        <label for="currentPassword">${escapeHtml(copy.currentPassword)}</label>
+        <input id="currentPassword" name="currentPassword" type="password" autocomplete="current-password" required autofocus>
+      </div>
+      <div class="field">
+        <label for="password">${escapeHtml(copy.newPassword)}</label>
+        <input id="password" name="password" type="password" autocomplete="new-password" required>
+      </div>
+      <div class="field">
+        <label for="confirmPassword">${escapeHtml(copy.confirmPassword)}</label>
+        <input id="confirmPassword" name="confirmPassword" type="password" autocomplete="new-password" required>
+      </div>
+      <button type="submit">${escapeHtml(copy.resetPasswordSave)}</button>
+    </form>
+    <a class="button secondary" href="${escapeHtml(returnTo)}">${escapeHtml(copy.returnToHarness)}</a>
+  </section>`, preferences)
+}
+
+/** Render the successful password-change result. */
+export function passwordChangeCompletePage(preferences: UiPreferences, returnTo = '/'): string {
+  const copy = COPY[preferences.language]
+  return document(copy.passwordUpdatedTitle, `<section class="content">
+    <h1>${escapeHtml(copy.passwordUpdatedTitle)}</h1>
+    <p class="lede">${escapeHtml(copy.passwordUpdatedLede)}</p>
     <a class="button" href="${escapeHtml(returnTo)}">${escapeHtml(copy.returnToHarness)}</a>
   </section>`, preferences)
 }

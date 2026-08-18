@@ -86,6 +86,35 @@ describe('unified administrator authentication state', () => {
     })
   }, 30_000)
 
+  it('replaces the password hash, keeps the current session, and revokes others', async () => {
+    const credentials = await testCredentials()
+    const replacement = await testCredentials()
+    const unconfiguredRoot = mkdtempSync(join(tmpdir(), 'dsh-auth-state-password-unset-'))
+    roots.push(unconfiguredRoot)
+    const unconfiguredState = join(unconfiguredRoot, 'auth-state.json')
+    const unconfiguredSecret = join(unconfiguredRoot, 'session-secret')
+    writeFileSync(unconfiguredSecret, `${credentials.secret}\n`, { mode: 0o600 })
+    writeFileSync(unconfiguredState, `${JSON.stringify(createAuthStateDocument(authStateSecretId(Buffer.from(credentials.secret))))}\n`, { mode: 0o600 })
+    const unset = new SessionStore(testConfig(credentials, { authStateFile: unconfiguredState, sessionSecretFile: unconfiguredSecret }))
+    const bootstrap = unset.create(Date.now(), 'login-token')
+    expect(unset.updateAdministratorPassword(bootstrap.session.token, replacement.hash, Date.now() + 1))
+      .toBe('not-configured')
+
+    const store = new SessionStore(testConfig(credentials))
+    const current = store.create(Date.now())
+    const extra = store.create(Date.now() + 1)
+    expect(store.updateAdministratorPassword('missing-token-value-00000000000000000000000', replacement.hash, Date.now() + 2))
+      .toBe('invalid-session')
+    expect(store.updateAdministratorPassword(current.session.token, replacement.hash, Date.now() + 3)).toBe('updated')
+    expect(store.passwordCredentials()?.passwordHash).toBe(replacement.hash)
+
+    const request = (value: string): IncomingMessage => ({
+      headers: { cookie: `${SESSION_COOKIE}=${value}` },
+    }) as IncomingMessage
+    expect(store.authenticate(request(current.cookieValue), Date.now() + 4)).toBeDefined()
+    expect(store.authenticate(request(extra.cookieValue), Date.now() + 4)).toBeUndefined()
+  }, 30_000)
+
   it('rolls memory back when an authentication state write fails', async () => {
     const credentials = await testCredentials()
     const root = mkdtempSync(join(tmpdir(), 'dsh-auth-state-write-failure-'))

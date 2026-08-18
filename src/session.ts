@@ -33,6 +33,7 @@ export interface SessionAuthentication {
 }
 
 export type AdministratorInitialization = 'initialized' | 'already-configured' | 'invalid-session'
+export type AdministratorPasswordUpdate = 'updated' | 'not-configured' | 'invalid-session'
 
 function cloneAdministrator(value: AdministratorState): AdministratorState {
   return { ...value }
@@ -138,6 +139,25 @@ export class SessionStore {
       }
     })
     return 'initialized'
+  }
+
+  /** Replace the administrator password hash and revoke every session except the caller's. */
+  updateAdministratorPassword(
+    currentSessionToken: string,
+    passwordHash: string,
+    now: number,
+  ): AdministratorPasswordUpdate {
+    parsePasswordHash(passwordHash)
+    if (this.administrator.username === null || this.administrator.passwordHash === null) return 'not-configured'
+    if (!this.sessions.has(currentSessionToken)) return 'invalid-session'
+    const username = this.administrator.username
+    this.mutate(() => {
+      this.administrator = { id: 'admin', username, passwordHash, configuredAt: now }
+      for (const token of this.sessions.keys()) {
+        if (token !== currentSessionToken) this.sessions.delete(token)
+      }
+    })
+    return 'updated'
   }
 
   private currentUser(): AuthUser {
