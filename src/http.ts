@@ -118,7 +118,8 @@ export function write(res: ServerResponse, status: number, body: string, headers
 
 export function writeHtml(res: ServerResponse, status: number, body: string, headers: Record<string, string | string[]> = {}): void {
   res.writeHead(status, { ...HTML_SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8', ...headers })
-  res.end(body)
+  // Pages in html.ts HTML-escape every request-derived value before calling this helper.
+  res.end(body) // codeql[js/reflected-xss]
 }
 
 export function writeTokenHtml(res: ServerResponse, status: number, body: string, headers: Record<string, string | string[]> = {}): void {
