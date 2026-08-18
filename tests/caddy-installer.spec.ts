@@ -7,7 +7,7 @@ function request(mode: 'http' | 'https', tls?: 'automatic' | 'manual'): SetupReq
   return {
     mode,
     profile: 'web',
-    packageSource: 'dsh-auth@0.1.13',
+    packageSource: 'dsh-auth@0.1.14',
     adminBootstrap: 'password',
     adminUsername: 'admin',
     loginTokenEnabled: false,

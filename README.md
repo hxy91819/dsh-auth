@@ -23,7 +23,7 @@ sudo dsh-auth setup
 `npm install -g dsh-auth` installs the current stable CLI, and the installer pins that same version in the selected DSH profile. For controlled production rollout, install the exact version approved by your supply-chain policy:
 
 ```sh
-sudo npm install -g dsh-auth@X.Y.Z
+sudo npm install -g dsh-auth@0.1.14
 ```
 
 The interactive installer asks for the exact DSH service, administrator initialization method, HTTPS hostname, and TLS mode; shows a secret-free plan; and changes the system only after you type the exact confirmation. It installs the pinned bundle into the selected DSH profile, copies a checksum-verified Caddy binary, writes permission-restricted authentication state, and enables an independent `dsh-auth-caddy.service`. It never stores a plaintext password and never downloads Caddy at setup time.

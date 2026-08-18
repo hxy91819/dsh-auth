@@ -46,7 +46,7 @@ Outputs:
 
 Examples:
   corepack pnpm run test:e2e
-  DSH_E2E_CHROME_BIN=/usr/bin/chromium node scripts/real-integration.mjs packed/dsh-auth-0.1.13.tgz
+  DSH_E2E_CHROME_BIN=/usr/bin/chromium node scripts/real-integration.mjs packed/dsh-auth-0.1.14.tgz
   DSH_E2E_BOOTSTRAP=password DSH_E2E_EDGE=caddy node scripts/real-integration.mjs
 `
 

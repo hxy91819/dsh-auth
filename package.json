@@ -1,6 +1,6 @@
 {
   "name": "dsh-auth",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "Caddy-fronted single-account authentication bundle for DeepSeek Harness",
   "type": "module",
   "main": "./lib/index.js",
