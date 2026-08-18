@@ -1,7 +1,7 @@
 {
   "name": "dsh-auth",
   "version": "0.1.13",
-  "description": "Nginx-fronted single-account authentication bundle for DeepSeek Harness",
+  "description": "Caddy-fronted single-account authentication bundle for DeepSeek Harness",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
@@ -166,7 +166,7 @@
   "keywords": [
     "deepseek-harness",
     "cordis",
-    "nginx",
+    "caddy",
     "authentication",
     "argon2id"
   ],

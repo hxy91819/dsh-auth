@@ -2,50 +2,57 @@ import { dirname, isAbsolute, join } from 'node:path'
 import { assertRootOwnedDirectory } from './discovery.js'
 import { InstallerError } from './errors.js'
 import { persistentRequest, renderEnvironmentFile, renderSystemdDropIn, requestFingerprint } from './config-files.js'
-import { renderNginxConfig } from './nginx.js'
+import { assertPublicPortsFree, CADDY_VERSION, renderCaddyfile, renderCaddyUnit, resolveCaddyPackage, SYSTEM_CADDY_BINARY, SYSTEM_CADDY_STATE, SYSTEM_CADDY_UNIT } from './caddy.js'
 import { expectedManagedOwners } from './ownership.js'
 import { ExitCode, type Diagnostic, type HostDiscovery, type InstallationPlan, type InstallerHost, type InstallState, type ManagedPaths, type PlanAction, type PreparedSetup, type SetupRequest } from './types.js'
-import { validateServiceName, validateSetupRequest } from './validation.js'
+import { publicOrigin, validateServiceName, validateSetupRequest } from './validation.js'
 
 const SYSTEM_CONFIG_DIRECTORY = '/etc/dsh-auth'
-const SYSTEM_SESSION_DIRECTORY = '/var/lib/dsh-auth'
+const SYSTEM_AUTH_STATE_DIRECTORY = '/var/lib/dsh-auth'
+const SCHEMA_V1_REMEDIATION = 'Do not overwrite, migrate, or uninstall automatically. Record the old unit, then perform a new v2 setup. Existing sessions will not work after reinstall.'
 
 function blocked(diagnostics: readonly Diagnostic[], mode: 'system' | 'output'): InstallationPlan {
-  return { schemaVersion: 1, operation: 'setup', mode, status: 'blocked', actions: [], diagnostics }
+  return { schemaVersion: 2, operation: 'setup', mode, status: 'blocked', actions: [], diagnostics }
 }
 
-function managedPaths(request: SetupRequest, discovery: HostDiscovery): ManagedPaths | undefined {
+function managedPathsFor(request: SetupRequest, discovery: HostDiscovery): ManagedPaths | undefined {
   if (request.outputDirectory !== undefined) {
     const root = request.outputDirectory
     return {
       configDirectory: root,
       stateFile: join(root, 'install-state.json'),
       environmentFile: join(root, 'dsh-auth.env'),
-      passwordHashFile: join(root, 'password-hash'),
       sessionSecretFile: join(root, 'session-secret'),
-      sessionDirectory: join(root, 'state'),
-      sessionStoreFile: join(root, 'state', 'sessions.json'),
+      caddyfile: join(root, 'Caddyfile'),
+      caddyBinary: join(root, 'caddy'),
+      caddyBinaryDirectory: root,
+      caddyUnitFile: join(root, 'dsh-auth-caddy.service'),
+      caddyStateDirectory: join(root, 'caddy-state'),
+      authStateDirectory: join(root, 'state'),
+      authStateFile: join(root, 'state', 'auth-state.json'),
+      loginTokenDirectory: join(root, 'state', 'login-tokens'),
       systemdDropInDirectory: root,
       systemdDropInFile: join(root, 'dsh-auth.service.conf'),
-      nginxConfigFile: join(root, 'dsh-auth.nginx.conf'),
     }
   }
   const service = discovery.dshService
-  const nginxPath = discovery.nginx.includePath
-    ?? (request.nginxPolicy === 'install' ? '/etc/nginx/conf.d/dsh-auth.conf' : undefined)
-  if (service === undefined || nginxPath === undefined) return undefined
+  if (service === undefined) return undefined
   const dropInDirectory = `/etc/systemd/system/${service.name}.d`
   return {
     configDirectory: SYSTEM_CONFIG_DIRECTORY,
     stateFile: join(SYSTEM_CONFIG_DIRECTORY, 'install-state.json'),
     environmentFile: join(SYSTEM_CONFIG_DIRECTORY, 'dsh-auth.env'),
-    passwordHashFile: join(SYSTEM_CONFIG_DIRECTORY, 'password-hash'),
     sessionSecretFile: join(SYSTEM_CONFIG_DIRECTORY, 'session-secret'),
-    sessionDirectory: SYSTEM_SESSION_DIRECTORY,
-    sessionStoreFile: join(SYSTEM_SESSION_DIRECTORY, 'sessions.json'),
+    caddyfile: join(SYSTEM_CONFIG_DIRECTORY, 'Caddyfile'),
+    caddyBinary: SYSTEM_CADDY_BINARY,
+    caddyBinaryDirectory: dirname(SYSTEM_CADDY_BINARY),
+    caddyUnitFile: SYSTEM_CADDY_UNIT,
+    caddyStateDirectory: SYSTEM_CADDY_STATE,
+    authStateDirectory: SYSTEM_AUTH_STATE_DIRECTORY,
+    authStateFile: join(SYSTEM_AUTH_STATE_DIRECTORY, 'auth-state.json'),
+    loginTokenDirectory: join(SYSTEM_AUTH_STATE_DIRECTORY, 'login-tokens'),
     systemdDropInDirectory: dropInDirectory,
     systemdDropInFile: join(dropInDirectory, '50-dsh-auth.conf'),
-    nginxConfigFile: nginxPath,
   }
 }
 
@@ -54,7 +61,16 @@ export function bootstrapStatePath(paths: ManagedPaths): string {
   return `${paths.configDirectory}.installing.json`
 }
 
-function parseInstallState(host: InstallerHost, path: string): Partial<InstallState> {
+function schemaV1Error(): never {
+  throw new InstallerError('existing installation uses schema v1 and cannot be migrated', ExitCode.conflict, [{
+    code: 'SCHEMA_V1_UNSUPPORTED',
+    severity: 'error',
+    message: 'This installation uses schema v1 and cannot be migrated automatically.',
+    remediation: SCHEMA_V1_REMEDIATION,
+  }])
+}
+
+function parseInstallState(host: InstallerHost, path: string): Record<string, unknown> {
   const stateStat = host.stat(path)
   if (stateStat.isDirectory || (stateStat.mode & 0o077) !== 0 || (path.startsWith('/etc/') && stateStat.uid !== 0)) {
     throw new InstallerError('dsh-auth state file ownership or permissions are unsafe', ExitCode.conflict)
@@ -73,80 +89,102 @@ function parseInstallState(host: InstallerHost, path: string): Partial<InstallSt
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new InstallerError('dsh-auth state file is invalid', ExitCode.conflict)
   }
-  return value
+  const candidate = value as Record<string, unknown>
+  if (candidate.schemaVersion === 1) schemaV1Error()
+  return candidate
 }
 
-function hasSupportedIdentity(candidate: Partial<InstallState>): boolean {
-  const invalid = (
-    candidate.schemaVersion !== 1
+function hasSupportedIdentity(candidate: Record<string, unknown>): boolean {
+  return !(
+    candidate.schemaVersion !== 2
     || (candidate.status !== 'installing' && candidate.status !== 'installed')
     || typeof candidate.fingerprint !== 'string'
     || typeof candidate.dshService !== 'string'
     || typeof candidate.dshUser !== 'string'
     || typeof candidate.dshHome !== 'string'
     || typeof candidate.dshExecutable !== 'string'
-    || typeof candidate.nginxExecutable !== 'string'
-    || candidate.nginxService !== 'nginx.service'
-    || typeof candidate.nginxInstalledByDshAuth !== 'boolean'
+    || typeof candidate.publicOrigin !== 'string'
+    || typeof candidate.authStateFile !== 'string'
+    || typeof candidate.loginTokenEnabled !== 'boolean'
+    || typeof candidate.caddyVersion !== 'string'
+    || typeof candidate.caddyBinarySha256 !== 'string'
+    || typeof candidate.dshUid !== 'number'
+    || typeof candidate.dshGid !== 'number'
     || typeof candidate.profilePackageInstalledByDshAuth !== 'boolean'
   )
-  return !invalid
 }
 
-function hasSupportedPaths(candidate: Partial<InstallState>): boolean {
+function hasSupportedPaths(candidate: Record<string, unknown>): boolean {
   const paths = candidate.paths as Partial<ManagedPaths> | undefined
   const pathValues = paths === undefined ? [] : Object.values(paths)
   return candidate.request !== undefined
     && paths !== undefined
-    && pathValues.length === 10
+    && pathValues.length === 14
     && pathValues.every(entry => typeof entry === 'string')
     && Array.isArray(candidate.createdPaths)
     && candidate.createdPaths.every(entry => typeof entry === 'string')
 }
 
-function hasSupportedActivation(candidate: Partial<InstallState>): boolean {
-  const activation = candidate.activation
+function hasSupportedActivation(candidate: Record<string, unknown>): boolean {
+  const activation = candidate.activation as InstallState['activation'] | undefined
   return activation === undefined || [
     activation.dshWasActive,
-    activation.nginxWasActive,
-    activation.nginxWasEnabled,
+    activation.caddyWasActive,
+    activation.caddyWasEnabled,
     activation.daemonReloadAttempted,
     activation.dshRestartAttempted,
-    activation.nginxActivationAttempted,
+    activation.caddyActivationAttempted,
   ].every(value => typeof value === 'boolean')
 }
 
-function validatedInstallState(candidate: Partial<InstallState>): InstallState {
+function validatedInstallState(candidate: Record<string, unknown>): InstallState {
   if (!hasSupportedIdentity(candidate) || !hasSupportedPaths(candidate) || !hasSupportedActivation(candidate)) {
     throw new InstallerError('dsh-auth state file has an unsupported format', ExitCode.conflict)
   }
-  return candidate as InstallState
+  return candidate as unknown as InstallState
 }
 
 function validatePersistedRequest(state: InstallState): void {
   try {
-    validateSetupRequest({ ...state.request, authorizeNginxInstall: false })
+    validateSetupRequest(state.request)
     if (state.request.outputDirectory === undefined) validateServiceName(state.dshService)
   } catch {
     throw new InstallerError('dsh-auth state file contains invalid setup values', ExitCode.conflict)
   }
 }
 
+function derivedManagedPaths(state: InstallState): ManagedPaths | undefined {
+  return managedPathsFor(state.request, {
+    platform: 'linux',
+    arch: 'x64',
+    effectiveUid: 0,
+    ...(state.request.outputDirectory === undefined
+      ? {
+          dshService: {
+            name: state.dshService,
+            loadState: 'loaded',
+            activeState: 'active',
+            user: state.dshUser,
+            group: 'root',
+            uid: state.dshUid,
+            gid: state.dshGid,
+            dshExecutable: state.dshExecutable,
+            dshHome: state.dshHome,
+          },
+        }
+      : {}),
+  })
+}
+
 function validateOwnedPaths(state: InstallState): void {
   validateStatePaths(state)
+  const derived = derivedManagedPaths(state)
+  if (derived === undefined || Object.entries(derived).some(([key, path]) => state.paths[key as keyof ManagedPaths] !== path)) {
+    throw new InstallerError('dsh-auth state file contains unowned paths', ExitCode.conflict)
+  }
   const ownedPaths = new Set(Object.values(state.paths))
   if (new Set(state.createdPaths).size !== state.createdPaths.length || state.createdPaths.some(entry => !ownedPaths.has(entry))) {
     throw new InstallerError('dsh-auth state file contains unowned paths', ExitCode.conflict)
-  }
-}
-
-function validatePersistedExecutables(host: InstallerHost, state: InstallState): void {
-  if (state.request.outputDirectory !== undefined) return
-  if (!isAbsolute(state.dshHome) || !isAbsolute(state.dshExecutable) || !host.regularFile(state.dshExecutable)) {
-    throw new InstallerError('dsh-auth state file contains an invalid DSH executable', ExitCode.conflict)
-  }
-  if (!['/usr/sbin/nginx', '/usr/bin/nginx', '/sbin/nginx'].includes(state.nginxExecutable)) {
-    throw new InstallerError('dsh-auth state file contains an invalid Nginx executable', ExitCode.conflict)
   }
 }
 
@@ -155,7 +193,6 @@ export function readInstallState(host: InstallerHost, path: string): InstallStat
   const state = validatedInstallState(parseInstallState(host, path))
   validatePersistedRequest(state)
   validateOwnedPaths(state)
-  validatePersistedExecutables(host, state)
   return state
 }
 
@@ -197,27 +234,20 @@ function systemDiagnostics(host: InstallerHost, request: SetupRequest, discovery
     diagnostics.push({ code: 'UNSUPPORTED_PLATFORM', severity: 'error', message: 'System setup supports Linux only.', remediation: 'Use --output-dir for deterministic container/offline configuration output.' })
   }
   if (discovery.effectiveUid !== 0) {
-    diagnostics.push({ code: 'ROOT_REQUIRED', severity: 'error', message: 'System setup requires root to manage systemd and Nginx files.', remediation: 'Run setup through sudo, or use --output-dir without system changes.' })
+    diagnostics.push({ code: 'ROOT_REQUIRED', severity: 'error', message: 'System setup requires root to manage systemd and Caddy files.', remediation: 'Run setup through sudo, or use --output-dir without system changes.' })
   }
   if (discovery.dshService === undefined) {
-      diagnostics.push({ code: 'DSH_SERVICE_REQUIRED', severity: 'error', message: 'An explicit DSH Web systemd service is required.', remediation: 'Pass the exact unit with --dsh-service and, when discovery cannot infer them, --dsh-home and --dsh-executable.' })
+    diagnostics.push({ code: 'DSH_SERVICE_REQUIRED', severity: 'error', message: 'An explicit DSH Web systemd service is required.', remediation: 'Pass the exact unit with --dsh-service and, when discovery cannot infer them, --dsh-home and --dsh-executable.' })
   }
-  const nginx = discovery.nginx
-  if (!nginx.installed) {
-    if (request.nginxPolicy === 'require') {
-      diagnostics.push({ code: 'NGINX_MISSING', severity: 'error', message: 'Nginx is not installed.', remediation: 'Install Nginx with auth_request, or rerun with --nginx install --authorize-nginx-install on a supported system.' })
-    } else if (request.nginxPolicy === 'install' && discovery.packageManager === undefined) {
-      diagnostics.push({ code: 'NGINX_INSTALL_UNSUPPORTED', severity: 'error', message: 'No supported operating-system package recipe is available.', remediation: 'Install Nginx 1.24+ with auth_request from a trusted system repository, then use --nginx require.' })
-    }
-  } else {
-    if (!nginx.versionSupported) diagnostics.push({ code: 'NGINX_VERSION_UNSUPPORTED', severity: 'error', message: `Nginx ${nginx.version ?? 'unknown'} is older than the supported 1.24 baseline.`, remediation: 'Upgrade Nginx from the operating-system repository and rerun doctor.' })
-    if (!nginx.authRequestModule) diagnostics.push({ code: 'NGINX_AUTH_REQUEST_MISSING', severity: 'error', message: 'Nginx lacks ngx_http_auth_request_module.', remediation: 'Install an Nginx build configured with --with-http_auth_request_module.' })
-    if (nginx.configPath === undefined || nginx.includePath === undefined) diagnostics.push({ code: 'NGINX_INCLUDE_UNSUPPORTED', severity: 'error', message: 'No supported http-level conf.d or sites-enabled include was found.', remediation: 'Add a standard absolute include to nginx.conf or use --output-dir and install the rendered include explicitly.' })
-    if (nginx.serviceManager !== 'systemd' || nginx.serviceName !== 'nginx.service' || nginx.serviceLoadState !== 'loaded') diagnostics.push({ code: 'NGINX_SYSTEMD_REQUIRED', severity: 'error', message: 'The supported system setup requires a loaded nginx.service under systemd.' })
-  }
-  if (request.mode === 'https') {
+  if (request.mode === 'https' && request.tls === 'manual') {
     if (request.certificate !== undefined && !host.regularFile(request.certificate)) diagnostics.push({ code: 'CERTIFICATE_NOT_FOUND', severity: 'error', message: 'The TLS certificate is not a readable regular file.' })
     if (request.certificateKey !== undefined && !host.regularFile(request.certificateKey)) diagnostics.push({ code: 'CERTIFICATE_KEY_NOT_FOUND', severity: 'error', message: 'The TLS certificate key is not a readable regular file.' })
+  }
+  try {
+    resolveCaddyPackage(host)
+  } catch (error) {
+    if (error instanceof InstallerError) diagnostics.push(...error.diagnostics)
+    else diagnostics.push({ code: 'CADDY_PACKAGE_MISSING', severity: 'error', message: error instanceof Error ? error.message : String(error) })
   }
   return diagnostics
 }
@@ -236,16 +266,17 @@ function verifyInstalledState(host: InstallerHost, state: InstallState, request:
     [state.paths.configDirectory, output ? 0o700 : 0o750],
     [state.paths.stateFile, 0o600],
     [state.paths.environmentFile, output ? 0o600 : 0o640],
-    [state.paths.passwordHashFile, output ? 0o600 : 0o640],
     [state.paths.sessionSecretFile, output ? 0o600 : 0o640],
-    [state.paths.sessionDirectory, 0o700],
-    [state.paths.nginxConfigFile, 0o644],
-    ...(output ? [] : [[state.paths.systemdDropInFile, 0o644] as const]),
+    [state.paths.caddyfile, 0o644],
+    [state.paths.caddyBinary, 0o755],
+    [state.paths.caddyBinaryDirectory, output ? 0o700 : 0o755],
+    [state.paths.authStateDirectory, 0o700],
+    [state.paths.authStateFile, 0o600],
+    [state.paths.loginTokenDirectory, 0o700],
+    ...(output ? [] : [[state.paths.systemdDropInFile, 0o644] as const, [state.paths.caddyUnitFile, 0o644] as const]),
   ])
   for (const path of state.createdPaths) {
-    if (!host.fileExists(path)) {
-      drift('MANAGED_PATH_MISSING', `Recorded path is missing: ${path}`)
-    }
+    if (!host.fileExists(path)) drift('MANAGED_PATH_MISSING', `Recorded path is missing: ${path}`)
     const expected = modes.get(path)
     if (expected !== undefined && (host.stat(path).mode & 0o777) !== expected) {
       drift('MANAGED_MODE_DRIFT', `Recorded path has unexpected permissions: ${path}`)
@@ -260,18 +291,19 @@ function verifyInstalledState(host: InstallerHost, state: InstallState, request:
       if (actual.uid !== uid || actual.gid !== gid) drift('MANAGED_OWNER_DRIFT', `Recorded path has unexpected ownership: ${path}`)
     }
   }
+  const system = !output
   const expectedFiles = new Map<string, string>([
     [state.paths.environmentFile, renderEnvironmentFile(request, state.paths)],
-    [state.paths.nginxConfigFile, renderNginxConfig(request)],
-    ...(output ? [] : [[state.paths.systemdDropInFile, renderSystemdDropIn(state.paths)] as const]),
+    [state.paths.caddyfile, renderCaddyfile(request, system)],
+    ...(output ? [] : [
+      [state.paths.systemdDropInFile, renderSystemdDropIn(state.paths)] as const,
+      [state.paths.caddyUnitFile, renderCaddyUnit(request, state.paths)] as const,
+    ]),
   ])
   for (const [path, expected] of expectedFiles) {
     if (!host.regularFile(path) || host.readFile(path) !== expected) {
       drift('MANAGED_CONTENT_DRIFT', `Recorded managed configuration differs from the requested installation: ${path}`)
     }
-  }
-  if (!host.regularFile(state.paths.passwordHashFile) || !/^\$argon2id\$v=19\$m=\d+,t=\d+,p=\d+\$[A-Za-z0-9+/]+\$[A-Za-z0-9+/]+\n?$/u.test(host.readFile(state.paths.passwordHashFile))) {
-    drift('PASSWORD_HASH_INVALID', 'The managed password hash is not a valid Argon2id PHC value.')
   }
   if (!host.regularFile(state.paths.sessionSecretFile) || !/^[A-Za-z0-9_-]{43}\n?$/u.test(host.readFile(state.paths.sessionSecretFile))) {
     drift('SESSION_SECRET_INVALID', 'The managed session secret is not a valid 32-byte base64url value.')
@@ -287,18 +319,8 @@ interface SetupContext {
   readonly fingerprint: string
 }
 
-function authorizationDiagnostics(request: SetupRequest, discovery: HostDiscovery, execute: boolean): readonly Diagnostic[] {
-  if (!execute || request.nginxPolicy !== 'install' || discovery.nginx.installed || request.authorizeNginxInstall) return []
-  return [{
-    code: 'NGINX_INSTALL_NOT_AUTHORIZED',
-    severity: 'error',
-    message: 'Nginx package installation requires explicit execution authorization.',
-    remediation: 'Review `dsh-auth plan`, then add --authorize-nginx-install to the setup command.',
-  }]
-}
-
 function resolveSetupContext(host: InstallerHost, request: SetupRequest, discovery: HostDiscovery, mode: SetupMode): SetupContext | undefined {
-  const paths = managedPaths(request, discovery)
+  const paths = managedPathsFor(request, discovery)
   if (paths === undefined) return undefined
   const fingerprint = requestFingerprint(request)
   const bootstrapPath = bootstrapStatePath(paths)
@@ -321,7 +343,7 @@ function unchangedPreparation(host: InstallerHost, request: SetupRequest, discov
   if (context.state?.status !== 'installed') return undefined
   verifyInstalledState(host, context.state, request, discovery)
   return {
-    plan: { schemaVersion: 1, operation: 'setup', mode: context.mode, status: 'unchanged', actions: [{ id: 'verify', kind: 'check', description: 'Verify the existing managed installation.' }], diagnostics: [], fingerprint: context.fingerprint },
+    plan: { schemaVersion: 2, operation: 'setup', mode: context.mode, status: 'unchanged', actions: [{ id: 'verify', kind: 'check', description: 'Verify the existing managed installation.' }], diagnostics: [], fingerprint: context.fingerprint },
     request,
     discovery,
     state: context.state,
@@ -332,22 +354,12 @@ function unchangedPreparation(host: InstallerHost, request: SetupRequest, discov
 
 function assertNoUnownedFiles(host: InstallerHost, context: SetupContext): void {
   const paths = context.paths
-  const conflicts = [paths.sessionDirectory, paths.environmentFile, paths.passwordHashFile, paths.sessionSecretFile, paths.systemdDropInFile, paths.nginxConfigFile]
+  const conflicts = [paths.environmentFile, paths.sessionSecretFile, paths.caddyfile, paths.caddyBinary, paths.caddyUnitFile, paths.authStateDirectory, paths.systemdDropInFile]
     .filter(path => host.fileExists(path) && context.state === undefined)
   if (conflicts.length === 0) return
   throw new InstallerError('refusing to overwrite files not owned by dsh-auth', ExitCode.conflict, conflicts.map(path => ({
     code: 'UNOWNED_FILE_CONFLICT', severity: 'error' as const, message: `Existing file is not recorded as dsh-auth-owned: ${path}`,
   })))
-}
-
-function nginxInstallActions(request: SetupRequest, discovery: HostDiscovery): PlanAction[] {
-  if (discovery.nginx.installed || request.nginxPolicy !== 'install') return []
-  return (discovery.packageManager?.commands ?? []).map((command, index) => ({
-    id: `install-nginx-${String(index + 1)}`,
-    kind: 'install-package',
-    description: `Install Nginx from ${discovery.packageManager?.source ?? 'the system repository'}.`,
-    command,
-  }))
 }
 
 function profileInstallAction(host: InstallerHost, request: SetupRequest, discovery: HostDiscovery, context: SetupContext): PlanAction {
@@ -372,52 +384,62 @@ function profileInstallAction(host: InstallerHost, request: SetupRequest, discov
   }
 }
 
-function managedFileActions(context: SetupContext): PlanAction[] {
+function managedFileActions(request: SetupRequest, context: SetupContext): PlanAction[] {
   const paths = context.paths
+  const passwordAction = request.adminBootstrap === 'password'
+    ? [{ id: 'write-auth-state', kind: 'write-file' as const, description: 'Write the v2 authentication state with the hashed administrator password.', target: paths.authStateFile, sensitive: true }]
+    : [{ id: 'write-auth-state', kind: 'write-file' as const, description: 'Write an unset v2 authentication state for token initialization.', target: paths.authStateFile }]
   return [
     { id: 'create-config-directory', kind: 'create-directory', description: 'Create the permission-restricted configuration directory.', target: paths.configDirectory },
-    { id: 'write-password-hash', kind: 'write-file', description: 'Hash the password from the selected non-argv input and write only the Argon2id hash.', target: paths.passwordHashFile, sensitive: true },
+    { id: 'install-caddy-binary', kind: 'write-file', description: 'Copy the checksum-verified Caddy binary from the platform package.', target: paths.caddyBinary },
     { id: 'write-session-secret', kind: 'write-file', description: 'Generate and write a new session-signing secret.', target: paths.sessionSecretFile, sensitive: true },
+    ...passwordAction,
     { id: 'write-environment', kind: 'write-file', description: 'Write the DSH environment file containing secret-file paths, not secret values.', target: paths.environmentFile },
-    { id: 'write-nginx', kind: 'write-file', description: context.mode === 'system' ? 'Install the project-owned Nginx include.' : 'Render the Nginx include for an image or offline deployment.', target: paths.nginxConfigFile },
+    { id: 'write-caddyfile', kind: 'write-file', description: context.mode === 'system' ? 'Install the project-owned Caddyfile.' : 'Render the Caddyfile for an image or offline deployment.', target: paths.caddyfile },
   ]
 }
 
 function activationActions(discovery: HostDiscovery, paths: ManagedPaths): PlanAction[] {
   return [
     { id: 'write-systemd-drop-in', kind: 'write-file', description: 'Install the project-owned EnvironmentFile drop-in without replacing the DSH unit.', target: paths.systemdDropInFile },
+    { id: 'write-caddy-unit', kind: 'write-file', description: 'Install the independent dsh-auth-caddy.service unit.', target: paths.caddyUnitFile },
+    commandAction('caddy-validate', 'Validate the managed Caddy configuration before activation.', paths.caddyBinary, ['validate', '--config', paths.caddyfile]),
     commandAction('systemd-daemon-reload', 'Reload systemd unit metadata.', '/usr/bin/systemctl', ['daemon-reload']),
-    commandAction('nginx-test', 'Validate the complete Nginx configuration before activation.', discovery.nginx.executable ?? '/usr/sbin/nginx', ['-t']),
     commandAction('restart-dsh', 'Restart the exact DSH service to load the managed environment.', '/usr/bin/systemctl', ['restart', discovery.dshService?.name ?? '']),
-    commandAction('reload-nginx', 'Reload nginx.service only after validation succeeds.', '/usr/bin/systemctl', ['reload', 'nginx.service']),
+    commandAction('enable-caddy', 'Enable and start the independent Caddy edge without touching other services.', '/usr/bin/systemctl', ['enable', '--now', 'dsh-auth-caddy.service']),
   ]
 }
 
 /** Build one redacted plan used by dry-run and execution. */
 export function prepareSetup(host: InstallerHost, request: SetupRequest, discovery: HostDiscovery, options: { readonly execute: boolean }): PreparedSetup {
+  void options.execute
   const mode = request.outputDirectory === undefined ? 'system' : 'output'
   const diagnostics = mode === 'system' ? systemDiagnostics(host, request, discovery) : []
-  if (diagnostics.some(entry => entry.severity === 'error')) {
-    return { plan: blocked(diagnostics, mode), request, discovery }
+  if (mode === 'output') {
+    try {
+      resolveCaddyPackage(host)
+    } catch (error) {
+      if (error instanceof InstallerError) return { plan: blocked(error.diagnostics, mode), request, discovery }
+      return { plan: blocked([{ code: 'CADDY_PACKAGE_MISSING', severity: 'error', message: error instanceof Error ? error.message : String(error) }], mode), request, discovery }
+    }
   }
-  const authorization = authorizationDiagnostics(request, discovery, options.execute)
-  if (authorization.length > 0) return { plan: blocked(authorization, mode), request, discovery }
+  if (diagnostics.some(entry => entry.severity === 'error')) return { plan: blocked(diagnostics, mode), request, discovery }
+  if (mode === 'system') assertPublicPortsFree(host, request)
   const context = resolveSetupContext(host, request, discovery, mode)
   if (context === undefined) return { plan: blocked([{ code: 'PATH_DISCOVERY_FAILED', severity: 'error', message: 'Managed paths could not be resolved.' }], mode), request, discovery }
   const unchanged = unchangedPreparation(host, request, discovery, context)
   if (unchanged !== undefined) return unchanged
   assertNoUnownedFiles(host, context)
   const actions = [
-    ...nginxInstallActions(request, discovery),
     ...(mode === 'system' ? [profileInstallAction(host, request, discovery, context)] : []),
-    ...managedFileActions(context),
+    ...managedFileActions(request, context),
     ...(mode === 'system' ? activationActions(discovery, context.paths) : []),
   ]
   if (context.state?.status === 'installing') {
     actions.unshift({ id: 'recover-interrupted-install', kind: 'remove-file', description: 'Rollback the recorded interrupted installation before retrying.' })
   }
   return {
-    plan: { schemaVersion: 1, operation: 'setup', mode, status: 'ready', actions, diagnostics: [], fingerprint: context.fingerprint },
+    plan: { schemaVersion: 2, operation: 'setup', mode, status: 'ready', actions, diagnostics: [], fingerprint: context.fingerprint },
     request,
     discovery,
     ...(context.state === undefined ? {} : { state: context.state }),
@@ -427,24 +449,27 @@ export function prepareSetup(host: InstallerHost, request: SetupRequest, discove
 }
 
 /** Construct the initial persisted state used as a crash-recovery journal. */
-export function initialInstallState(prepared: PreparedSetup): InstallState {
+export function initialInstallState(prepared: PreparedSetup, caddyBinarySha256: string): InstallState {
   const paths = prepared.paths
   const service = prepared.discovery.dshService
-  const nginxExecutable = prepared.discovery.nginx.executable ?? '/usr/sbin/nginx'
   if (paths === undefined || prepared.fingerprint === undefined) throw new InstallerError('setup plan is not executable', ExitCode.execution)
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     status: 'installing',
     fingerprint: prepared.fingerprint,
     request: persistentRequest(prepared.request),
     paths,
     dshService: service?.name ?? 'output',
     dshUser: service?.user ?? '',
+    dshUid: service?.uid ?? (prepared.discovery.effectiveUid ?? 0),
+    dshGid: service?.gid ?? 0,
     dshHome: service?.dshHome ?? prepared.request.outputDirectory ?? '',
     dshExecutable: service?.dshExecutable ?? '',
-    nginxExecutable,
-    nginxService: 'nginx.service',
-    nginxInstalledByDshAuth: false,
+    publicOrigin: publicOrigin(prepared.request),
+    authStateFile: paths.authStateFile,
+    loginTokenEnabled: prepared.request.loginTokenEnabled,
+    caddyVersion: CADDY_VERSION,
+    caddyBinarySha256,
     profilePackageInstalledByDshAuth: false,
     createdPaths: [],
   }
@@ -452,18 +477,7 @@ export function initialInstallState(prepared: PreparedSetup): InstallState {
 
 /** Ensure a state record contains only normalized absolute managed paths before deletion. */
 export function validateStatePaths(state: InstallState): void {
-  const paths: readonly string[] = [
-    state.paths.configDirectory,
-    state.paths.stateFile,
-    state.paths.environmentFile,
-    state.paths.passwordHashFile,
-    state.paths.sessionSecretFile,
-    state.paths.sessionDirectory,
-    state.paths.sessionStoreFile,
-    state.paths.systemdDropInDirectory,
-    state.paths.systemdDropInFile,
-    state.paths.nginxConfigFile,
-  ]
+  const paths: readonly string[] = Object.values(state.paths)
   for (const path of paths) {
     if (!isAbsolute(path) || path === '/' || path.includes('..')) {
       throw new InstallerError('state contains an unsafe managed path', ExitCode.conflict)
@@ -471,43 +485,5 @@ export function validateStatePaths(state: InstallState): void {
   }
   if (dirname(state.paths.stateFile) !== state.paths.configDirectory) {
     throw new InstallerError('state file is outside its recorded configuration directory', ExitCode.conflict)
-  }
-  const output = state.request.outputDirectory
-  if (output !== undefined) {
-    const expected: ManagedPaths = {
-      configDirectory: output,
-      stateFile: join(output, 'install-state.json'),
-      environmentFile: join(output, 'dsh-auth.env'),
-      passwordHashFile: join(output, 'password-hash'),
-      sessionSecretFile: join(output, 'session-secret'),
-      sessionDirectory: join(output, 'state'),
-      sessionStoreFile: join(output, 'state', 'sessions.json'),
-      systemdDropInDirectory: output,
-      systemdDropInFile: join(output, 'dsh-auth.service.conf'),
-      nginxConfigFile: join(output, 'dsh-auth.nginx.conf'),
-    }
-    for (const key of Object.keys(expected) as (keyof ManagedPaths)[]) {
-      if (state.paths[key] !== expected[key]) throw new InstallerError('output state paths do not match the recorded output directory', ExitCode.conflict)
-    }
-    if (state.dshService !== 'output') throw new InstallerError('output state has an invalid service marker', ExitCode.conflict)
-    return
-  }
-  validateServiceName(state.dshService)
-  const expectedSystem: Omit<ManagedPaths, 'nginxConfigFile'> = {
-    configDirectory: SYSTEM_CONFIG_DIRECTORY,
-    stateFile: join(SYSTEM_CONFIG_DIRECTORY, 'install-state.json'),
-    environmentFile: join(SYSTEM_CONFIG_DIRECTORY, 'dsh-auth.env'),
-    passwordHashFile: join(SYSTEM_CONFIG_DIRECTORY, 'password-hash'),
-    sessionSecretFile: join(SYSTEM_CONFIG_DIRECTORY, 'session-secret'),
-    sessionDirectory: SYSTEM_SESSION_DIRECTORY,
-    sessionStoreFile: join(SYSTEM_SESSION_DIRECTORY, 'sessions.json'),
-    systemdDropInDirectory: `/etc/systemd/system/${state.dshService}.d`,
-    systemdDropInFile: `/etc/systemd/system/${state.dshService}.d/50-dsh-auth.conf`,
-  }
-  for (const key of Object.keys(expectedSystem) as (keyof typeof expectedSystem)[]) {
-    if (state.paths[key] !== expectedSystem[key]) throw new InstallerError('system state paths do not match dsh-auth managed targets', ExitCode.conflict)
-  }
-  if (!['/etc/nginx/conf.d/dsh-auth.conf', '/etc/nginx/sites-enabled/dsh-auth.conf'].includes(state.paths.nginxConfigFile)) {
-    throw new InstallerError('system state contains an unsupported Nginx target', ExitCode.conflict)
   }
 }

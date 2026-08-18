@@ -9,7 +9,7 @@ verifies: [INSTALLER_V2]
 
 # STORY-03 交付一次性令牌签发执行卡
 
-- 状态：阻塞，依赖 STORY-02
+- 状态：可领取，依赖 STORY-02 已完成实现（尚未提交）
 - 对应：[STORY-03 交付一次性令牌签发](../stories/Story-03-交付一次性令牌签发.md)
 
 ## 目标与完成信号

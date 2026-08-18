@@ -8,6 +8,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
+import { writeFakeCaddyPlatformPackage } from './fake-caddy-platform-package.mjs'
 
 const HELP = `Usage:
   node scripts/installer-e2e.mjs PATH.tgz
@@ -55,24 +56,26 @@ function shellQuote(value) {
 
 function verifyOutput(output, expectedUsername, password) {
   const state = JSON.parse(readFileSync(join(output, 'install-state.json'), 'utf8'))
-  if (state.status !== 'installed') throw new Error('installer ownership record is not installed')
+  if (state.status !== 'installed' || state.schemaVersion !== 2) throw new Error('installer ownership record is not installed schema v2')
   const environment = readFileSync(join(output, 'dsh-auth.env'), 'utf8')
-  const passwordHash = readFileSync(join(output, 'password-hash'), 'utf8')
+  const authState = readFileSync(join(output, 'state', 'auth-state.json'), 'utf8')
   const sessionSecret = readFileSync(join(output, 'session-secret'), 'utf8').trim()
-  if (!environment.includes(`DSH_AUTH_USERNAME="${expectedUsername}"`)) throw new Error('installer environment has the wrong username')
-  if (!passwordHash.startsWith('$argon2id$')) throw new Error('installer password hash is invalid')
-  if (`${environment}${passwordHash}${sessionSecret}`.includes(password)) throw new Error('installer persisted the plaintext password')
-  if ((statSync(join(output, 'password-hash')).mode & 0o777) !== 0o600) throw new Error('installer password hash mode is not 0600')
+  if (!environment.includes('DSH_AUTH_STATE_FILE=')) throw new Error('installer environment is missing the auth-state path')
+  if (!authState.includes(`"username":"${expectedUsername}"`)) throw new Error('installer auth-state has the wrong username')
+  if (!authState.includes('$argon2id$')) throw new Error('installer password hash is invalid')
+  if (`${environment}${authState}${sessionSecret}`.includes(password)) throw new Error('installer persisted the plaintext password')
+  if ((statSync(join(output, 'state', 'auth-state.json')).mode & 0o777) !== 0o600) throw new Error('installer auth-state mode is not 0600')
   if ((statSync(join(output, 'session-secret')).mode & 0o777) !== 0o600) throw new Error('installer session secret mode is not 0600')
   return sessionSecret
 }
 
 function runInteractive(bin, output, password) {
-  const command = [bin, 'setup', '--output-dir', output, '--nginx', 'skip', '--package', tarball].map(shellQuote).join(' ')
+  const command = [bin, 'setup', '--output-dir', output, '--package', tarball].map(shellQuote).join(' ')
   const child = spawn(scriptExecutable, ['-qefc', command, '/dev/null'], { cwd: root, stdio: ['pipe', 'pipe', 'pipe'] })
   const steps = [
-    ['Stable user id [admin]:', 'admin-e2e\n'],
-    ['Login username [admin]:', 'operator-e2e\n'],
+    ['Administrator bootstrap (password/login-token):', 'password\n'],
+    ['Login tokens (enabled/disabled) [disabled]:', 'disabled\n'],
+    ['Administrator username:', 'operator-e2e\n'],
     ['Edge mode (https/http) [https]:', 'http\n'],
     ['Trusted-network HTTP listen address:', '127.0.0.1\n'],
     ['Type install to apply this exact plan:', 'install\n'],
@@ -122,14 +125,16 @@ function runInteractive(bin, output, password) {
 try {
   if (!isAbsolute(scriptExecutable)) throw new Error('PTY driver path must be absolute')
   run('npm', ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', tarball])
+  const platform = process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64'
+  writeFakeCaddyPlatformPackage(join(root, 'node_modules', `dsh-auth-caddy-${platform}`), platform)
   const bin = join(root, 'node_modules', '.bin', 'dsh-auth')
 
   const nonInteractivePassword = randomBytes(24).toString('base64url')
   const nonInteractiveOutput = join(root, 'non-interactive')
   const nonInteractive = run(bin, [
-    'setup', '--non-interactive', '--json', '--nginx', 'skip', '--output-dir', nonInteractiveOutput,
-    '--package', tarball, '--user-id', 'admin-e2e', '--username', 'operator-e2e', '--password-stdin',
-    '--mode', 'http', '--listen-address', '127.0.0.1',
+    'setup', '--non-interactive', '--json', '--output-dir', nonInteractiveOutput,
+    '--package', tarball, '--admin-bootstrap', 'password', '--admin-username', 'operator-e2e',
+    '--login-token', 'disabled', '--password-stdin', '--mode', 'http', '--listen-address', '127.0.0.1',
   ], { input: nonInteractivePassword })
   const result = JSON.parse(nonInteractive.stdout)
   if (result.status !== 'success' || result.exitCode !== 0) throw new Error('non-interactive installer JSON reported failure')

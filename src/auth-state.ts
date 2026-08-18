@@ -11,8 +11,13 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { dirname } from 'node:path'
-import { randomBytes } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { parsePasswordHash } from './password.js'
+
+/** HMAC identifier that binds persisted sessions to the current session secret. */
+export function authStateSecretId(sessionSecret: Buffer): string {
+  return createHmac('sha256', sessionSecret).update('dsh-auth-auth-state-v2').digest('base64url')
+}
 
 const AUTH_STATE_VERSION = 2
 const MAX_AUTH_STATE_BYTES = 1024 * 1024
@@ -140,27 +145,21 @@ function readDocument(path: string): Record<string, unknown> | undefined {
   return object(decoded, 'authStateFile')
 }
 
-function initialAuthState(
+/** Construct a v2 authentication document for installer-created state. */
+export function createAuthStateDocument(
   secretId: string,
-  initial: { readonly username: string; readonly passwordHash: string } | undefined,
-  now: number,
+  initial?: { readonly username: string; readonly passwordHash: string; readonly configuredAt: number },
 ): AuthStateDocument {
   const configured = initial === undefined
     ? { id: 'admin' as const, username: null, passwordHash: null, configuredAt: null }
-    : { id: 'admin' as const, username: initial.username, passwordHash: initial.passwordHash, configuredAt: now }
+    : { id: 'admin' as const, username: initial.username, passwordHash: initial.passwordHash, configuredAt: initial.configuredAt }
   if (initial !== undefined) parsePasswordHash(initial.passwordHash)
   return { schemaVersion: AUTH_STATE_VERSION, secretId, administrator: configured, sessions: [] }
 }
 
-export function loadAuthState(
-  path: string | undefined,
-  secretId: string,
-  initial: { readonly username: string; readonly passwordHash: string } | undefined,
-  now: number,
-): LoadedAuthState {
-  if (path === undefined) return { document: initialAuthState(secretId, initial, now), mustPersist: false }
+export function loadAuthState(path: string, secretId: string): LoadedAuthState {
   const raw = readDocument(path)
-  if (raw === undefined) return { document: initialAuthState(secretId, initial, now), mustPersist: false }
+  if (raw === undefined) throw new Error('authStateFile is missing')
   if (raw.schemaVersion !== AUTH_STATE_VERSION) throw new Error('authStateFile has an unsupported schemaVersion')
   exactKeys(raw, ['schemaVersion', 'secretId', 'administrator', 'sessions'], 'authStateFile')
   if (typeof raw.secretId !== 'string' || !SESSION_TOKEN_PATTERN.test(raw.secretId) || !Array.isArray(raw.sessions)) {

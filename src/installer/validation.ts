@@ -1,9 +1,8 @@
 import { isIP } from 'node:net'
 import { isAbsolute, normalize } from 'node:path'
 import { InstallerError } from './errors.js'
-import { ExitCode, type EdgeMode, type SetupRequest } from './types.js'
+import { ExitCode, type AdminBootstrap, type EdgeMode, type SetupRequest, type TlsMode } from './types.js'
 
-const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
 const SAFE_PROFILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u
 const SAFE_SERVICE = /^[A-Za-z0-9][A-Za-z0-9_.@-]{0,126}\.service$/u
 const SAFE_SERVER_NAME = /^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/u
@@ -65,7 +64,7 @@ function validateListenAddress(value: string, mode: EdgeMode): string {
 
 function validateCredentialPath(value: string, label: string): string {
   validateAbsolutePath(value, label)
-  if (!/^[A-Za-z0-9_./+-]+$/u.test(value)) usage(`${label} contains characters unsafe for Nginx configuration`)
+  if (!/^[A-Za-z0-9_./+-]+$/u.test(value)) usage(`${label} contains characters unsafe for Caddy configuration`)
   return value
 }
 
@@ -76,15 +75,41 @@ function validatePackageSource(value: string): string {
   return value
 }
 
-function validateIdentity(input: SetupRequest): void {
-  if (!SAFE_ID.test(input.userId)) usage('user id must be a 1-128 character stable identifier')
-  if (input.username.length === 0 || input.username.length > 128 || /[\p{C}\r\n]/u.test(input.username)) {
-    usage('username must be 1-128 characters without control characters')
+/** Normalize and accept a v2 administrator username. */
+function normalizeAdministratorUsername(value: string): string {
+  const normalized = value.normalize('NFC')
+  if (normalized.trim() !== normalized) usage('admin username must not have leading or trailing whitespace')
+  const points = Array.from(normalized).length
+  if (points < 1 || points > 64 || /\p{C}/u.test(normalized)) {
+    usage('admin username must be 1-64 Unicode code points without control characters')
   }
-  if (input.roles.length === 0 || input.roles.length > 32 || input.roles.some(role => !SAFE_ID.test(role))) {
-    usage('roles must contain 1-32 safe identifiers')
+  return normalized
+}
+
+/** Accept optional token failure copy that cannot carry control characters. */
+function validateTokenFailureMessage(value: string, label: string): string {
+  const points = Array.from(value).length
+  if (points < 1 || points > 500 || /\p{C}/u.test(value)) {
+    usage(`${label} must be 1-500 Unicode code points of plain text without control characters`)
   }
-  if (new Set(input.roles).size !== input.roles.length) usage('roles must not contain duplicates')
+  return value
+}
+
+function validateBootstrap(input: SetupRequest): void {
+  if (input.adminBootstrap === 'password') {
+    if (input.adminUsername === undefined) usage('--admin-bootstrap password requires --admin-username')
+    return
+  }
+  if (input.adminUsername !== undefined) usage('--admin-bootstrap login-token does not accept --admin-username')
+  if (input.passwordSource !== undefined) usage('--admin-bootstrap login-token does not accept a password source')
+  if (!input.loginTokenEnabled) usage('--admin-bootstrap login-token requires --login-token enabled')
+}
+
+function validateTokenPolicy(input: SetupRequest): void {
+  if (input.loginTokenEnabled) return
+  if (input.loginTokenErrorMessageZh !== undefined || input.loginTokenErrorMessageEn !== undefined) {
+    usage('--login-token disabled does not accept custom token failure messages')
+  }
 }
 
 function validateDeploymentInputs(input: SetupRequest): void {
@@ -99,11 +124,14 @@ function validateDeploymentInputs(input: SetupRequest): void {
   if (input.dshExecutable !== undefined) validateAbsolutePath(input.dshExecutable, 'DSH executable')
   if (input.outputDirectory !== undefined) validateAbsolutePath(input.outputDirectory, 'output directory')
   if (input.passwordSource?.kind === 'file') validateAbsolutePath(input.passwordSource.path, 'password file')
+  if (input.adminUsername !== undefined) normalizeAdministratorUsername(input.adminUsername)
+  if (input.loginTokenErrorMessageZh !== undefined) validateTokenFailureMessage(input.loginTokenErrorMessageZh, 'Chinese token failure message')
+  if (input.loginTokenErrorMessageEn !== undefined) validateTokenFailureMessage(input.loginTokenErrorMessageEn, 'English token failure message')
 }
 
 function validateTransport(input: SetupRequest): void {
-  if (input.mode !== 'https') {
-    if (input.serverName !== undefined || input.certificate !== undefined || input.certificateKey !== undefined) {
+  if (input.mode === 'http') {
+    if (input.tls !== undefined || input.certificate !== undefined || input.certificateKey !== undefined || input.serverName !== undefined) {
       usage('plain HTTP mode does not accept TLS server or certificate options')
     }
     return
@@ -111,30 +139,58 @@ function validateTransport(input: SetupRequest): void {
   if (input.serverName === undefined || !SAFE_SERVER_NAME.test(input.serverName)) {
     usage('HTTPS mode requires a valid --server-name')
   }
-  if (input.certificate === undefined || input.certificateKey === undefined) {
-    usage('HTTPS mode requires --certificate and --certificate-key')
+  const tls = input.tls ?? 'automatic'
+  if (tls === 'automatic' && (input.certificate !== undefined || input.certificateKey !== undefined)) {
+    usage('--tls automatic does not accept --certificate or --certificate-key')
   }
-  validateCredentialPath(input.certificate, 'certificate')
-  validateCredentialPath(input.certificateKey, 'certificate key')
+  if (tls === 'manual') {
+    if (input.certificate === undefined || input.certificateKey === undefined) {
+      usage('--tls manual requires --certificate and --certificate-key')
+    }
+    validateCredentialPath(input.certificate, 'certificate')
+    validateCredentialPath(input.certificateKey, 'certificate key')
+  }
 }
 
-function validateNginxPolicy(input: SetupRequest): void {
-  if (input.nginxPolicy === 'skip' && input.outputDirectory === undefined) {
-    usage('--nginx skip is allowed only with --output-dir')
+/** Public origin recorded for later token issuance. */
+export function publicOrigin(request: SetupRequest): string {
+  if (request.mode === 'https') {
+    const host = request.serverName
+    if (host === undefined) usage('HTTPS mode requires a valid --server-name')
+    return request.httpsPort === 443 ? `https://${host}` : `https://${host}:${String(request.httpsPort)}`
   }
-  if (input.outputDirectory !== undefined && input.nginxPolicy !== 'skip') {
-    usage('--output-dir does not accept --nginx require or --nginx install')
-  }
-  if (input.authorizeNginxInstall && input.nginxPolicy !== 'install') {
-    usage('--authorize-nginx-install requires --nginx install')
-  }
+  return `http://${request.listenAddress}:${String(request.httpPort)}`
+}
+
+export function parseAdminBootstrap(value: string | undefined): AdminBootstrap | undefined {
+  if (value === undefined) return undefined
+  if (value !== 'password' && value !== 'login-token') usage('--admin-bootstrap must be password or login-token')
+  return value
+}
+
+export function parseLoginTokenPolicy(value: string | undefined): boolean | undefined {
+  if (value === undefined) return undefined
+  if (value !== 'enabled' && value !== 'disabled') usage('--login-token must be enabled or disabled')
+  return value === 'enabled'
+}
+
+export function parseTlsMode(value: string | undefined): TlsMode | undefined {
+  if (value === undefined) return undefined
+  if (value !== 'automatic' && value !== 'manual') usage('--tls must be automatic or manual')
+  return value
 }
 
 /** Validate and normalize all setup values before discovery or planning. */
 export function validateSetupRequest(input: SetupRequest): SetupRequest {
-  validateIdentity(input)
-  validateDeploymentInputs(input)
-  validateTransport(input)
-  validateNginxPolicy(input)
-  return input
+  const adminUsername = input.adminUsername === undefined ? undefined : normalizeAdministratorUsername(input.adminUsername)
+  const normalized: SetupRequest = {
+    ...input,
+    ...(adminUsername === undefined ? {} : { adminUsername }),
+    ...(input.mode === 'https' ? { tls: input.tls ?? 'automatic' } : {}),
+  }
+  validateBootstrap(normalized)
+  validateTokenPolicy(normalized)
+  validateDeploymentInputs(normalized)
+  validateTransport(normalized)
+  return normalized
 }

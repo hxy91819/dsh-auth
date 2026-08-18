@@ -1,8 +1,12 @@
 import { randomBytes } from 'node:crypto'
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync, chmodSync, chownSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import type { CommandResult, CommandSpec, InstallerHost } from './types.js'
+
+const requirePackage = createRequire(fileURLToPath(import.meta.url))
 
 function snapshotStat(path: string): ReturnType<InstallerHost['stat']> {
   const value = lstatSync(path)
@@ -18,6 +22,7 @@ function snapshotStat(path: string): ReturnType<InstallerHost['stat']> {
 /** Real Node.js host implementation for the installer core. */
 export class NodeInstallerHost implements InstallerHost {
   readonly platform = process.platform
+  readonly arch = process.arch
   readonly effectiveUid = process.geteuid?.()
 
   run(command: CommandSpec, options?: { readonly env?: NodeJS.ProcessEnv }): CommandResult {
@@ -111,5 +116,21 @@ export class NodeInstallerHost implements InstallerHost {
 
   randomBytes(size: number): Buffer {
     return randomBytes(size)
+  }
+
+  resolveModulePackage(name: string): string {
+    return dirname(requirePackage.resolve(`${name}/package.json`))
+  }
+
+  portBusy(address: string, port: number): boolean {
+    const executable = ['/usr/bin/ss', '/bin/ss'].find(candidate => existsSync(candidate))
+    if (executable === undefined) {
+      const result = spawnSync('/usr/bin/bash', ['-c', `echo >/dev/tcp/${address}/${String(port)}`], { encoding: 'utf8' })
+      return result.status === 0
+    }
+    const result = spawnSync(executable, ['-H', '-ltn'], { encoding: 'utf8' })
+    if (result.status !== 0) return false
+    const needle = `:${String(port)}`
+    return result.stdout.split('\n').some(line => line.includes(needle) && (line.includes(address) || address === '0.0.0.0' || address === '::'))
   }
 }

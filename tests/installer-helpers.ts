@@ -1,5 +1,7 @@
-import { dirname } from 'node:path'
+import { createHash } from 'node:crypto'
+import { dirname, join } from 'node:path'
 import type { CommandResult, CommandSpec, InstallerHost } from '../src/installer/types.js'
+import { CADDY_PACKAGE_VERSION, CADDY_VERSION } from '../src/installer/caddy.js'
 
 interface FakeEntry {
   content: Buffer
@@ -12,14 +14,16 @@ interface FakeEntry {
 /** In-memory root host for installer behavior tests. */
 export class FakeInstallerHost implements InstallerHost {
   readonly platform = 'linux' as const
+  arch = 'x64' as string
   readonly effectiveUid = 0
   readonly entries = new Map<string, FakeEntry>()
   readonly commands: CommandSpec[] = []
+  readonly busyPorts = new Set<string>()
   commandHandler: (command: CommandSpec) => CommandResult = () => ({ status: 0, stdout: '', stderr: '' })
   private randomCounter = 0
 
   constructor() {
-    for (const path of ['/', '/etc', '/etc/nginx', '/etc/nginx/conf.d', '/etc/systemd', '/etc/systemd/system', '/usr', '/usr/bin', '/usr/sbin', '/opt', '/opt/dsh', '/opt/dsh/bin', '/root', '/root/.dsh']) {
+    for (const path of ['/', '/etc', '/etc/systemd', '/etc/systemd/system', '/usr', '/usr/bin', '/usr/sbin', '/usr/lib', '/opt', '/opt/dsh', '/opt/dsh/bin', '/root', '/root/.dsh', '/var', '/var/lib', '/usr/lib/node_modules']) {
       this.addDirectory(path, 0o755)
     }
     for (const path of ['/usr/bin/systemctl', '/usr/bin/id', '/usr/bin/getent', '/opt/dsh/bin/dsh']) this.addFile(path, '', 0o755)
@@ -36,13 +40,34 @@ export class FakeInstallerHost implements InstallerHost {
     this.entries.set(path, { content: Buffer.isBuffer(content) ? Buffer.from(content) : Buffer.from(content), mode, uid, gid, directory: false })
   }
 
-  installNginx(version = '1.26.3', authRequest = true): void {
-    this.addFile('/usr/sbin/nginx', '', 0o755)
-    this.addFile('/etc/nginx/nginx.conf', 'events {}\nhttp { include /etc/nginx/conf.d/*.conf; }\n', 0o644)
+  installCaddyPackage(platform = 'linux-x64'): void {
+    const name = `dsh-auth-caddy-${platform}`
+    const directory = `/usr/lib/node_modules/${name}`
+    const binary = Buffer.from(`fake-caddy-${platform}`)
+    const binarySha256 = createHash('sha256').update(binary).digest('hex')
+    const manifest = `${JSON.stringify({
+      schemaVersion: 1,
+      caddyVersion: CADDY_VERSION,
+      packageRevision: 'dsh.1',
+      platform,
+      executable: 'caddy',
+      upstreamArchive: `caddy_${CADDY_VERSION}_${platform.replace('linux-', 'linux_')}.tar.gz`,
+      binarySha256,
+    })}\n`
+    this.addDirectory(directory)
+    this.addFile(join(directory, 'package.json'), `${JSON.stringify({ name, version: CADDY_PACKAGE_VERSION })}\n`, 0o644)
+    this.addFile(join(directory, 'manifest.json'), manifest, 0o644)
+    this.addFile(join(directory, 'manifest.sha256'), `${createHash('sha256').update(manifest).digest('hex')}\n`, 0o644)
+    this.addFile(join(directory, 'LICENSE'), 'Caddy license placeholder\n', 0o644)
+    this.addFile(join(directory, 'THIRD_PARTY.md'), 'Third-party notices\n', 0o644)
+    this.addFile(join(directory, 'caddy'), binary, 0o755)
     const prior = this.commandHandler
     this.commandHandler = (command) => {
-      if (command.executable === '/usr/sbin/nginx' && command.args[0] === '-V') {
-        return { status: 0, stdout: '', stderr: `nginx version: nginx/${version}\nconfigure arguments: --conf-path=/etc/nginx/nginx.conf${authRequest ? ' --with-http_auth_request_module' : ''}` }
+      if (command.args[0] === 'version' && command.executable.endsWith('/caddy')) {
+        return { status: 0, stdout: `v${CADDY_VERSION} h1:test\n`, stderr: '' }
+      }
+      if (command.args[0] === 'validate' && command.executable.endsWith('/caddy')) {
+        return { status: 0, stdout: 'Valid configuration\n', stderr: '' }
       }
       return prior(command)
     }
@@ -63,7 +88,7 @@ export class FakeInstallerHost implements InstallerHost {
         }
         return { status: 0, stdout: `${values[property ?? ''] ?? ''}\n`, stderr: '' }
       }
-      if (command.executable === '/usr/bin/systemctl' && command.args[0] === 'show' && command.args[1] === 'nginx.service') {
+      if (command.executable === '/usr/bin/systemctl' && command.args[0] === 'show' && command.args[1] === 'dsh-auth-caddy.service') {
         return { status: 0, stdout: 'loaded\n', stderr: '' }
       }
       if (command.executable === '/usr/bin/id') return { status: 0, stdout: '0\n', stderr: '' }
@@ -181,6 +206,16 @@ export class FakeInstallerHost implements InstallerHost {
     const value = 0xa5 + this.randomCounter
     this.randomCounter = (this.randomCounter + 1) % 32
     return Buffer.alloc(size, value)
+  }
+
+  resolveModulePackage(name: string): string {
+    const directory = `/usr/lib/node_modules/${name}`
+    if (!this.regularFile(join(directory, 'package.json'))) throw new Error(`MODULE_NOT_FOUND: ${name}`)
+    return directory
+  }
+
+  portBusy(address: string, port: number): boolean {
+    return this.busyPorts.has(`${address}:${String(port)}`)
   }
 }
 

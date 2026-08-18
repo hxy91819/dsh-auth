@@ -2,16 +2,14 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "entry": [
     "src/index.ts",
-    "src/cli.ts",
-    // This smoke test is run manually in a disposable OS image where Nginx starts absent.
-    "scripts/nginx-install-smoke.mjs"
+    "src/cli.ts"
   ],
   "ignoreDependencies": [
     // The real integration test resolves this package's dsh binary by absolute path.
     "@deepseek-ai/dsh"
   ],
   "ignoreBinaries": [
-    // Nginx is a documented host prerequisite, not an npm dependency.
+    // Isolated Caddy/Nginx checks and leftover template validation use host binaries.
     "nginx"
   ]
 }

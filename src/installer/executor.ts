@@ -1,8 +1,9 @@
 import { dirname } from 'node:path'
 import { join } from 'node:path'
-import { hashPassword } from '../password.js'
+import { authStateSecretId, createAuthStateDocument } from '../auth-state.js'
+import { ADMIN_PASSWORD_MAX_BYTES, assertAdministratorPassword, hashPassword } from '../password.js'
+import { renderCaddyfile, renderCaddyUnit, resolveCaddyPackage } from './caddy.js'
 import { renderEnvironmentFile, renderSystemdDropIn, serializeInstallState } from './config-files.js'
-import { discoverNginx } from './nginx.js'
 import { InstallerError } from './errors.js'
 import { bootstrapStatePath, initialInstallState, readInstallState, validateStatePaths } from './plan.js'
 import { ExitCode, type CommandSpec, type InstallState, type InstallerHost, type ManagedPaths, type PreparedSetup } from './types.js'
@@ -93,44 +94,26 @@ function assertSafeRootDirectory(host: InstallerHost, path: string): void {
       throw new InstallerError(`root-managed parent directory is unsafe: ${current}`, ExitCode.permission)
     }
     if (current === '/') return
-    const parent = current.slice(0, current.lastIndexOf('/')) || '/'
-    current = parent
+    current = current.slice(0, current.lastIndexOf('/')) || '/'
   }
-}
-
-function validateInstalledNginx(host: InstallerHost, expectedConfigFile: string): ReturnType<typeof discoverNginx> {
-  const nginx = discoverNginx(host)
-  if (!nginx.installed || !nginx.versionSupported || !nginx.authRequestModule || nginx.includePath !== expectedConfigFile || nginx.serviceName !== 'nginx.service' || nginx.serviceLoadState !== 'loaded') {
-    throw new InstallerError('installed Nginx does not satisfy the supported configuration', ExitCode.prerequisite, [{
-      code: 'NGINX_POST_INSTALL_INVALID',
-      severity: 'error',
-      message: 'The operating-system package did not provide Nginx 1.24+, auth_request, a supported include, and nginx.service.',
-      remediation: 'Keep the package for inspection, correct the Nginx installation, and rerun setup. dsh-auth never removes a shared Nginx package automatically.',
-    }])
-  }
-  return nginx
 }
 
 interface SecretMaterial {
-  readonly passwordHash: string
+  readonly passwordHash?: string
   readonly sessionSecret: string
 }
 
-async function prepareSecretMaterial(host: InstallerHost, secrets: SetupSecrets): Promise<SecretMaterial> {
+async function prepareSecretMaterial(host: InstallerHost, prepared: PreparedSetup, secrets: SetupSecrets): Promise<SecretMaterial> {
+  const sessionSecret = host.randomBytes(32).toString('base64url')
+  if (prepared.request.adminBootstrap !== 'password') return { sessionSecret }
   const password = await secrets.readPassword()
-  if (password.length === 0) throw new InstallerError('password must not be empty', ExitCode.usage)
-  if (Buffer.byteLength(password, 'utf8') > 16 * 1024) throw new InstallerError('password input is too large', ExitCode.usage)
-  return { passwordHash: await hashPassword(password), sessionSecret: host.randomBytes(32).toString('base64url') }
-}
-
-function createSecretFiles(host: InstallerHost, prepared: PreparedSetup, state: InstallState, material: SecretMaterial): InstallState {
-  const paths = state.paths
-  const service = prepared.discovery.dshService
-  const uid = prepared.plan.mode === 'system' ? 0 : (host.effectiveUid ?? 0)
-  const gid = prepared.plan.mode === 'system' ? (service?.gid ?? 0) : (process.getegid?.() ?? 0)
-  let current = writeOwnedFile(host, state, paths.passwordHashFile, `${material.passwordHash}\n`, prepared.plan.mode === 'system' ? 0o640 : 0o600, uid, gid)
-  current = writeOwnedFile(host, current, paths.sessionSecretFile, `${material.sessionSecret}\n`, prepared.plan.mode === 'system' ? 0o640 : 0o600, uid, gid)
-  return current
+  try {
+    assertAdministratorPassword(password)
+  } catch (error) {
+    throw new InstallerError(error instanceof Error ? error.message : 'password is invalid', ExitCode.usage)
+  }
+  if (Buffer.byteLength(password, 'utf8') > ADMIN_PASSWORD_MAX_BYTES) throw new InstallerError('password input is too large', ExitCode.usage)
+  return { passwordHash: await hashPassword(password), sessionSecret }
 }
 
 function serviceIsActive(host: InstallerHost, systemctlPath: string, service: string): boolean {
@@ -141,26 +124,22 @@ function serviceIsEnabled(host: InstallerHost, systemctlPath: string, service: s
   return host.run({ executable: systemctlPath, args: ['is-enabled', '--quiet', service] }).status === 0
 }
 
-function activateSystem(host: InstallerHost, initial: InstallState, nginxWasInstalled: boolean): InstallState {
+function activateSystem(host: InstallerHost, initial: InstallState): InstallState {
   const systemctlPath = systemctl(host)
   let state = initial
   const activation = state.activation
   if (activation === undefined) throw new InstallerError('service activation journal is missing', ExitCode.execution)
+  runChecked(host, { executable: state.paths.caddyBinary, args: ['validate', '--config', state.paths.caddyfile] }, 'CADDY_CONFIG_VALIDATE_FAILED')
   state = updateState(host, state, { activation: { ...activation, daemonReloadAttempted: true } })
   runChecked(host, { executable: systemctlPath, args: ['daemon-reload'] }, 'SYSTEMD_DAEMON_RELOAD_FAILED')
-  runChecked(host, { executable: state.nginxExecutable, args: ['-t'] }, 'NGINX_CONFIG_TEST_FAILED')
   const afterReload = state.activation
   if (afterReload === undefined) throw new InstallerError('service activation journal is missing', ExitCode.execution)
   state = updateState(host, state, { activation: { ...afterReload, dshRestartAttempted: true } })
   runChecked(host, { executable: systemctlPath, args: ['restart', state.dshService] }, 'DSH_RESTART_FAILED')
-  const afterDshRestart = state.activation
-  if (afterDshRestart === undefined) throw new InstallerError('service activation journal is missing', ExitCode.execution)
-  state = updateState(host, state, { activation: { ...afterDshRestart, nginxActivationAttempted: true } })
-  if (nginxWasInstalled) {
-    runChecked(host, { executable: systemctlPath, args: ['enable', '--now', state.nginxService] }, 'NGINX_ENABLE_FAILED')
-    return state
-  }
-  runChecked(host, { executable: systemctlPath, args: [activation.nginxWasActive ? 'reload' : 'start', state.nginxService] }, 'NGINX_ACTIVATION_FAILED')
+  const afterDsh = state.activation
+  if (afterDsh === undefined) throw new InstallerError('service activation journal is missing', ExitCode.execution)
+  state = updateState(host, state, { activation: { ...afterDsh, caddyActivationAttempted: true } })
+  runChecked(host, { executable: systemctlPath, args: ['enable', '--now', 'dsh-auth-caddy.service'] }, 'CADDY_ENABLE_FAILED')
   return state
 }
 
@@ -192,25 +171,17 @@ function rollbackServices(host: InstallerHost, state: InstallState): void {
   if (state.request.outputDirectory !== undefined || state.activation === undefined) return
   const activation = state.activation
   const systemctlPath = systemctl(host)
+  if (activation.caddyActivationAttempted) {
+    runChecked(host, { executable: systemctlPath, args: ['disable', '--now', 'dsh-auth-caddy.service'] }, 'ROLLBACK_CADDY_SERVICE_FAILED')
+  }
   if (activation.daemonReloadAttempted) {
     runChecked(host, { executable: systemctlPath, args: ['daemon-reload'] }, 'ROLLBACK_SYSTEMD_RELOAD_FAILED')
-  }
-  if (activation.nginxActivationAttempted) {
-    const nginx = discoverNginx(host)
-    if (nginx.installed && nginx.executable !== undefined) {
-      runChecked(host, { executable: nginx.executable, args: ['-t'] }, 'ROLLBACK_NGINX_TEST_FAILED')
-    }
-    runChecked(host, { executable: systemctlPath, args: [activation.nginxWasActive ? 'reload' : 'stop', state.nginxService] }, 'ROLLBACK_NGINX_SERVICE_FAILED')
-    if (!activation.nginxWasEnabled) {
-      runChecked(host, { executable: systemctlPath, args: ['disable', state.nginxService] }, 'ROLLBACK_NGINX_DISABLE_FAILED')
-    }
   }
   if (activation.dshRestartAttempted) {
     runChecked(host, { executable: systemctlPath, args: [activation.dshWasActive ? 'restart' : 'stop', state.dshService] }, 'ROLLBACK_DSH_SERVICE_FAILED')
   }
 }
 
-/** Roll back only paths and the profile package proven owned by a state record. */
 function rollbackInstallation(host: InstallerHost, state: InstallState, options: { readonly preserveState: boolean }): InstallState {
   validateStatePaths(state)
   rollbackProfilePackage(host, state)
@@ -220,7 +191,7 @@ function rollbackInstallation(host: InstallerHost, state: InstallState, options:
     ...state,
     profilePackageInstalledByDshAuth: false,
     createdPaths: options.preserveState ? [state.paths.configDirectory, statePath].filter(path => host.fileExists(path)) : [],
-    ...(state.activation === undefined ? {} : { activation: { ...state.activation, daemonReloadAttempted: false, dshRestartAttempted: false, nginxActivationAttempted: false } }),
+    ...(state.activation === undefined ? {} : { activation: { ...state.activation, daemonReloadAttempted: false, dshRestartAttempted: false, caddyActivationAttempted: false } }),
   }
   if (options.preserveState && host.fileExists(statePath)) {
     host.replaceFile(statePath, serializeInstallState(cleaned), 0o600)
@@ -232,46 +203,46 @@ function rollbackInstallation(host: InstallerHost, state: InstallState, options:
 interface ExecutionContext {
   readonly configUid: number
   readonly configGid: number
+  readonly serviceUid: number
   readonly serviceGid: number
   readonly configMode: number
   readonly configExisted: boolean
 }
 
-function recoverInterruptedSetup(host: InstallerHost, prepared: PreparedSetup): boolean {
-  if (prepared.state?.status !== 'installing') return prepared.state?.nginxInstalledByDshAuth ?? false
-  return rollbackInstallation(host, prepared.state, { preserveState: true }).nginxInstalledByDshAuth
+function recoverInterruptedSetup(host: InstallerHost, prepared: PreparedSetup): void {
+  if (prepared.state?.status === 'installing') rollbackInstallation(host, prepared.state, { preserveState: true })
 }
 
 function executionContext(
   host: InstallerHost,
   prepared: PreparedSetup,
   paths: ManagedPaths,
-  nginxInstalledByDshAuth: boolean,
+  caddyBinarySha256: string,
 ): { readonly context: ExecutionContext; readonly state: InstallState } {
   const system = prepared.plan.mode === 'system'
   const configUid = system ? 0 : (host.effectiveUid ?? 0)
   const processGid = process.getegid?.() ?? 0
+  const serviceUid = system ? (prepared.discovery.dshService?.uid ?? 0) : configUid
   const serviceGid = system ? (prepared.discovery.dshService?.gid ?? 0) : processGid
   const configGid = system ? serviceGid : processGid
   const configMode = system ? 0o750 : 0o700
   const configExisted = host.fileExists(paths.configDirectory)
   const systemctlPath = system ? systemctl(host) : undefined
   const state: InstallState = {
-    ...initialInstallState(prepared),
-    nginxInstalledByDshAuth,
+    ...initialInstallState(prepared, caddyBinarySha256),
     createdPaths: [...(configExisted ? [] : [paths.configDirectory]), paths.stateFile],
     ...(systemctlPath === undefined ? {} : {
       activation: {
         dshWasActive: prepared.discovery.dshService?.activeState === 'active',
-        nginxWasActive: serviceIsActive(host, systemctlPath, 'nginx.service'),
-        nginxWasEnabled: serviceIsEnabled(host, systemctlPath, 'nginx.service'),
+        caddyWasActive: serviceIsActive(host, systemctlPath, 'dsh-auth-caddy.service'),
+        caddyWasEnabled: serviceIsEnabled(host, systemctlPath, 'dsh-auth-caddy.service'),
         daemonReloadAttempted: false,
         dshRestartAttempted: false,
-        nginxActivationAttempted: false,
+        caddyActivationAttempted: false,
       },
     }),
   }
-  return { context: { configUid, configGid, serviceGid, configMode, configExisted }, state }
+  return { context: { configUid, configGid, serviceUid, serviceGid, configMode, configExisted }, state }
 }
 
 function writeOwnershipJournal(host: InstallerHost, paths: ManagedPaths, context: ExecutionContext, state: InstallState): void {
@@ -292,19 +263,6 @@ function writeOwnershipJournal(host: InstallerHost, paths: ManagedPaths, context
   else host.writeNewFile(paths.stateFile, serializeInstallState(state), 0o600)
 }
 
-function installNginxPackage(host: InstallerHost, prepared: PreparedSetup, paths: ManagedPaths, initial: InstallState): InstallState {
-  if (prepared.discovery.nginx.installed || prepared.request.nginxPolicy !== 'install') return initial
-  let state = initial
-  for (const command of prepared.discovery.packageManager?.commands ?? []) {
-    if (command.args.includes('install') && command.args.includes('nginx') && !state.nginxInstalledByDshAuth) {
-      state = updateState(host, state, { nginxInstalledByDshAuth: true })
-    }
-    runChecked(host, command, 'NGINX_PACKAGE_INSTALL_FAILED')
-  }
-  const nginx = validateInstalledNginx(host, paths.nginxConfigFile)
-  return updateState(host, state, { nginxExecutable: nginx.executable ?? state.nginxExecutable, nginxInstalledByDshAuth: true })
-}
-
 function installProfilePackage(host: InstallerHost, prepared: PreparedSetup, initial: InstallState): InstallState {
   const packageAction = prepared.plan.actions.find(action => action.id === 'install-profile-package')
   if (packageAction?.command === undefined) return initial
@@ -315,31 +273,59 @@ function installProfilePackage(host: InstallerHost, prepared: PreparedSetup, ini
 
 function createManagedDirectories(host: InstallerHost, prepared: PreparedSetup, paths: ManagedPaths, context: ExecutionContext, initial: InstallState): InstallState {
   let state = initial
-  if (prepared.plan.mode === 'system') {
-    assertSafeRootDirectory(host, dirname(paths.nginxConfigFile))
+  const system = prepared.plan.mode === 'system'
+  if (system) {
+    const binaryDirectory = dirname(paths.caddyBinary)
+    assertSafeRootDirectory(host, host.fileExists(binaryDirectory) ? binaryDirectory : dirname(binaryDirectory))
     assertSafeRootDirectory(host, dirname(paths.systemdDropInDirectory))
-    state = ensureDirectory(host, state, paths.sessionDirectory, 0o700, prepared.discovery.dshService?.uid ?? 0, context.serviceGid)
-    return ensureDirectory(host, state, paths.systemdDropInDirectory, 0o755, 0, 0)
+    state = ensureDirectory(host, state, binaryDirectory, 0o755, 0, 0)
+    state = ensureDirectory(host, state, paths.caddyStateDirectory, 0o700, 0, 0)
+    state = ensureDirectory(host, state, paths.systemdDropInDirectory, 0o755, 0, 0)
+  } else {
+    state = ensureDirectory(host, state, paths.caddyStateDirectory, 0o700, context.configUid, context.configGid)
   }
-  return ensureDirectory(host, state, paths.sessionDirectory, 0o700, context.configUid, context.configGid)
+  state = ensureDirectory(host, state, paths.authStateDirectory, 0o700, context.serviceUid, context.serviceGid)
+  return ensureDirectory(host, state, paths.loginTokenDirectory, 0o700, context.serviceUid, context.serviceGid)
 }
 
-async function writeManagedConfiguration(host: InstallerHost, prepared: PreparedSetup, paths: ManagedPaths, context: ExecutionContext, material: SecretMaterial, initial: InstallState): Promise<InstallState> {
-  let state = createSecretFiles(host, prepared, initial, material)
+function writeAuthState(host: InstallerHost, prepared: PreparedSetup, paths: ManagedPaths, context: ExecutionContext, material: SecretMaterial, initial: InstallState): InstallState {
+  const secretId = authStateSecretId(Buffer.from(material.sessionSecret))
+  const username = prepared.request.adminUsername
+  const document = prepared.request.adminBootstrap === 'password' && material.passwordHash !== undefined && username !== undefined
+    ? createAuthStateDocument(secretId, { username, passwordHash: material.passwordHash, configuredAt: Date.now() })
+    : createAuthStateDocument(secretId)
+  return writeOwnedFile(host, initial, paths.authStateFile, `${JSON.stringify(document)}\n`, 0o600, context.serviceUid, context.serviceGid)
+}
+
+function writeManagedConfiguration(
+  host: InstallerHost,
+  prepared: PreparedSetup,
+  paths: ManagedPaths,
+  context: ExecutionContext,
+  material: SecretMaterial,
+  caddySource: string,
+  initial: InstallState,
+): InstallState {
   const system = prepared.plan.mode === 'system'
-  state = writeOwnedFile(host, state, paths.environmentFile, renderEnvironmentFile(prepared.request, paths), system ? 0o640 : 0o600, context.configUid, context.configGid)
-  const { renderNginxConfig } = await import('./nginx.js')
-  state = writeOwnedFile(host, state, paths.nginxConfigFile, renderNginxConfig(prepared.request), 0o644, context.configUid, system ? 0 : context.configGid)
-  if (!system) return state
+  const secretMode = system ? 0o640 : 0o600
+  let state = writeOwnedFile(host, initial, paths.caddyBinary, host.readFileBytes(caddySource), 0o755, context.configUid, system ? 0 : context.configGid)
+  state = writeOwnedFile(host, state, paths.sessionSecretFile, `${material.sessionSecret}\n`, secretMode, context.configUid, context.configGid)
+  state = writeAuthState(host, prepared, paths, context, material, state)
+  state = writeOwnedFile(host, state, paths.environmentFile, renderEnvironmentFile(prepared.request, paths), secretMode, context.configUid, context.configGid)
+  state = writeOwnedFile(host, state, paths.caddyfile, renderCaddyfile(prepared.request, system), 0o644, context.configUid, system ? 0 : context.configGid)
+  if (!system) {
+    return writeOwnedFile(host, state, paths.caddyUnitFile, renderCaddyUnit(prepared.request, paths), 0o644, context.configUid, context.configGid)
+  }
   state = writeOwnedFile(host, state, paths.systemdDropInFile, renderSystemdDropIn(paths), 0o644, 0, 0)
-  return activateSystem(host, state, state.nginxInstalledByDshAuth && !prepared.discovery.nginx.installed)
+  state = writeOwnedFile(host, state, paths.caddyUnitFile, renderCaddyUnit(prepared.request, paths), 0o644, 0, 0)
+  return activateSystem(host, state)
 }
 
 function finishInstallation(host: InstallerHost, state: InstallState): InstallState {
   const installed: InstallState = {
     ...state,
     status: 'installed',
-    ...(state.activation === undefined ? {} : { activation: { ...state.activation, daemonReloadAttempted: false, dshRestartAttempted: false, nginxActivationAttempted: false } }),
+    ...(state.activation === undefined ? {} : { activation: { ...state.activation, daemonReloadAttempted: false, dshRestartAttempted: false, caddyActivationAttempted: false } }),
   }
   host.replaceFile(installed.paths.stateFile, serializeInstallState(installed), 0o600)
   return installed
@@ -351,17 +337,17 @@ export async function executeSetup(host: InstallerHost, prepared: PreparedSetup,
   if (prepared.plan.status === 'unchanged') return prepared.state
   const paths = prepared.paths
   if (paths === undefined) throw new InstallerError('setup paths are unresolved', ExitCode.execution)
-  const secretMaterial = await prepareSecretMaterial(host, secrets)
-  const nginxInstalledByDshAuth = recoverInterruptedSetup(host, prepared)
-  const execution = executionContext(host, prepared, paths, nginxInstalledByDshAuth)
+  const caddy = resolveCaddyPackage(host)
+  const secretMaterial = await prepareSecretMaterial(host, prepared, secrets)
+  recoverInterruptedSetup(host, prepared)
+  const execution = executionContext(host, prepared, paths, caddy.binarySha256)
   let state = execution.state
 
   try {
     writeOwnershipJournal(host, paths, execution.context, state)
-    state = installNginxPackage(host, prepared, paths, state)
     state = installProfilePackage(host, prepared, state)
     state = createManagedDirectories(host, prepared, paths, execution.context, state)
-    state = await writeManagedConfiguration(host, prepared, paths, execution.context, secretMaterial, state)
+    state = writeManagedConfiguration(host, prepared, paths, execution.context, secretMaterial, caddy.executable, state)
     return finishInstallation(host, state)
   } catch (error) {
     try {

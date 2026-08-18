@@ -1,6 +1,10 @@
 import { once } from 'node:events'
 import { randomBytes } from 'node:crypto'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { authStateSecretId, createAuthStateDocument } from '../src/auth-state.js'
 import {
   CSRF_COOKIE,
   INSECURE_CSRF_COOKIE,
@@ -66,10 +70,12 @@ async function submitLogin(
 
 describe('observable authentication flow', () => {
   it('keeps password login unavailable while administrator credentials are unset', async () => {
-    const unconfigured = await startTestServer({
-      ...testConfig(credentials),
-      initialAdministrator: undefined,
-    })
+    const root = mkdtempSync(join(tmpdir(), 'dsh-auth-unconfigured-'))
+    const authStateFile = join(root, 'auth-state.json')
+    const sessionSecretFile = join(root, 'session-secret')
+    writeFileSync(sessionSecretFile, `${credentials.secret}\n`, { mode: 0o600 })
+    writeFileSync(authStateFile, `${JSON.stringify(createAuthStateDocument(authStateSecretId(Buffer.from(credentials.secret))))}\n`, { mode: 0o600 })
+    const unconfigured = await startTestServer(testConfig(credentials, { authStateFile, sessionSecretFile }))
     try {
       const page = await fetch(`${unconfigured.baseUrl}/auth/login`)
       const html = await page.text()
@@ -86,6 +92,7 @@ describe('observable authentication flow', () => {
     } finally {
       unconfigured.server.close()
       await once(unconfigured.server, 'close')
+      rmSync(root, { recursive: true, force: true })
     }
   }, 30_000)
 

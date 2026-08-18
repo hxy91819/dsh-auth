@@ -13,40 +13,51 @@ afterEach(() => {
 })
 
 describe('configuration', () => {
-  it('fails before activation when identity, hash, or session secret is absent', () => {
-    expect(Config['~standard'].validate({}).issues?.[0]?.message).toMatch(/userId/u)
-    expect(() => resolveConfig({ userId: 'u', username: 'name' })).toThrow(/passwordHash/u)
+  it('fails before activation when auth state or session secret files are absent', () => {
+    expect(Config['~standard'].validate({}).issues?.[0]?.message).toMatch(/authStateFile/u)
+    expect(() => resolveConfig({ authStateFile: '/tmp/missing-auth-state.json' })).toThrow(/sessionSecretFile|authStateFile/u)
   })
 
-  it('reads bounded absolute secret files and resolves administrator bootstrap credentials', async () => {
-    const credentials = await testCredentials()
+  it('reads bounded absolute secret files and rejects removed identity fields', () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-auth-config-'))
     roots.push(root)
-    const hashFile = join(root, 'hash')
     const secretFile = join(root, 'secret')
-    writeFileSync(hashFile, `${credentials.hash}\n`, { mode: 0o640 })
+    const authStateFile = join(root, 'auth-state.json')
     writeFileSync(secretFile, `${randomBytes(48).toString('base64url')}\n`, { mode: 0o640 })
+    writeFileSync(authStateFile, `${JSON.stringify({
+      schemaVersion: 2,
+      secretId: 'a'.repeat(43),
+      administrator: { id: 'admin', username: null, passwordHash: null, configuredAt: null },
+      sessions: [],
+    })}\n`, { mode: 0o600 })
 
     const config = resolveConfig({
-      userId: 'stable-id',
-      username: 'display-name',
-      roles: ['admin', 'operator'],
-      passwordHashFile: hashFile,
+      authStateFile,
       sessionSecretFile: secretFile,
     })
-    expect(config.initialAdministrator).toEqual({ username: 'display-name', passwordHash: credentials.hash })
+    expect(config.basePath).toBe('/auth')
+    expect(config.authStateFile).toBe(authStateFile)
     expect(config.sessionSecret.length).toBeGreaterThanOrEqual(32)
     expect(config.secureCookies).toBe(true)
-    expect(config.sessionTtlSeconds).toBe(72 * 60 * 60)
-    expect(config.idleTtlSeconds).toBe(72 * 60 * 60)
-    expect(config.sessionRenewalSeconds).toBe(60 * 60)
+    expect(config.loginTokenEnabled).toBe(false)
+    expect(() => resolveConfig({
+      authStateFile,
+      sessionSecretFile: secretFile,
+      userId: 'stable-id',
+    })).toThrow(/userId/u)
   }, 30_000)
 
-  it('rejects relative files, duplicate sources, and invalid lifetimes', async () => {
+  it('rejects relative files, unknown fields, and invalid lifetimes', async () => {
     const credentials = await testCredentials()
-    const base = { userId: 'u', username: 'name', passwordHash: credentials.hash, sessionSecret: credentials.secret }
-    expect(() => resolveConfig({ ...base, passwordHashFile: 'relative' })).toThrow(/exactly one/u)
-    expect(() => resolveConfig({ ...base, sessionStoreFile: 'relative' })).toThrow(/sessionStoreFile/u)
+    const root = mkdtempSync(join(tmpdir(), 'dsh-auth-config-invalid-'))
+    roots.push(root)
+    const secretFile = join(root, 'secret')
+    const authStateFile = join(root, 'auth-state.json')
+    writeFileSync(secretFile, `${credentials.secret}\n`, { mode: 0o600 })
+    writeFileSync(authStateFile, '{}\n', { mode: 0o600 })
+    const base = { authStateFile, sessionSecretFile: secretFile }
+    expect(() => resolveConfig({ ...base, sessionSecretFile: 'relative' })).toThrow(/absolute path/u)
+    expect(() => resolveConfig({ ...base, passwordHash: credentials.hash })).toThrow(/passwordHash/u)
     expect(() => resolveConfig({ ...base, idleTtlSeconds: 59 })).toThrow(/idleTtlSeconds/u)
     expect(() => resolveConfig({
       ...base,
@@ -62,21 +73,21 @@ describe('configuration', () => {
     const credentials = await testCredentials()
     const root = mkdtempSync(join(tmpdir(), 'dsh-auth-config-security-'))
     roots.push(root)
-    const hashFile = join(root, 'hash')
     const secretFile = join(root, 'secret')
+    const authStateFile = join(root, 'auth-state.json')
     const linkedSecretFile = join(root, 'secret-link')
-    writeFileSync(hashFile, `${credentials.hash}\n`, { mode: 0o600 })
+    writeFileSync(authStateFile, '{}\n', { mode: 0o600 })
     writeFileSync(secretFile, `${credentials.secret}\n`, { mode: 0o600 })
     symlinkSync(secretFile, linkedSecretFile)
 
-    chmodSync(hashFile, 0o644)
+    chmodSync(secretFile, 0o644)
     expect(() => resolveConfig({
-      userId: 'u', username: 'name', passwordHashFile: hashFile, sessionSecretFile: secretFile,
+      authStateFile, sessionSecretFile: secretFile,
     })).toThrow(/any access by others/u)
 
-    chmodSync(hashFile, 0o640)
+    chmodSync(secretFile, 0o600)
     expect(() => resolveConfig({
-      userId: 'u', username: 'name', passwordHashFile: hashFile, sessionSecretFile: linkedSecretFile,
+      authStateFile, sessionSecretFile: linkedSecretFile,
     })).toThrow(/sessionSecretFile cannot be read/u)
   }, 30_000)
 })

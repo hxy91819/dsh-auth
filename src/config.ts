@@ -1,47 +1,86 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs'
 import { isIP } from 'node:net'
-import { isAbsolute } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import type { StandardSchemaV1 } from '@standard-schema/spec'
-import { parsePasswordHash } from './password.js'
+
+/** Public authentication prefix is fixed for installer, Caddy, and browser URLs. */
+const AUTH_BASE_PATH = '/auth'
+
+const ALLOWED_KEYS = [
+  'authStateFile',
+  'sessionSecretFile',
+  'loginTokenEnabled',
+  'loginTokenDirectory',
+  'loginTokenFailureMessageZh',
+  'loginTokenFailureMessageEn',
+  'secureCookies',
+  'sessionTtlSeconds',
+  'idleTtlSeconds',
+  'sessionRenewalSeconds',
+  'maxSessions',
+  'loginWindowSeconds',
+  'loginMaxAttempts',
+  'loginBlockSeconds',
+  'loginTokenWindowSeconds',
+  'loginTokenMaxAttempts',
+  'loginTokenBlockSeconds',
+  'trustedProxyAddresses',
+] as const
+
+const REMOVED_KEYS: Readonly<Record<string, string>> = {
+  basePath: 'basePath is fixed to /auth',
+  userId: 'userId is fixed to admin and is not configurable',
+  username: 'username is stored in authStateFile, not plugin config',
+  roles: 'roles are fixed to admin and are not configurable',
+  passwordHash: 'passwordHash is stored in authStateFile, not plugin config',
+  passwordHashFile: 'passwordHashFile is not accepted; use authStateFile',
+  sessionSecret: 'sessionSecret literals are not accepted; use sessionSecretFile',
+  sessionStoreFile: 'sessionStoreFile is not accepted; use authStateFile',
+  maxPasswordBytes: 'maxPasswordBytes is not configurable',
+}
 
 /** User-facing plugin configuration before defaults and file-backed values resolve. */
 export interface ConfigInput {
-  readonly basePath?: string
-  readonly userId?: string
-  readonly username?: string
-  readonly roles?: readonly string[]
-  readonly passwordHash?: string
-  readonly passwordHashFile?: string
-  readonly sessionSecret?: string
+  readonly authStateFile?: string
   readonly sessionSecretFile?: string
-  readonly sessionStoreFile?: string
+  readonly loginTokenEnabled?: boolean
+  readonly loginTokenDirectory?: string
+  readonly loginTokenFailureMessageZh?: string
+  readonly loginTokenFailureMessageEn?: string
   readonly secureCookies?: boolean
   readonly sessionTtlSeconds?: number
   readonly idleTtlSeconds?: number
   readonly sessionRenewalSeconds?: number
   readonly maxSessions?: number
-  readonly maxPasswordBytes?: number
   readonly loginWindowSeconds?: number
   readonly loginMaxAttempts?: number
   readonly loginBlockSeconds?: number
+  readonly loginTokenWindowSeconds?: number
+  readonly loginTokenMaxAttempts?: number
+  readonly loginTokenBlockSeconds?: number
   readonly trustedProxyAddresses?: readonly string[]
 }
 
 /** Fully validated runtime configuration. */
 export interface ResolvedConfig {
-  readonly basePath: string
-  readonly initialAdministrator: { readonly username: string; readonly passwordHash: string } | undefined
+  readonly basePath: typeof AUTH_BASE_PATH
+  readonly authStateFile: string
   readonly sessionSecret: Buffer
-  readonly authStateFile: string | undefined
+  readonly loginTokenEnabled: boolean
+  readonly loginTokenDirectory?: string
+  readonly loginTokenFailureMessageZh?: string
+  readonly loginTokenFailureMessageEn?: string
   readonly secureCookies: boolean
   readonly sessionTtlSeconds: number
   readonly idleTtlSeconds: number
   readonly sessionRenewalSeconds: number
   readonly maxSessions: number
-  readonly maxPasswordBytes: number
   readonly loginWindowSeconds: number
   readonly loginMaxAttempts: number
   readonly loginBlockSeconds: number
+  readonly loginTokenWindowSeconds: number
+  readonly loginTokenMaxAttempts: number
+  readonly loginTokenBlockSeconds: number
   readonly trustedProxyAddresses: ReadonlySet<string>
 }
 
@@ -53,11 +92,9 @@ function record(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
-function requiredString(input: Record<string, unknown>, key: string, maxLength = 128): string {
+function requiredString(input: Record<string, unknown>, key: string): string {
   const value = input[key]
-  if (typeof value !== 'string' || value.length === 0 || value.length > maxLength) {
-    throw new Error(`${key} must be a non-empty string no longer than ${String(maxLength)} characters`)
-  }
+  if (typeof value !== 'string' || value.length === 0) throw new Error(`${key} must be a non-empty string`)
   return value
 }
 
@@ -82,21 +119,6 @@ function boolean(input: Record<string, unknown>, key: string, fallback: boolean)
   return value
 }
 
-function stringList(input: Record<string, unknown>, key: string, fallback: readonly string[]): readonly string[] {
-  const value = input[key] ?? fallback
-  if (!Array.isArray(value) || value.length === 0 || value.length > 32) {
-    throw new Error(`${key} must be a non-empty array with at most 32 entries`)
-  }
-  const entries = value.map((entry) => {
-    if (typeof entry !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/u.test(entry)) {
-      throw new Error(`${key} entries must be 1-64 character identifiers`)
-    }
-    return entry
-  })
-  if (new Set(entries).size !== entries.length) throw new Error(`${key} must not contain duplicates`)
-  return entries
-}
-
 function proxyAddressList(input: Record<string, unknown>): readonly string[] {
   const value = input.trustedProxyAddresses ?? ['127.0.0.1', '::1']
   if (!Array.isArray(value) || value.length === 0 || value.length > 32) {
@@ -112,8 +134,14 @@ function proxyAddressList(input: Record<string, unknown>): readonly string[] {
   return entries
 }
 
-function materialFromFile(path: string, label: string): string {
-  if (!isAbsolute(path)) throw new Error(`${label}File must be an absolute path`)
+function requiredAbsolutePath(input: Record<string, unknown>, key: string): string {
+  const value = requiredString(input, key)
+  if (!isAbsolute(value)) throw new Error(`${key} must be an absolute path`)
+  return value
+}
+
+function inspectSecretFile(path: string, label: string): string {
+  if (!isAbsolute(path)) throw new Error(`${label} must be an absolute path`)
   let descriptor: number | undefined
   try {
     if (process.platform === 'win32' && lstatSync(path).isSymbolicLink()) throw new Error('symbolic links are not allowed')
@@ -127,36 +155,48 @@ function materialFromFile(path: string, label: string): string {
     }
     return readFileSync(descriptor, 'utf8').replace(/\r?\n$/u, '')
   } catch (error) {
-    throw new Error(`${label}File cannot be read: ${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(`${label} cannot be read: ${error instanceof Error ? error.message : String(error)}`)
   } finally {
     if (descriptor !== undefined) closeSync(descriptor)
   }
 }
 
-function exclusiveMaterial(input: Record<string, unknown>, valueKey: string, fileKey: string): string {
-  const value = optionalString(input, valueKey)
-  const file = optionalString(input, fileKey)
-  if ((value === undefined) === (file === undefined)) {
-    throw new Error(`configure exactly one of ${valueKey} or ${fileKey}`)
+function inspectAuthStateFile(path: string): string {
+  let descriptor: number | undefined
+  try {
+    if (lstatSync(path).isSymbolicLink()) throw new Error('not a regular file')
+    const flags = constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW)
+    descriptor = openSync(path, flags)
+    const stat = fstatSync(descriptor)
+    if (!stat.isFile()) throw new Error('not a regular file')
+    if (process.platform !== 'win32') {
+      if ((stat.mode & 0o777) !== 0o600) throw new Error('permissions must be 0600')
+    }
+    if (stat.size === 0 || stat.size > 1024 * 1024) throw new Error('must contain 1-1048576 bytes')
+    return path
+  } catch (error) {
+    throw new Error(`authStateFile cannot be read: ${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor)
   }
-  if (value !== undefined) return value
-  if (file === undefined) throw new Error(`configure ${fileKey}`)
-  return materialFromFile(file, valueKey)
 }
 
-function validateBasePath(value: unknown): string {
-  const path = value ?? '/auth'
-  if (typeof path !== 'string' || !/^\/[A-Za-z0-9/_-]*[A-Za-z0-9_-]$/u.test(path) || path.includes('//')) {
-    throw new Error('basePath must be an absolute path without a trailing slash or repeated slash')
-  }
-  return path
-}
-
-function optionalAbsolutePath(input: Record<string, unknown>, key: string): string | undefined {
+function plainTextMessage(input: Record<string, unknown>, key: string): string | undefined {
   const value = optionalString(input, key)
   if (value === undefined) return undefined
-  if (!isAbsolute(value)) throw new Error(`${key} must be an absolute path`)
+  const points = Array.from(value).length
+  if (points < 1 || points > 500 || /\p{C}/u.test(value)) {
+    throw new Error(`${key} must be 1-500 Unicode code points of plain text without control characters`)
+  }
   return value
+}
+
+function assertAllowedKeys(input: Record<string, unknown>): void {
+  for (const key of Object.keys(input)) {
+    const removed = REMOVED_KEYS[key]
+    if (removed !== undefined) throw new Error(removed)
+    if (!(ALLOWED_KEYS as readonly string[]).includes(key)) throw new Error(`unknown config field ${key}`)
+  }
 }
 
 /**
@@ -166,22 +206,30 @@ function optionalAbsolutePath(input: Record<string, unknown>, key: string): stri
  */
 export function resolveConfig(value: unknown): ResolvedConfig {
   const input = record(value)
-  const userId = requiredString(input, 'userId')
-  const username = requiredString(input, 'username')
-  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(userId)) {
-    throw new Error('userId must be a 1-128 character stable identifier')
-  }
-  if (/\p{C}/u.test(username)) throw new Error('username must not contain control characters')
-  stringList(input, 'roles', ['admin'])
-  const passwordHash = exclusiveMaterial(input, 'passwordHash', 'passwordHashFile')
-  parsePasswordHash(passwordHash)
-  const secretText = exclusiveMaterial(input, 'sessionSecret', 'sessionSecretFile')
+  assertAllowedKeys(input)
+  const authStateFile = inspectAuthStateFile(requiredAbsolutePath(input, 'authStateFile'))
+  const secretText = inspectSecretFile(requiredAbsolutePath(input, 'sessionSecretFile'), 'sessionSecretFile')
   const sessionSecret = Buffer.from(secretText, 'utf8')
   if (sessionSecret.length < 32 || sessionSecret.length > 4096) {
     throw new Error('sessionSecret must contain 32-4096 bytes')
   }
   if (sessionSecret.includes(0)) throw new Error('sessionSecret must not contain NUL bytes')
 
+  const loginTokenEnabled = boolean(input, 'loginTokenEnabled', false)
+  const loginTokenDirectory = optionalString(input, 'loginTokenDirectory')
+  if (loginTokenEnabled) {
+    if (loginTokenDirectory === undefined || !isAbsolute(loginTokenDirectory)) {
+      throw new Error('loginTokenDirectory must be an absolute path when login tokens are enabled')
+    }
+    if (loginTokenDirectory !== join(dirname(authStateFile), 'login-tokens')) {
+      throw new Error('loginTokenDirectory must be the login-tokens directory beside authStateFile')
+    }
+  } else if (loginTokenDirectory !== undefined) {
+    throw new Error('loginTokenDirectory is only accepted when loginTokenEnabled is true')
+  }
+
+  const failureZh = plainTextMessage(input, 'loginTokenFailureMessageZh')
+  const failureEn = plainTextMessage(input, 'loginTokenFailureMessageEn')
   const sessionTtlSeconds = integer(input, 'sessionTtlSeconds', 72 * 60 * 60, 60, 30 * 24 * 60 * 60)
   const idleTtlSeconds = integer(input, 'idleTtlSeconds', 72 * 60 * 60, 60, sessionTtlSeconds)
   const sessionRenewalSeconds = integer(
@@ -191,22 +239,26 @@ export function resolveConfig(value: unknown): ResolvedConfig {
     1,
     Math.min(sessionTtlSeconds, idleTtlSeconds),
   )
-  const trustedProxyAddresses = proxyAddressList(input)
   return {
-    basePath: validateBasePath(input.basePath),
-    initialAdministrator: { username, passwordHash },
+    basePath: AUTH_BASE_PATH,
+    authStateFile,
     sessionSecret,
-    authStateFile: optionalAbsolutePath(input, 'sessionStoreFile'),
+    loginTokenEnabled,
+    ...(loginTokenDirectory === undefined ? {} : { loginTokenDirectory }),
+    ...(failureZh === undefined ? {} : { loginTokenFailureMessageZh: failureZh }),
+    ...(failureEn === undefined ? {} : { loginTokenFailureMessageEn: failureEn }),
     secureCookies: boolean(input, 'secureCookies', true),
     sessionTtlSeconds,
     idleTtlSeconds,
     sessionRenewalSeconds,
     maxSessions: integer(input, 'maxSessions', 16, 1, 1024),
-    maxPasswordBytes: integer(input, 'maxPasswordBytes', 1024, 64, 16 * 1024),
     loginWindowSeconds: integer(input, 'loginWindowSeconds', 60, 1, 60 * 60),
     loginMaxAttempts: integer(input, 'loginMaxAttempts', 5, 1, 100),
     loginBlockSeconds: integer(input, 'loginBlockSeconds', 5 * 60, 1, 24 * 60 * 60),
-    trustedProxyAddresses: new Set(trustedProxyAddresses),
+    loginTokenWindowSeconds: integer(input, 'loginTokenWindowSeconds', 60, 1, 60 * 60),
+    loginTokenMaxAttempts: integer(input, 'loginTokenMaxAttempts', 10, 1, 100),
+    loginTokenBlockSeconds: integer(input, 'loginTokenBlockSeconds', 5 * 60, 1, 24 * 60 * 60),
+    trustedProxyAddresses: new Set(proxyAddressList(input)),
   }
 }
 

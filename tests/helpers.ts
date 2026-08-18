@@ -1,9 +1,13 @@
 import { randomBytes } from 'node:crypto'
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { once } from 'node:events'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { AuthApplication } from '../src/application.js'
+import { authStateSecretId, createAuthStateDocument } from '../src/auth-state.js'
 import { resolveConfig } from '../src/config.js'
 import type { ConfigInput, ResolvedConfig } from '../src/config.js'
 import { hashPassword } from '../src/password.js'
@@ -28,12 +32,22 @@ export async function testCredentials(): Promise<TestCredentials> {
 
 /** Resolve a complete test configuration. */
 export function testConfig(credentials: TestCredentials, overrides: ConfigInput = {}): ResolvedConfig {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-auth-test-config-'))
+  const sessionSecretFile = overrides.sessionSecretFile ?? join(root, 'session-secret')
+  const authStateFile = overrides.authStateFile ?? join(root, 'auth-state.json')
+  mkdirSync(root, { recursive: true })
+  if (overrides.sessionSecretFile === undefined) writeFileSync(sessionSecretFile, `${credentials.secret}\n`, { mode: 0o600 })
+  if (!existsSync(authStateFile)) {
+    const document = createAuthStateDocument(authStateSecretId(Buffer.from(credentials.secret)), {
+      username: 'test-account',
+      passwordHash: credentials.hash,
+      configuredAt: Date.now(),
+    })
+    writeFileSync(authStateFile, `${JSON.stringify(document)}\n`, { mode: 0o600 })
+  }
   return resolveConfig({
-    userId: 'admin',
-    username: 'test-account',
-    roles: ['admin'],
-    passwordHash: credentials.hash,
-    sessionSecret: credentials.secret,
+    authStateFile,
+    sessionSecretFile,
     ...overrides,
   })
 }

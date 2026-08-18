@@ -12,39 +12,14 @@ export const ExitCode = {
 
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode]
 
-/** Nginx handling selected by an operator. */
-type NginxPolicy = 'require' | 'install' | 'skip'
-
 /** Public edge mode. */
 export type EdgeMode = 'https' | 'http'
 
-/** Fixed operating-system package installation recipe. */
-export interface PackageManagerDiscovery {
-  readonly kind: 'apt-get'
-  readonly executable: string
-  readonly source: string
-  readonly commands: readonly CommandSpec[]
-}
+/** Explicit administrator bootstrap selected at setup. */
+export type AdminBootstrap = 'password' | 'login-token'
 
-/** One argv-only subprocess invocation. */
-export interface CommandSpec {
-  readonly executable: string
-  readonly args: readonly string[]
-}
-
-/** Nginx facts discovered from the installed executable and main config. */
-export interface NginxDiscovery {
-  readonly installed: boolean
-  readonly executable?: string
-  readonly version?: string
-  readonly versionSupported: boolean
-  readonly authRequestModule: boolean
-  readonly configPath?: string
-  readonly includePath?: string
-  readonly serviceManager: 'systemd' | 'none'
-  readonly serviceName?: 'nginx.service'
-  readonly serviceLoadState?: string
-}
+/** HTTPS certificate source. */
+export type TlsMode = 'automatic' | 'manual'
 
 /** DSH systemd service facts required by the installer. */
 export interface DshServiceDiscovery {
@@ -62,31 +37,31 @@ export interface DshServiceDiscovery {
 /** Read-only host facts used to build an installation plan. */
 export interface HostDiscovery {
   readonly platform: NodeJS.Platform
+  readonly arch: string
   readonly effectiveUid: number | undefined
-  readonly nginx: NginxDiscovery
-  readonly packageManager?: PackageManagerDiscovery
   readonly dshService?: DshServiceDiscovery
 }
 
 /** Validated setup input shared by interactive and non-interactive callers. */
 export interface SetupRequest {
   readonly mode: EdgeMode
-  readonly nginxPolicy: NginxPolicy
-  readonly authorizeNginxInstall: boolean
   readonly outputDirectory?: string
   readonly dshService?: string
   readonly dshHome?: string
   readonly dshExecutable?: string
   readonly profile: string
   readonly packageSource: string
-  readonly userId: string
-  readonly username: string
-  readonly roles: readonly string[]
+  readonly adminBootstrap: AdminBootstrap
+  readonly adminUsername?: string
+  readonly loginTokenEnabled: boolean
+  readonly loginTokenErrorMessageZh?: string
+  readonly loginTokenErrorMessageEn?: string
   readonly upstream: string
   readonly listenAddress: string
   readonly httpPort: number
   readonly httpsPort: number
   readonly serverName?: string
+  readonly tls?: TlsMode
   readonly certificate?: string
   readonly certificateKey?: string
   readonly passwordSource?: PasswordSource
@@ -98,43 +73,51 @@ export type PasswordSource =
   | { readonly kind: 'file'; readonly path: string }
   | { readonly kind: 'interactive' }
 
-/** Paths owned by one completed system installation. */
+/** Paths owned by one completed system or output installation. */
 export interface ManagedPaths {
   readonly configDirectory: string
   readonly stateFile: string
   readonly environmentFile: string
-  readonly passwordHashFile: string
   readonly sessionSecretFile: string
-  readonly sessionDirectory: string
-  readonly sessionStoreFile: string
+  readonly caddyfile: string
+  readonly caddyBinary: string
+  readonly caddyBinaryDirectory: string
+  readonly caddyUnitFile: string
+  readonly caddyStateDirectory: string
+  readonly authStateDirectory: string
+  readonly authStateFile: string
+  readonly loginTokenDirectory: string
   readonly systemdDropInDirectory: string
   readonly systemdDropInFile: string
-  readonly nginxConfigFile: string
 }
 
 /** Persisted ownership and recovery record. It never contains secret material. */
 export interface InstallState {
-  readonly schemaVersion: 1
+  readonly schemaVersion: 2
   readonly status: 'installing' | 'installed'
   readonly fingerprint: string
-  readonly request: Omit<SetupRequest, 'passwordSource' | 'authorizeNginxInstall'>
+  readonly request: Omit<SetupRequest, 'passwordSource'>
   readonly paths: ManagedPaths
   readonly dshService: string
   readonly dshUser: string
+  readonly dshUid: number
+  readonly dshGid: number
   readonly dshHome: string
   readonly dshExecutable: string
-  readonly nginxExecutable: string
-  readonly nginxService: 'nginx.service'
-  readonly nginxInstalledByDshAuth: boolean
+  readonly publicOrigin: string
+  readonly authStateFile: string
+  readonly loginTokenEnabled: boolean
+  readonly caddyVersion: string
+  readonly caddyBinarySha256: string
   readonly profilePackageInstalledByDshAuth: boolean
   readonly createdPaths: readonly string[]
   readonly activation?: {
     readonly dshWasActive: boolean
-    readonly nginxWasActive: boolean
-    readonly nginxWasEnabled: boolean
+    readonly caddyWasActive: boolean
+    readonly caddyWasEnabled: boolean
     readonly daemonReloadAttempted: boolean
     readonly dshRestartAttempted: boolean
-    readonly nginxActivationAttempted: boolean
+    readonly caddyActivationAttempted: boolean
   }
 }
 
@@ -150,7 +133,7 @@ export interface PlanAction {
 
 /** Stable, secret-free installation plan. */
 export interface InstallationPlan {
-  readonly schemaVersion: 1
+  readonly schemaVersion: 2
   readonly operation: 'setup' | 'uninstall' | 'doctor'
   readonly mode: 'system' | 'output'
   readonly status: 'ready' | 'unchanged' | 'blocked'
@@ -177,6 +160,12 @@ export interface PreparedSetup {
   readonly fingerprint?: string
 }
 
+/** One argv-only subprocess invocation. */
+export interface CommandSpec {
+  readonly executable: string
+  readonly args: readonly string[]
+}
+
 /** Captured subprocess result. */
 export interface CommandResult {
   readonly status: number | null
@@ -188,6 +177,7 @@ export interface CommandResult {
 /** Injectable host operations used by discovery and execution. */
 export interface InstallerHost {
   readonly platform: NodeJS.Platform
+  readonly arch: string
   readonly effectiveUid: number | undefined
   run(command: CommandSpec, options?: { readonly env?: NodeJS.ProcessEnv }): CommandResult
   readFile(path: string): string
@@ -205,4 +195,6 @@ export interface InstallerHost {
   removeFile(path: string): void
   removeDirectory(path: string): void
   randomBytes(size: number): Buffer
+  resolveModulePackage(name: string): string
+  portBusy(address: string, port: number): boolean
 }

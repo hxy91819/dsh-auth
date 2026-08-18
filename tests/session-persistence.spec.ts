@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CSRF_COOKIE, SESSION_COOKIE } from '../src/cookies.js'
+import { authStateSecretId, createAuthStateDocument } from '../src/auth-state.js'
 import { SessionStore } from '../src/session.js'
 import type { TestCredentials } from './helpers.js'
 import {
@@ -47,10 +48,10 @@ describe('unified administrator authentication state', () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-auth-state-initialize-'))
     roots.push(root)
     const authStateFile = join(root, 'auth-state.json')
-    const config = {
-      ...testConfig(credentials, { sessionStoreFile: authStateFile }),
-      initialAdministrator: undefined,
-    }
+    const sessionSecretFile = join(root, 'session-secret')
+    writeFileSync(sessionSecretFile, `${credentials.secret}\n`, { mode: 0o600 })
+    writeFileSync(authStateFile, `${JSON.stringify(createAuthStateDocument(authStateSecretId(Buffer.from(credentials.secret))))}\n`, { mode: 0o600 })
+    const config = testConfig(credentials, { authStateFile, sessionSecretFile })
     const store = new SessionStore(config)
     const current = store.create(Date.now(), 'login-token')
     const stale = store.create(Date.now() + 1, 'login-token')
@@ -89,12 +90,16 @@ describe('unified administrator authentication state', () => {
     const credentials = await testCredentials()
     const root = mkdtempSync(join(tmpdir(), 'dsh-auth-state-write-failure-'))
     roots.push(root)
-    const stateDirectory = join(root, 'missing')
-    const authStateFile = join(stateDirectory, 'auth-state.json')
-    const store = new SessionStore(testConfig(credentials, { sessionStoreFile: authStateFile }))
-    expect(() => store.create(Date.now())).toThrow(/cannot be updated/u)
-
+    const stateDirectory = join(root, 'state')
     mkdirSync(stateDirectory)
+    const authStateFile = join(stateDirectory, 'auth-state.json')
+    const store = new SessionStore(testConfig(credentials, { authStateFile }))
+    const original = readFileSync(authStateFile, 'utf8')
+    rmSync(authStateFile)
+    mkdirSync(authStateFile)
+    expect(() => store.create(Date.now())).toThrow(/cannot be updated/u)
+    rmSync(authStateFile, { recursive: true, force: true })
+    writeFileSync(authStateFile, original, { mode: 0o600 })
     store.create(Date.now() + 1)
     const saved = JSON.parse(readFileSync(authStateFile, 'utf8')) as { sessions: unknown[] }
     expect(saved.sessions).toHaveLength(1)
@@ -107,10 +112,10 @@ describe('persistent renewable sessions', () => {
     const credentials = await testCredentials()
     const root = mkdtempSync(join(tmpdir(), 'dsh-auth-session-'))
     roots.push(root)
-    const sessionStoreFile = join(root, 'sessions.json')
+    const authStateFile = join(root, 'sessions.json')
     let now = Date.UTC(2026, 0, 1)
     const config = testConfig(credentials, {
-      sessionStoreFile,
+      authStateFile,
       sessionTtlSeconds: 72 * 60 * 60,
       idleTtlSeconds: 72 * 60 * 60,
       sessionRenewalSeconds: 60 * 60,
@@ -122,7 +127,7 @@ describe('persistent renewable sessions', () => {
     const sessionCookie = loggedIn.cookie
     const initialView = await fetch(`${first.baseUrl}/auth/session`, { headers: { cookie: sessionCookie } })
     const initialBody = await initialView.json() as { expiresAt: string }
-    expect(statSync(sessionStoreFile).mode & 0o777).toBe(0o600)
+    expect(statSync(authStateFile).mode & 0o777).toBe(0o600)
 
     now += 60 * 60 * 1000 + 1
     const renewed = await fetch(`${first.baseUrl}/auth/verify`, { headers: { cookie: sessionCookie } })
@@ -162,22 +167,22 @@ describe('persistent renewable sessions', () => {
     const credentials = await testCredentials()
     const root = mkdtempSync(join(tmpdir(), 'dsh-auth-session-invalid-'))
     roots.push(root)
-    const sessionStoreFile = join(root, 'sessions.json')
-    writeFileSync(sessionStoreFile, '{invalid\n', { mode: 0o600 })
-    await expect(startTestServer(testConfig(credentials, { sessionStoreFile }))).rejects.toThrow(/not valid JSON/u)
-    expect(readFileSync(sessionStoreFile, 'utf8')).toBe('{invalid\n')
+    const authStateFile = join(root, 'sessions.json')
+    writeFileSync(authStateFile, '{invalid\n', { mode: 0o600 })
+    await expect(startTestServer(testConfig(credentials, { authStateFile }))).rejects.toThrow(/not valid JSON/u)
+    expect(readFileSync(authStateFile, 'utf8')).toBe('{invalid\n')
 
     const legacyStateFile = join(root, 'legacy.json')
     writeFileSync(legacyStateFile, '{"version":1,"sessions":[]}\n', { mode: 0o600 })
     await expect(startTestServer(testConfig(credentials, {
-      sessionStoreFile: legacyStateFile,
+      authStateFile: legacyStateFile,
     }))).rejects.toThrow(/unsupported schemaVersion/u)
 
     const linkedStateFile = join(root, 'state-link.json')
     symlinkSync(legacyStateFile, linkedStateFile)
-    await expect(startTestServer(testConfig(credentials, {
-      sessionStoreFile: linkedStateFile,
-    }))).rejects.toThrow(/regular file/u)
+    expect(() => testConfig(credentials, {
+      authStateFile: linkedStateFile,
+    })).toThrow(/regular file/u)
 
     const duplicateStateFile = join(root, 'duplicate.json')
     const duplicateSession = {
@@ -196,21 +201,21 @@ describe('persistent renewable sessions', () => {
       sessions: [duplicateSession, duplicateSession],
     })}\n`, { mode: 0o600 })
     await expect(startTestServer(testConfig(credentials, {
-      sessionStoreFile: duplicateStateFile,
+      authStateFile: duplicateStateFile,
     }))).rejects.toThrow(/duplicate session/u)
 
     if (process.platform !== 'win32') {
       const exposedStoreFile = join(root, 'exposed.json')
       writeFileSync(exposedStoreFile, '{}\n', { mode: 0o600 })
       chmodSync(exposedStoreFile, 0o644)
-      await expect(startTestServer(testConfig(credentials, {
-        sessionStoreFile: exposedStoreFile,
-      }))).rejects.toThrow(/permissions/u)
+      expect(() => testConfig(credentials, {
+        authStateFile: exposedStoreFile,
+      })).toThrow(/permissions/u)
 
       chmodSync(exposedStoreFile, 0o400)
-      await expect(startTestServer(testConfig(credentials, {
-        sessionStoreFile: exposedStoreFile,
-      }))).rejects.toThrow(/permissions/u)
+      expect(() => testConfig(credentials, {
+        authStateFile: exposedStoreFile,
+      })).toThrow(/permissions/u)
     }
   }, 30_000)
 
@@ -218,8 +223,8 @@ describe('persistent renewable sessions', () => {
     const credentials = await testCredentials()
     const root = mkdtempSync(join(tmpdir(), 'dsh-auth-session-rotation-'))
     roots.push(root)
-    const sessionStoreFile = join(root, 'sessions.json')
-    const initial = await startTestServer(testConfig(credentials, { sessionStoreFile }))
+    const authStateFile = join(root, 'sessions.json')
+    const initial = await startTestServer(testConfig(credentials, { authStateFile }))
     const loggedIn = await login(initial.baseUrl, credentials)
     initial.server.close()
     await once(initial.server, 'close')
@@ -228,7 +233,7 @@ describe('persistent renewable sessions', () => {
     const rotated = await startTestServer(testConfig({
       ...replacement,
       secret: `${credentials.secret}-rotated-secret-material`,
-    }, { sessionStoreFile }))
+    }, { authStateFile }))
     expect((await fetch(`${rotated.baseUrl}/auth/verify`, { headers: { cookie: loggedIn.cookie } })).status).toBe(401)
     const originalLogin = await login(rotated.baseUrl, credentials)
     expect((await fetch(`${rotated.baseUrl}/auth/verify`, { headers: { cookie: originalLogin.cookie } })).status).toBe(204)
@@ -240,8 +245,8 @@ describe('persistent renewable sessions', () => {
     const credentials = await testCredentials()
     const root = mkdtempSync(join(tmpdir(), 'dsh-auth-session-capacity-'))
     roots.push(root)
-    const sessionStoreFile = join(root, 'sessions.json')
-    const config = testConfig(credentials, { sessionStoreFile, maxSessions: 1 })
+    const authStateFile = join(root, 'sessions.json')
+    const config = testConfig(credentials, { authStateFile, maxSessions: 1 })
     const initial = await startTestServer(config)
     const first = await login(initial.baseUrl, credentials)
     const second = await login(initial.baseUrl, credentials)

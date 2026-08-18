@@ -107,13 +107,29 @@ function phcBase64(value: Buffer): string {
   return value.toString('base64').replace(/=+$/u, '')
 }
 
+/** Administrator password policy: 15-128 Unicode code points and at most 1024 UTF-8 bytes. */
+const ADMIN_PASSWORD_MIN_POINTS = 15
+const ADMIN_PASSWORD_MAX_POINTS = 128
+export const ADMIN_PASSWORD_MAX_BYTES = 1024
+
+/** Reject passwords that are too short, too long, or too large in UTF-8. */
+export function assertAdministratorPassword(password: string): void {
+  const points = Array.from(password).length
+  if (points < ADMIN_PASSWORD_MIN_POINTS || points > ADMIN_PASSWORD_MAX_POINTS) {
+    throw new Error(`password must be ${String(ADMIN_PASSWORD_MIN_POINTS)}-${String(ADMIN_PASSWORD_MAX_POINTS)} Unicode code points`)
+  }
+  if (Buffer.byteLength(password, 'utf8') > ADMIN_PASSWORD_MAX_BYTES) {
+    throw new Error(`password must not exceed ${String(ADMIN_PASSWORD_MAX_BYTES)} UTF-8 bytes`)
+  }
+}
+
 /**
  * Generate a PHC-style Argon2id password hash with a random 16-byte salt.
- * @param password - password to hash; empty passwords are rejected.
- * @returns encoded hash suitable for `DSH_AUTH_PASSWORD_HASH`.
+ * @param password - password to hash; policy-invalid passwords are rejected.
+ * @returns encoded hash suitable for administrator authentication state.
  */
 export async function hashPassword(password: string): Promise<string> {
-  if (password.length === 0) throw new Error('password must not be empty')
+  assertAdministratorPassword(password)
   const salt = randomBytes(16)
   const parsed: PasswordHash = {
     ...DEFAULT_PASSWORD_PARAMETERS,

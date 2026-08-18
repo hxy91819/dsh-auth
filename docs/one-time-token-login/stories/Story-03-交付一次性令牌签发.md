@@ -3,11 +3,11 @@ kind: story
 id: STORY-03
 epic: EPIC-ONE-TIME-TOKEN-LOGIN
 title: 交付一次性令牌签发
-status: blocked
+status: todo
 gate: COMPONENT
 owner: 待领取
 depends_on: [STORY-02]
-blocker: STORY-02 未完成
+blocker: 无
 updated: 2026-08-18
 intent_version: 1
 ---

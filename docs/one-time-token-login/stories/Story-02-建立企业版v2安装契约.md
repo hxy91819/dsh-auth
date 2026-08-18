@@ -3,9 +3,9 @@ kind: story
 id: STORY-02
 epic: EPIC-ONE-TIME-TOKEN-LOGIN
 title: 建立企业版 v2 安装契约
-status: todo
+status: done
 gate: COMPONENT
-owner: 待领取
+owner: Cursor
 depends_on: [STORY-01.1]
 blocker: 无
 updated: 2026-08-18
@@ -32,11 +32,11 @@ intent_version: 2
 
 ## TODO
 
-- [ ] 落地 v2 setup、plan、帮助文本、参数解析和条件校验。
-- [ ] 更新 Cordis 配置、环境变量和固定 `/auth` 路由契约。
-- [ ] 实现平台包校验、Caddy 配置、TLS、systemd 和端口冲突契约。
-- [ ] 更新受管路径、doctor、回滚、uninstall 和旧 schema 拒绝行为。
-- [ ] 冻结 JSON schema v2、退出码和参数行为测试。
+- [x] 落地 v2 setup、plan、帮助文本、参数解析和条件校验。
+- [x] 更新 Cordis 配置、环境变量和固定 `/auth` 路由契约。
+- [x] 实现平台包校验、Caddy 配置、TLS、systemd 和端口冲突契约。
+- [x] 更新受管路径、doctor、回滚、uninstall 和旧 schema 拒绝行为。
+- [x] 冻结 JSON schema v2、退出码和参数行为测试。
 
 ## 验收标准
 
@@ -47,3 +47,9 @@ intent_version: 2
 - Caddy 使用独立 DynamicUser 服务、关闭 Admin API；端口冲突不接管用户服务。
 - automatic TLS 拒绝证书参数；manual TLS 要求证书和私钥，两种模式都可回滚。
 - schema v1 不自动迁移或覆盖，只返回明确的卸载、重装和会话失效说明。
+
+## 交付证据
+
+- [x] 表驱动 v2 CLI、password/login-token 两种 setup、secret-free JSON v2 和旧 Nginx/身份 flag 拒绝已有测试。
+- [x] Cordis 只接受 v2 路径与策略；x64/ARM64 包校验、automatic/manual TLS、端口冲突和 DynamicUser unit 已覆盖。
+- [x] doctor、rollback、uninstall、v1 拒绝和 installer 内部说明已更新；聚焦测试、`check:caddy`、code-health、typecheck 退出 0。

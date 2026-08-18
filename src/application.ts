@@ -6,7 +6,7 @@ import { accountPage, loginPage } from './html.js'
 import type { AuthMessage } from './html.js'
 import { BROWSER_BOOTSTRAP_FILE, browserBootstrapSource } from './browser-bootstrap.js'
 import { LoginLimiter } from './limiter.js'
-import { verifyPassword } from './password.js'
+import { ADMIN_PASSWORD_MAX_BYTES, verifyPassword } from './password.js'
 import { resolveUiPreferences } from './preferences.js'
 import type { HarnessUiSettings, UiPreferences } from './preferences.js'
 import { SessionStore } from './session.js'
@@ -280,13 +280,13 @@ export class AuthApplication {
     const username = form.get('username') ?? ''
     const submitted = form.get('password') ?? ''
     const passwordBytes = Buffer.byteLength(submitted, 'utf8')
-    const password = passwordBytes <= this.config.maxPasswordBytes ? submitted : ''
+    const password = passwordBytes <= ADMIN_PASSWORD_MAX_BYTES ? submitted : ''
     const credentials = this.sessions.passwordCredentials()
     const [passwordMatches, usernameMatches] = await Promise.all([
       credentials === undefined ? Promise.resolve(false) : verifyPassword(password, credentials.passwordHash),
       Promise.resolve(constantTimeTextEqual(username, credentials?.username ?? 'admin', this.config.sessionSecret)),
     ])
-    if (credentials === undefined || !passwordMatches || !usernameMatches || passwordBytes > this.config.maxPasswordBytes) {
+    if (credentials === undefined || !passwordMatches || !usernameMatches || passwordBytes > ADMIN_PASSWORD_MAX_BYTES) {
       this.renderLogin(res, 401, formReturnTo, preferences, 'invalidCredentials')
       return
     }

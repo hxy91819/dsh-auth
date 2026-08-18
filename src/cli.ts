@@ -5,79 +5,18 @@ import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline/promises'
 import { StringDecoder } from 'node:string_decoder'
 import { stdin as processStdin, stdout as processStdout, stderr as processStderr } from 'node:process'
-import { hashPassword } from './password.js'
-import { discoverHost, discoverPackageManager } from './installer/discovery.js'
+import { assertAdministratorPassword, hashPassword } from './password.js'
+import { parseArguments, renderHelp, type ParsedArguments } from './installer/cli-parser.js'
+import { discoverHost } from './installer/discovery.js'
 import { buildDoctorPlan, doctorExitCode } from './installer/doctor.js'
 import { InstallerError } from './installer/errors.js'
 import { executeSetup, type SetupSecrets } from './installer/executor.js'
 import { NodeInstallerHost } from './installer/host.js'
-import { discoverNginx } from './installer/nginx.js'
 import { prepareSetup } from './installer/plan.js'
 import { resetManagedPassword } from './installer/reset-password.js'
 import { executeUninstall, prepareUninstall } from './installer/uninstall.js'
 import { ExitCode, type InstallationPlan, type InstallerHost, type PasswordSource, type SetupRequest } from './installer/types.js'
-import { validateAbsolutePath, validateSetupRequest } from './installer/validation.js'
-
-const HELP = `Usage:
-  dsh-auth --help
-  dsh-auth --version
-  dsh-auth setup [options]
-  dsh-auth plan [options]
-  dsh-auth doctor [--json]
-  dsh-auth reset-password [--non-interactive] [--json]
-                          [--password-stdin|--password-file PATH]
-                          [--authorize-password-reset]
-  dsh-auth uninstall [--non-interactive] [--json] [--dry-run]
-                     [--authorize-uninstall]
-  dsh-auth hash [--password-stdin]
-  dsh-auth secret
-
-Global options:
-  --help, -h                        print this help and exit
-  --version                         print the CLI version and exit
-  --json                            emit one JSON document
-  --non-interactive                 disable prompts on a TTY
-
-Setup options:
-  --dry-run                         alias for the plan command
-  --nginx require|install|skip      Nginx policy (default: require; skip with --output-dir)
-  --authorize-nginx-install         required when setup would install Nginx
-  --dsh-service NAME.service        required for system setup; omit only with --output-dir
-  --dsh-home /absolute/path         optional; Harness home when discovery cannot infer it
-  --dsh-executable /absolute/path   optional; DSH executable when discovery cannot infer it
-  --profile NAME                    optional DSH profile (default: web)
-  --package dsh-auth@VERSION|/x.tgz optional pinned registry or offline source
-  --user-id ID --username NAME      required account identity when not prompting
-  --roles ID[,ID...]                optional comma-separated roles (default: admin)
-  --password-stdin                  password from stdin; required for a ready setup
-  --password-file /absolute/path    password from a 0600 secret file; choose one source
-  --mode https|http                 public edge mode (default: https)
-  --upstream 127.0.0.1:PORT         optional loopback DSH listener (default: 127.0.0.1:3080)
-  --listen-address IP               edge bind address (default: 0.0.0.0 for HTTPS)
-  --http-port PORT                  optional HTTP/redirect port (default: 80, or 8080 for HTTP)
-  --https-port PORT                 optional HTTPS port (default: 443)
-  --server-name HOST                required with --mode https
-  --certificate /absolute/path      required with --mode https
-  --certificate-key /absolute/path  required with --mode https
-  --output-dir /absolute/path       optional offline/container files; implies --nginx skip
-
-When stdin and stdout are TTYs and --non-interactive is not set, setup prompts
-for missing values. Otherwise it requires --user-id and --username. System
-setup also requires --dsh-service. HTTPS also requires --server-name,
---certificate, and --certificate-key. HTTP requires --listen-address. A ready
-setup also requires exactly one of --password-stdin or --password-file; plan
-and unchanged reruns do not.
-
-Flags accept a space-separated --name value form or --name=value. Duplicate
-flags and unknown flags fail with exit code 2. Global flags may precede the
-command. --json does not disable prompts; automation must pass
---non-interactive.
-
-Plain HTTP is accepted only on loopback or RFC1918/ULA addresses. Nginx package
-installation and uninstall each require their exact authorization flag when
-prompts are disabled. Password reset requires --authorize-password-reset when
-prompts are disabled; --yes and inline password options do not exist.
-`
+import { parseAdminBootstrap, parseLoginTokenPolicy, parseTlsMode, validateAbsolutePath, validateSetupRequest } from './installer/validation.js'
 
 interface CliIo {
   readonly interactive: boolean
@@ -154,81 +93,6 @@ class ProcessCliIo implements CliIo {
   }
 }
 
-interface ParsedArguments {
-  readonly command?: string
-  readonly values: ReadonlyMap<string, string>
-  readonly flags: ReadonlySet<string>
-}
-
-const VALUE_OPTIONS = new Set([
-  '--nginx', '--dsh-service', '--dsh-home', '--dsh-executable', '--profile', '--package', '--user-id', '--username', '--roles',
-  '--password-file', '--mode', '--upstream', '--listen-address', '--http-port', '--https-port', '--server-name', '--certificate',
-  '--certificate-key', '--output-dir',
-])
-const BOOLEAN_OPTIONS = new Set(['--non-interactive', '--json', '--dry-run', '--authorize-nginx-install', '--authorize-uninstall', '--authorize-password-reset', '--password-stdin', '--help', '-h', '--version'])
-
-interface OptionToken {
-  readonly name: string
-  readonly inlineValue?: string
-}
-
-function optionToken(token: string): OptionToken {
-  const separator = token.startsWith('--') ? token.indexOf('=') : -1
-  return separator === -1
-    ? { name: token }
-    : { name: token.slice(0, separator), inlineValue: token.slice(separator + 1) }
-}
-
-function addValueOption(argv: readonly string[], index: number, option: OptionToken, values: Map<string, string>): number {
-  if (values.has(option.name)) throw new InstallerError(`duplicate option ${option.name}`, ExitCode.usage)
-  if (option.inlineValue !== undefined) {
-    if (option.inlineValue.length === 0) throw new InstallerError(`${option.name} requires a value`, ExitCode.usage)
-    values.set(option.name, option.inlineValue)
-    return index
-  }
-  const value = argv[index + 1]
-  if (value === undefined || value.startsWith('-')) throw new InstallerError(`${option.name} requires a value`, ExitCode.usage)
-  values.set(option.name, value)
-  return index + 1
-}
-
-function addBooleanOption(option: OptionToken, flags: Set<string>): void {
-  if (option.inlineValue !== undefined) throw new InstallerError(`${option.name} does not take a value`, ExitCode.usage)
-  if (flags.has(option.name)) throw new InstallerError(`duplicate option ${option.name}`, ExitCode.usage)
-  flags.add(option.name)
-}
-
-function unknownOption(name: string): InstallerError {
-  if (name === '--dsh-bin') return new InstallerError('unknown option --dsh-bin; use --dsh-executable', ExitCode.usage)
-  if (name === '--stdin') return new InstallerError('unknown option --stdin; use --password-stdin', ExitCode.usage)
-  return new InstallerError(`unknown option ${name}`, ExitCode.usage)
-}
-
-function parseArguments(argv: readonly string[]): ParsedArguments {
-  const values = new Map<string, string>()
-  const flags = new Set<string>()
-  let command: string | undefined
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index] ?? ''
-    if (!token.startsWith('-')) {
-      if (command !== undefined) throw new InstallerError(`unexpected argument ${token}`, ExitCode.usage)
-      command = token
-      continue
-    }
-    const option = optionToken(token)
-    if (VALUE_OPTIONS.has(option.name)) {
-      index = addValueOption(argv, index, option, values)
-      continue
-    }
-    if (BOOLEAN_OPTIONS.has(option.name)) {
-      addBooleanOption(option, flags)
-      continue
-    }
-    throw unknownOption(option.name)
-  }
-  return { ...(command === undefined ? {} : { command }), values, flags }
-}
-
 function packageVersion(): string {
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { readonly version?: unknown }
   if (typeof manifest.version !== 'string') throw new InstallerError('package version is unavailable', ExitCode.execution)
@@ -258,11 +122,12 @@ async function requiredInteractive(io: CliIo, current: string | undefined, promp
 interface SetupInputs {
   readonly dshService: string | undefined
   readonly mode: 'https' | 'http' | undefined
-  readonly nginxPolicy: 'require' | 'install' | 'skip' | undefined
-  readonly userId: string | undefined
-  readonly username: string | undefined
+  readonly adminBootstrap: 'password' | 'login-token' | undefined
+  readonly adminUsername: string | undefined
+  readonly loginTokenEnabled: boolean | undefined
   readonly listenAddress: string | undefined
   readonly serverName: string | undefined
+  readonly tls: 'automatic' | 'manual' | undefined
   readonly certificate: string | undefined
   readonly certificateKey: string | undefined
 }
@@ -272,11 +137,12 @@ function parsedSetupInputs(parsed: ParsedArguments): SetupInputs {
   return {
     dshService: values.get('--dsh-service'),
     mode: enumOption(values.get('--mode'), ['https', 'http'] as const, 'mode'),
-    nginxPolicy: enumOption(values.get('--nginx'), ['require', 'install', 'skip'] as const, 'nginx policy'),
-    userId: values.get('--user-id'),
-    username: values.get('--username'),
+    adminBootstrap: parseAdminBootstrap(values.get('--admin-bootstrap')),
+    adminUsername: values.get('--admin-username'),
+    loginTokenEnabled: parseLoginTokenPolicy(values.get('--login-token')),
     listenAddress: values.get('--listen-address'),
     serverName: values.get('--server-name'),
+    tls: parseTlsMode(values.get('--tls')),
     certificate: values.get('--certificate'),
     certificateKey: values.get('--certificate-key'),
   }
@@ -286,88 +152,113 @@ async function interactiveTlsInputs(io: CliIo, inputs: SetupInputs): Promise<Set
   if (inputs.mode !== 'https') {
     return { ...inputs, listenAddress: await requiredInteractive(io, inputs.listenAddress, 'Trusted-network HTTP listen address: ') }
   }
-  return {
+  const tls = inputs.tls ?? enumOption((await io.readLine('TLS mode (automatic/manual) [automatic]: ')).trim() || 'automatic', ['automatic', 'manual'] as const, 'tls')
+  const withTls: SetupInputs = {
     ...inputs,
+    tls,
     listenAddress: inputs.listenAddress ?? ((await io.readLine('HTTPS listen address [0.0.0.0]: ')).trim() || '0.0.0.0'),
     serverName: await requiredInteractive(io, inputs.serverName, 'Public HTTPS hostname: '),
+  }
+  if (tls !== 'manual') return withTls
+  return {
+    ...withTls,
     certificate: await requiredInteractive(io, inputs.certificate, 'TLS certificate absolute path: '),
     certificateKey: await requiredInteractive(io, inputs.certificateKey, 'TLS certificate key absolute path: '),
   }
 }
 
-async function collectInteractiveSetupInputs(io: CliIo, host: InstallerHost, inputs: SetupInputs, output: boolean): Promise<SetupInputs> {
+async function collectInteractiveSetupInputs(io: CliIo, inputs: SetupInputs, output: boolean): Promise<SetupInputs> {
   const dshService = output ? inputs.dshService : await requiredInteractive(io, inputs.dshService, 'Existing DSH Web systemd unit: ')
-  const userId = inputs.userId ?? ((await io.readLine('Stable user id [admin]: ')).trim() || 'admin')
-  const username = inputs.username ?? ((await io.readLine('Login username [admin]: ')).trim() || 'admin')
+  const adminBootstrap = inputs.adminBootstrap ?? parseAdminBootstrap(await requiredInteractive(io, undefined, 'Administrator bootstrap (password/login-token): '))
+  const loginTokenEnabled = adminBootstrap === 'login-token'
+    ? true
+    : (inputs.loginTokenEnabled ?? parseLoginTokenPolicy((await io.readLine('Login tokens (enabled/disabled) [disabled]: ')).trim() || 'disabled'))
+  const adminUsername = adminBootstrap === 'password'
+    ? await requiredInteractive(io, inputs.adminUsername, 'Administrator username: ')
+    : inputs.adminUsername
   const mode = inputs.mode ?? enumOption((await io.readLine('Edge mode (https/http) [https]: ')).trim() || 'https', ['https', 'http'] as const, 'mode')
-  const collected: SetupInputs = {
+  return await interactiveTlsInputs(io, {
     ...inputs,
     dshService,
-    userId,
-    username,
+    adminBootstrap,
+    adminUsername,
+    loginTokenEnabled,
     mode,
-    nginxPolicy: inputs.nginxPolicy ?? (output ? 'skip' : discoverNginx(host).installed ? 'require' : 'install'),
-  }
-  return await interactiveTlsInputs(io, collected)
+  })
 }
 
-function assertRequiredSetupInputs(inputs: SetupInputs, output: boolean): asserts inputs is SetupInputs & {
-  readonly mode: 'https' | 'http'
-  readonly nginxPolicy: 'require' | 'install' | 'skip'
-  readonly userId: string
-  readonly username: string
-  readonly listenAddress: string
-} {
-  if (inputs.userId === undefined || inputs.username === undefined) throw new InstallerError('non-interactive setup requires --user-id and --username', ExitCode.usage)
-  if (inputs.listenAddress === undefined) throw new InstallerError('non-interactive HTTP setup requires --listen-address', ExitCode.usage)
-  if (inputs.mode === undefined || inputs.nginxPolicy === undefined) throw new InstallerError('setup defaults could not be resolved', ExitCode.execution)
-  if (!output && inputs.dshService === undefined) throw new InstallerError('non-interactive system setup requires --dsh-service', ExitCode.usage)
-}
-
-function withSetupDefaults(inputs: SetupInputs, output: boolean): SetupInputs {
+function withSetupDefaults(inputs: SetupInputs): SetupInputs {
   const mode = inputs.mode ?? 'https'
   return {
     ...inputs,
     mode,
-    nginxPolicy: inputs.nginxPolicy ?? (output ? 'skip' : 'require'),
     listenAddress: inputs.listenAddress ?? (mode === 'https' ? '0.0.0.0' : undefined),
+    tls: mode === 'https' ? (inputs.tls ?? 'automatic') : undefined,
+    loginTokenEnabled: inputs.adminBootstrap === 'login-token' ? true : inputs.loginTokenEnabled,
   }
 }
 
-async function setupRequest(parsed: ParsedArguments, io: CliIo, host: InstallerHost, interactive: boolean): Promise<SetupRequest> {
+function assertRequiredSetupInputs(inputs: SetupInputs, output: boolean): asserts inputs is SetupInputs & {
+  readonly mode: 'https' | 'http'
+  readonly adminBootstrap: 'password' | 'login-token'
+  readonly loginTokenEnabled: boolean
+  readonly listenAddress: string
+} {
+  if (inputs.adminBootstrap === undefined || inputs.loginTokenEnabled === undefined) {
+    throw new InstallerError('non-interactive setup requires --admin-bootstrap and --login-token', ExitCode.usage)
+  }
+  if (inputs.adminBootstrap === 'password' && inputs.adminUsername === undefined) {
+    throw new InstallerError('non-interactive password setup requires --admin-username', ExitCode.usage)
+  }
+  if (inputs.listenAddress === undefined) throw new InstallerError('non-interactive HTTP setup requires --listen-address', ExitCode.usage)
+  if (inputs.mode === undefined) throw new InstallerError('setup defaults could not be resolved', ExitCode.execution)
+  if (!output && inputs.dshService === undefined) throw new InstallerError('non-interactive system setup requires --dsh-service', ExitCode.usage)
+}
+
+function passwordSourceFrom(parsed: ParsedArguments, interactive: boolean, bootstrap: 'password' | 'login-token'): PasswordSource | undefined {
+  const passwordFile = parsed.values.get('--password-file')
+  const passwordStdin = parsed.flags.has('--password-stdin')
+  if (passwordFile !== undefined && passwordStdin) throw new InstallerError('choose exactly one password input source', ExitCode.usage)
+  if (bootstrap === 'login-token' && (passwordFile !== undefined || passwordStdin)) {
+    throw new InstallerError('--admin-bootstrap login-token does not accept a password source', ExitCode.usage)
+  }
+  if (passwordFile !== undefined) return { kind: 'file', path: passwordFile }
+  if (passwordStdin) return { kind: 'stdin' }
+  return bootstrap === 'password' && interactive ? { kind: 'interactive' } : undefined
+}
+
+async function setupRequest(parsed: ParsedArguments, io: CliIo, interactive: boolean): Promise<SetupRequest> {
   const values = parsed.values
   const outputDirectory = values.get('--output-dir')
   const collected = interactive
-    ? await collectInteractiveSetupInputs(io, host, parsedSetupInputs(parsed), outputDirectory !== undefined)
+    ? await collectInteractiveSetupInputs(io, parsedSetupInputs(parsed), outputDirectory !== undefined)
     : parsedSetupInputs(parsed)
-  const inputs = withSetupDefaults(collected, outputDirectory !== undefined)
+  const inputs = withSetupDefaults(collected)
   assertRequiredSetupInputs(inputs, outputDirectory !== undefined)
-  const passwordFile = values.get('--password-file')
-  const passwordStdin = parsed.flags.has('--password-stdin')
-  if (passwordFile !== undefined && passwordStdin) throw new InstallerError('choose exactly one password input source', ExitCode.usage)
-  const passwordSource: PasswordSource | undefined = passwordFile !== undefined
-    ? { kind: 'file', path: passwordFile }
-    : passwordStdin ? { kind: 'stdin' } : interactive ? { kind: 'interactive' } : undefined
+  const passwordSource = passwordSourceFrom(parsed, interactive, inputs.adminBootstrap)
   const dshHome = values.get('--dsh-home')
   const dshExecutable = values.get('--dsh-executable')
+  const failureZh = values.get('--login-token-error-message-zh')
+  const failureEn = values.get('--login-token-error-message-en')
   return validateSetupRequest({
     mode: inputs.mode,
-    nginxPolicy: inputs.nginxPolicy,
-    authorizeNginxInstall: parsed.flags.has('--authorize-nginx-install'),
     ...(outputDirectory === undefined ? {} : { outputDirectory }),
     ...(inputs.dshService === undefined ? {} : { dshService: inputs.dshService }),
     ...(dshHome === undefined ? {} : { dshHome }),
     ...(dshExecutable === undefined ? {} : { dshExecutable }),
     profile: values.get('--profile') ?? 'web',
     packageSource: values.get('--package') ?? `dsh-auth@${packageVersion()}`,
-    userId: inputs.userId,
-    username: inputs.username,
-    roles: (values.get('--roles') ?? 'admin').split(',').map(value => value.trim()).filter(Boolean),
+    adminBootstrap: inputs.adminBootstrap,
+    ...(inputs.adminUsername === undefined ? {} : { adminUsername: inputs.adminUsername }),
+    loginTokenEnabled: inputs.loginTokenEnabled,
+    ...(failureZh === undefined ? {} : { loginTokenErrorMessageZh: failureZh }),
+    ...(failureEn === undefined ? {} : { loginTokenErrorMessageEn: failureEn }),
     upstream: values.get('--upstream') ?? '127.0.0.1:3080',
     listenAddress: inputs.listenAddress,
     httpPort: numberOption(values.get('--http-port'), inputs.mode === 'http' ? 8080 : 80, 'HTTP port'),
     httpsPort: numberOption(values.get('--https-port'), 443, 'HTTPS port'),
     ...(inputs.serverName === undefined ? {} : { serverName: inputs.serverName }),
+    ...(inputs.tls === undefined ? {} : { tls: inputs.tls }),
     ...(inputs.certificate === undefined ? {} : { certificate: inputs.certificate }),
     ...(inputs.certificateKey === undefined ? {} : { certificateKey: inputs.certificateKey }),
     ...(passwordSource === undefined ? {} : { passwordSource }),
@@ -389,7 +280,7 @@ function renderPlan(plan: InstallationPlan): string {
 }
 
 function jsonOutput(command: string, status: string, exitCode: number, plan?: InstallationPlan): string {
-  return `${JSON.stringify({ schemaVersion: 1, command, status, exitCode, ...(plan === undefined ? {} : { plan }) })}\n`
+  return `${JSON.stringify({ schemaVersion: 2, command, status, exitCode, ...(plan === undefined ? {} : { plan }) })}\n`
 }
 
 function setupSecrets(io: CliIo, host: InstallerHost, source: PasswordSource | undefined, operation = 'setup'): SetupSecrets {
@@ -448,7 +339,7 @@ async function runResetPassword(parsed: ParsedArguments, io: CliIo, host: Instal
   }
   const reader = setupSecrets(io, host, source, 'reset-password')
   await resetManagedPassword(host, async () => await reader.readPassword())
-  if (json) io.writeOut(`${JSON.stringify({ schemaVersion: 1, command: 'reset-password', status: 'success', exitCode: ExitCode.success, sessionsRevoked: true })}\n`)
+  if (json) io.writeOut(`${JSON.stringify({ schemaVersion: 2, command: 'reset-password', status: 'success', exitCode: ExitCode.success, sessionsRevoked: true })}\n`)
   else io.writeOut('dsh-auth password reset completed; all existing sessions were revoked.\n')
   return ExitCode.success
 }
@@ -460,22 +351,6 @@ function discoverSetupHost(host: InstallerHost, request: SetupRequest) {
     ...(request.dshExecutable === undefined ? {} : { dshExecutable: request.dshExecutable }),
     output: request.outputDirectory !== undefined,
   })
-}
-
-async function authorizeInteractiveNginxInstall(
-  io: CliIo,
-  host: InstallerHost,
-  request: SetupRequest,
-): Promise<SetupRequest | undefined> {
-  const packageManager = discoverPackageManager(host)
-  if (packageManager === undefined) return request
-  io.writeOut(`Nginx is missing. dsh-auth will use ${packageManager.source} with these fixed commands:\n`)
-  for (const item of packageManager.commands) io.writeOut(`  ${item.executable} ${item.args.join(' ')}\n`)
-  io.writeOut('This changes system packages and requires root. No curl|sh or third-party repository is used.\n')
-  const confirmation = (await io.readLine('Type install-nginx to authorize these commands: ')).trim()
-  if (confirmation === 'install-nginx') return { ...request, authorizeNginxInstall: true }
-  io.writeOut('Cancelled before any write. Later command: sudo dsh-auth setup --nginx install --authorize-nginx-install\n')
-  return undefined
 }
 
 function writePlanResult(io: CliIo, plan: InstallationPlan, json: boolean): number {
@@ -497,21 +372,13 @@ async function runSetupOrPlan(parsed: ParsedArguments, io: CliIo, host: Installe
   if (invalid.length > 0) throw new InstallerError(`${command} does not accept ${invalid.join(', ')}`, ExitCode.usage)
   const json = parsed.flags.has('--json')
   const interactive = io.interactive && !parsed.flags.has('--non-interactive')
-  let request = await setupRequest(parsed, io, host, interactive)
-  let discovery = discoverSetupHost(host, request)
-
-  if (interactive && command === 'setup' && request.nginxPolicy === 'install' && !discovery.nginx.installed) {
-    const authorized = await authorizeInteractiveNginxInstall(io, host, request)
-    if (authorized === undefined) return ExitCode.cancelled
-    request = authorized
-    discovery = discoverSetupHost(host, request)
-  }
-
+  const request = await setupRequest(parsed, io, interactive)
+  const discovery = discoverSetupHost(host, request)
   const execute = command === 'setup'
   const prepared = prepareSetup(host, request, discovery, { execute })
   if (command === 'plan') return writePlanResult(io, prepared.plan, json)
   if (prepared.plan.status === 'blocked') throw new InstallerError('setup prerequisites are not satisfied', ExitCode.prerequisite, prepared.plan.diagnostics)
-  if (prepared.plan.status === 'ready') validatePasswordSource(host, request.passwordSource)
+  if (prepared.plan.status === 'ready' && request.adminBootstrap === 'password') validatePasswordSource(host, request.passwordSource)
   if (interactive && prepared.plan.status === 'ready' && !await confirmInteractiveSetup(io, prepared.plan)) return ExitCode.cancelled
   await executeSetup(host, prepared, setupSecrets(io, host, request.passwordSource))
   io.writeOut(json ? jsonOutput('setup', prepared.plan.status === 'unchanged' ? 'unchanged' : 'success', ExitCode.success, prepared.plan) : `dsh-auth setup ${prepared.plan.status === 'unchanged' ? 'is unchanged' : 'completed'} successfully.\n`)
@@ -529,11 +396,14 @@ async function runLegacy(parsed: ParsedArguments, io: CliIo): Promise<number> {
     if (unexpected.length > 0) throw new InstallerError('hash accepts only --password-stdin', ExitCode.usage)
     const stdin = parsed.flags.has('--password-stdin')
     const first = stdin ? await io.readStdin() : await io.readHidden('Password: ')
-    if (first.length === 0) throw new InstallerError('password must not be empty', ExitCode.usage)
-    if (Buffer.byteLength(first, 'utf8') > 16 * 1024) throw new InstallerError('password input is too large', ExitCode.usage)
     if (!stdin) {
       const second = await io.readHidden('Confirm password: ')
       if (first !== second) throw new InstallerError('passwords do not match', ExitCode.usage)
+    }
+    try {
+      assertAdministratorPassword(first)
+    } catch (error) {
+      throw new InstallerError(error instanceof Error ? error.message : 'password is invalid', ExitCode.usage)
     }
     io.writeOut(`${await hashPassword(first)}\n`)
     return ExitCode.success
@@ -576,13 +446,13 @@ async function runUninstall(parsed: ParsedArguments, io: CliIo, host: InstallerH
   if (result.state === undefined) return ExitCode.success
   if (!await authorizeUninstall(parsed, io, result.plan)) return ExitCode.cancelled
   executeUninstall(host, result.state)
-  io.writeOut(json ? jsonOutput('uninstall', 'success', ExitCode.success, result.plan) : 'dsh-auth uninstall completed; shared Nginx packages were retained.\n')
+  io.writeOut(json ? jsonOutput('uninstall', 'success', ExitCode.success, result.plan) : 'dsh-auth uninstall completed; the owned Caddy edge was removed.\n')
   return ExitCode.success
 }
 
 async function dispatchCommand(parsed: ParsedArguments, io: CliIo, host: InstallerHost): Promise<number> {
   if (parsed.flags.has('--help') || parsed.flags.has('-h') || parsed.command === 'help') {
-    io.writeOut(HELP)
+    io.writeOut(renderHelp())
     return ExitCode.success
   }
   if (parsed.flags.has('--version')) {
@@ -590,7 +460,7 @@ async function dispatchCommand(parsed: ParsedArguments, io: CliIo, host: Install
     return ExitCode.success
   }
   if (parsed.command === undefined) {
-    io.writeOut(HELP)
+    io.writeOut(renderHelp())
     return ExitCode.success
   }
   if (parsed.command === 'setup' || parsed.command === 'plan') {
@@ -606,7 +476,7 @@ async function dispatchCommand(parsed: ParsedArguments, io: CliIo, host: Install
 function writeCliFailure(argv: readonly string[], io: CliIo, error: unknown): number {
   const failure = error instanceof InstallerError ? error : new InstallerError(error instanceof Error ? error.message : String(error), ExitCode.execution)
   if (argv.includes('--json')) {
-    io.writeOut(`${JSON.stringify({ schemaVersion: 1, command: argv[0] ?? 'help', status: 'error', exitCode: failure.exitCode, message: failure.message, diagnostics: failure.diagnostics })}\n`)
+    io.writeOut(`${JSON.stringify({ schemaVersion: 2, command: argv[0] ?? 'help', status: 'error', exitCode: failure.exitCode, message: failure.message, diagnostics: failure.diagnostics })}\n`)
     return failure.exitCode
   }
   io.writeError(`dsh-auth: ${failure.message}\n`)

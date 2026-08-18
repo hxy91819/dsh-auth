@@ -1,6 +1,6 @@
-import { createHmac } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import {
+  authStateSecretId,
   loadAuthState,
   persistAuthState,
   type AdministratorState,
@@ -53,10 +53,8 @@ export class SessionStore {
   constructor(private readonly config: ResolvedConfig, now: () => number = Date.now) {
     this.signer = new CookieSigner(config.sessionSecret)
     this.cookieName = cookieNames(config.secureCookies).session
-    this.secretId = createHmac('sha256', config.sessionSecret)
-      .update('dsh-auth-auth-state-v2')
-      .digest('base64url')
-    const loaded = loadAuthState(config.authStateFile, this.secretId, config.initialAdministrator, now())
+    this.secretId = authStateSecretId(config.sessionSecret)
+    const loaded = loadAuthState(config.authStateFile, this.secretId)
     this.administrator = loaded.document.administrator
     for (const session of loaded.document.sessions) this.sessions.set(session.token, session)
     const changed = this.prune(now()) || this.enforceCapacity()

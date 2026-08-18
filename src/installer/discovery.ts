@@ -1,48 +1,12 @@
 import { basename, dirname, join } from 'node:path'
 import { InstallerError } from './errors.js'
-import { discoverNginx } from './nginx.js'
-import { ExitCode, type CommandSpec, type DshServiceDiscovery, type HostDiscovery, type InstallerHost, type PackageManagerDiscovery } from './types.js'
+import { ExitCode, type CommandSpec, type DshServiceDiscovery, type HostDiscovery, type InstallerHost } from './types.js'
 import { validateAbsolutePath, validateServiceName } from './validation.js'
 
 function successful(host: InstallerHost, command: CommandSpec): string | undefined {
   const result = host.run(command)
   if (result.error !== undefined || result.status !== 0) return undefined
   return result.stdout.trim()
-}
-
-function parseOsRelease(contents: string): ReadonlyMap<string, string> {
-  const values = new Map<string, string>()
-  for (const line of contents.split('\n')) {
-    const match = /^([A-Z_]+)=(.*)$/u.exec(line)
-    if (match === null) continue
-    let value = match[2] ?? ''
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1)
-    }
-    values.set(match[1] ?? '', value)
-  }
-  return values
-}
-
-/** Detect only package-manager combinations covered by the install contract. */
-export function discoverPackageManager(host: InstallerHost): PackageManagerDiscovery | undefined {
-  if (!host.regularFile('/etc/os-release')) return undefined
-  const release = parseOsRelease(host.readFile('/etc/os-release'))
-  const id = release.get('ID') ?? ''
-  const version = release.get('VERSION_ID') ?? ''
-  const aptSupported = id === 'ubuntu' && version === '24.04'
-  if (aptSupported && host.regularFile('/usr/bin/apt-get')) {
-    return {
-      kind: 'apt-get',
-      executable: '/usr/bin/apt-get',
-      source: `${id} system repositories`,
-      commands: [
-        { executable: '/usr/bin/apt-get', args: ['update'] },
-        { executable: '/usr/bin/apt-get', args: ['install', '--yes', 'nginx'] },
-      ],
-    }
-  }
-  return undefined
 }
 
 function systemctlPath(host: InstallerHost): string | undefined {
@@ -142,7 +106,6 @@ export function discoverDshService(
   }
 }
 
-/** Reject a root service executable reachable through writable path components. */
 function assertRootOwnedExecutable(host: InstallerHost, executable: string): void {
   assertRootOwnedPath(host, executable, false)
 }
@@ -173,13 +136,14 @@ function assertRootOwnedPath(host: InstallerHost, path: string, directory: boole
 export function discoverHost(host: InstallerHost, input: { readonly dshService?: string; readonly dshHome?: string; readonly dshExecutable?: string; readonly output: boolean }): HostDiscovery {
   const dshService = input.output || input.dshService === undefined
     ? undefined
-    : discoverDshService(host, input.dshService, { ...(input.dshHome === undefined ? {} : { dshHome: input.dshHome }), ...(input.dshExecutable === undefined ? {} : { dshExecutable: input.dshExecutable }) })
-  const packageManager = discoverPackageManager(host)
+    : discoverDshService(host, input.dshService, {
+      ...(input.dshHome === undefined ? {} : { dshHome: input.dshHome }),
+      ...(input.dshExecutable === undefined ? {} : { dshExecutable: input.dshExecutable }),
+    })
   return {
     platform: host.platform,
+    arch: host.arch,
     effectiveUid: host.effectiveUid,
-    nginx: discoverNginx(host),
-    ...(packageManager === undefined ? {} : { packageManager }),
     ...(dshService === undefined ? {} : { dshService }),
   }
 }

@@ -1,4 +1,5 @@
-import { hashPassword, parsePasswordHash } from '../password.js'
+import { authStateSecretId, createAuthStateDocument } from '../auth-state.js'
+import { assertAdministratorPassword, hashPassword, parsePasswordHash } from '../password.js'
 import { discoverDshService } from './discovery.js'
 import { DEFAULT_STATE_FILE } from './doctor.js'
 import { InstallerError } from './errors.js'
@@ -19,39 +20,54 @@ function runChecked(host: InstallerHost, command: CommandSpec, code: string): vo
 }
 
 interface CredentialBackup {
-  readonly passwordHash: string
+  readonly authState: string
   readonly sessionSecret: string
-  readonly hashMode: number
+  readonly authMode: number
   readonly secretMode: number
-  readonly uid: number
-  readonly gid: number
+  readonly authUid: number
+  readonly authGid: number
+  readonly secretUid: number
+  readonly secretGid: number
 }
 
-function inspectCredentials(host: InstallerHost, passwordHashFile: string, sessionSecretFile: string, expectedGid: number): CredentialBackup {
-  for (const path of [passwordHashFile, sessionSecretFile]) {
-    if (!host.regularFile(path) || host.realpath(path) !== path) throw new InstallerError('managed credential file is missing or not a regular file', ExitCode.conflict)
-    const stat = host.stat(path)
-    if (stat.uid !== 0 || stat.gid !== expectedGid || (stat.mode & 0o777) !== 0o640) {
-      throw new InstallerError('managed credential ownership or permissions have drifted', ExitCode.conflict)
-    }
+function inspectCredentials(host: InstallerHost, authStateFile: string, sessionSecretFile: string, expectedUid: number, expectedGid: number): CredentialBackup {
+  if (!host.regularFile(authStateFile) || host.realpath(authStateFile) !== authStateFile) {
+    throw new InstallerError('managed authentication state is missing or not a regular file', ExitCode.conflict)
   }
-  const passwordHash = host.readFile(passwordHashFile)
+  if (!host.regularFile(sessionSecretFile) || host.realpath(sessionSecretFile) !== sessionSecretFile) {
+    throw new InstallerError('managed credential file is missing or not a regular file', ExitCode.conflict)
+  }
+  const authStat = host.stat(authStateFile)
+  const secretStat = host.stat(sessionSecretFile)
+  if (authStat.uid !== expectedUid || authStat.gid !== expectedGid || (authStat.mode & 0o777) !== 0o600) {
+    throw new InstallerError('managed authentication state ownership or permissions have drifted', ExitCode.conflict)
+  }
+  if (secretStat.uid !== 0 || secretStat.gid !== expectedGid || (secretStat.mode & 0o777) !== 0o640) {
+    throw new InstallerError('managed credential ownership or permissions have drifted', ExitCode.conflict)
+  }
   const sessionSecret = host.readFile(sessionSecretFile)
-  const encodedHash = passwordHash.endsWith('\n') ? passwordHash.slice(0, -1) : passwordHash
-  try {
-    if (encodedHash.includes('\n')) throw new Error('password hash contains multiple lines')
-    parsePasswordHash(encodedHash)
-  } catch {
-    throw new InstallerError('managed password hash is invalid', ExitCode.conflict)
-  }
   if (!/^[A-Za-z0-9_-]{43}\n?$/u.test(sessionSecret)) throw new InstallerError('managed session secret is invalid', ExitCode.conflict)
+  const authState = host.readFile(authStateFile)
+  let parsed: { readonly schemaVersion?: unknown; readonly administrator?: { readonly username?: unknown; readonly passwordHash?: unknown } }
+  try {
+    parsed = JSON.parse(authState) as typeof parsed
+  } catch {
+    throw new InstallerError('managed authentication state is invalid', ExitCode.conflict)
+  }
+  if (parsed.schemaVersion !== 2) throw new InstallerError('managed authentication state is invalid', ExitCode.conflict)
+  if (typeof parsed.administrator?.username !== 'string' || typeof parsed.administrator.passwordHash !== 'string') {
+    throw new InstallerError('password reset requires a configured administrator', ExitCode.conflict)
+  }
+  parsePasswordHash(parsed.administrator.passwordHash)
   return {
-    passwordHash,
+    authState,
     sessionSecret,
-    hashMode: host.stat(passwordHashFile).mode,
-    secretMode: host.stat(sessionSecretFile).mode,
-    uid: 0,
-    gid: expectedGid,
+    authMode: authStat.mode,
+    secretMode: secretStat.mode,
+    authUid: authStat.uid,
+    authGid: authStat.gid,
+    secretUid: secretStat.uid,
+    secretGid: secretStat.gid,
   }
 }
 
@@ -70,26 +86,42 @@ export async function resetManagedPassword(host: InstallerHost, readPassword: ()
   if (state.status !== 'installed' || state.request.outputDirectory !== undefined) throw new InstallerError('password reset requires a completed system installation', ExitCode.conflict)
   const service = discoverDshService(host, state.dshService, { dshHome: state.dshHome, dshExecutable: state.dshExecutable })
   if (!['active', 'inactive', 'failed'].includes(service.activeState)) throw new InstallerError('DSH service is changing state; retry password reset after it settles', ExitCode.prerequisite)
-  const backup = inspectCredentials(host, state.paths.passwordHashFile, state.paths.sessionSecretFile, service.gid)
+  const backup = inspectCredentials(host, state.paths.authStateFile, state.paths.sessionSecretFile, service.uid, service.gid)
+  const parsed = JSON.parse(backup.authState) as { readonly administrator: { readonly username: string } }
   const password = await readPassword()
-  if (password.length === 0) throw new InstallerError('password must not be empty', ExitCode.usage)
-  if (Buffer.byteLength(password, 'utf8') > 16 * 1024) throw new InstallerError('password input is too large', ExitCode.usage)
+  try {
+    assertAdministratorPassword(password)
+  } catch (error) {
+    throw new InstallerError(error instanceof Error ? error.message : 'password is invalid', ExitCode.usage)
+  }
   const passwordHash = await hashPassword(password)
   const sessionSecret = host.randomBytes(32).toString('base64url')
+  const document = createAuthStateDocument(authStateSecretId(Buffer.from(sessionSecret)), {
+    username: parsed.administrator.username,
+    passwordHash,
+    configuredAt: Date.now(),
+  })
   const systemctlPath = systemctl(host)
-  let restartAttempted = false
+  const wasActive = service.activeState === 'active'
+  let stopped = false
   try {
-    replaceCredential(host, state.paths.passwordHashFile, `${passwordHash}\n`, 0o640, 0, service.gid)
+    if (wasActive) {
+      runChecked(host, { executable: systemctlPath, args: ['stop', state.dshService] }, 'PASSWORD_RESET_DSH_STOP_FAILED')
+      stopped = true
+    }
+    replaceCredential(host, state.paths.authStateFile, `${JSON.stringify(document)}\n`, 0o600, backup.authUid, backup.authGid)
     replaceCredential(host, state.paths.sessionSecretFile, `${sessionSecret}\n`, 0o640, 0, service.gid)
-    if (service.activeState === 'active') {
-      restartAttempted = true
-      runChecked(host, { executable: systemctlPath, args: ['restart', state.dshService] }, 'PASSWORD_RESET_DSH_RESTART_FAILED')
+    if (wasActive) {
+      runChecked(host, { executable: systemctlPath, args: ['start', state.dshService] }, 'PASSWORD_RESET_DSH_START_FAILED')
+      stopped = false
     }
   } catch (error) {
     try {
-      replaceCredential(host, state.paths.passwordHashFile, backup.passwordHash, backup.hashMode, backup.uid, backup.gid)
-      replaceCredential(host, state.paths.sessionSecretFile, backup.sessionSecret, backup.secretMode, backup.uid, backup.gid)
-      if (restartAttempted) runChecked(host, { executable: systemctlPath, args: ['restart', state.dshService] }, 'PASSWORD_RESET_ROLLBACK_RESTART_FAILED')
+      replaceCredential(host, state.paths.authStateFile, backup.authState, backup.authMode, backup.authUid, backup.authGid)
+      replaceCredential(host, state.paths.sessionSecretFile, backup.sessionSecret, backup.secretMode, backup.secretUid, backup.secretGid)
+      if (stopped || wasActive) {
+        runChecked(host, { executable: systemctlPath, args: [wasActive ? 'start' : 'stop', state.dshService] }, 'PASSWORD_RESET_ROLLBACK_SERVICE_FAILED')
+      }
     } catch (rollbackError) {
       throw new InstallerError('password reset failed and credential rollback also failed', ExitCode.execution, [
         { code: 'PASSWORD_RESET_FAILED', severity: 'error', message: error instanceof Error ? error.message : String(error) },

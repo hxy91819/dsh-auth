@@ -1,8 +1,9 @@
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
+import { CADDY_SERVICE_NAME, CADDY_VERSION, renderCaddyfile, renderCaddyUnit, resolveCaddyPackage } from './caddy.js'
 import { renderEnvironmentFile, renderSystemdDropIn } from './config-files.js'
-import { discoverDshService, discoverPackageManager } from './discovery.js'
+import { discoverDshService } from './discovery.js'
 import { InstallerError } from './errors.js'
-import { discoverNginx, renderNginxConfig } from './nginx.js'
 import { expectedManagedOwners } from './ownership.js'
 import { readInstallState, validateStatePaths } from './plan.js'
 import { ExitCode, type Diagnostic, type DshServiceDiscovery, type InstallationPlan, type InstallerHost, type InstallState } from './types.js'
@@ -23,11 +24,15 @@ function managedFileDiagnostics(host: InstallerHost, state: InstallState): Diagn
     [state.paths.configDirectory, 0o750],
     [state.paths.stateFile, 0o600],
     [state.paths.environmentFile, 0o640],
-    [state.paths.passwordHashFile, 0o640],
     [state.paths.sessionSecretFile, 0o640],
-    [state.paths.sessionDirectory, 0o700],
+    [state.paths.caddyfile, 0o644],
+    [state.paths.caddyBinary, 0o755],
+    [state.paths.caddyBinaryDirectory, 0o755],
+    [state.paths.caddyUnitFile, 0o644],
+    [state.paths.authStateDirectory, 0o700],
+    [state.paths.authStateFile, 0o600],
+    [state.paths.loginTokenDirectory, 0o700],
     [state.paths.systemdDropInFile, 0o644],
-    [state.paths.nginxConfigFile, 0o644],
   ])
   for (const [path, mode] of expectedModes) {
     const diagnostic = permissionDiagnostic(host, path, mode)
@@ -36,20 +41,22 @@ function managedFileDiagnostics(host: InstallerHost, state: InstallState): Diagn
   if (host.regularFile(state.paths.environmentFile) && /^DSH_AUTH_(?:PASSWORD_HASH|SESSION_SECRET)=/mu.test(host.readFile(state.paths.environmentFile))) {
     diagnostics.push({ code: 'INLINE_SECRET_FOUND', severity: 'error', message: 'The managed environment file contains an inline secret value.', remediation: 'Remove public reachability and reinstall with file-backed secrets.' })
   }
-  const request = { ...state.request, authorizeNginxInstall: false }
   const expectedFiles = new Map<string, string>([
-    [state.paths.environmentFile, renderEnvironmentFile(request, state.paths)],
+    [state.paths.environmentFile, renderEnvironmentFile(state.request, state.paths)],
     [state.paths.systemdDropInFile, renderSystemdDropIn(state.paths)],
-    [state.paths.nginxConfigFile, renderNginxConfig(request)],
+    [state.paths.caddyfile, renderCaddyfile(state.request, true)],
+    [state.paths.caddyUnitFile, renderCaddyUnit(state.request, state.paths)],
   ])
   for (const [path, expected] of expectedFiles) {
-    if (host.regularFile(path) && host.readFile(path) !== expected) diagnostics.push({ code: 'MANAGED_CONTENT_INVALID', severity: 'error', message: `Managed configuration differs from the ownership record: ${path}` })
-  }
-  if (host.regularFile(state.paths.passwordHashFile) && !/^\$argon2id\$v=19\$m=\d+,t=\d+,p=\d+\$[A-Za-z0-9+/]+\$[A-Za-z0-9+/]+\n?$/u.test(host.readFile(state.paths.passwordHashFile))) {
-    diagnostics.push({ code: 'PASSWORD_HASH_INVALID', severity: 'error', message: 'The managed password hash is not a valid Argon2id PHC value.' })
+    if (host.regularFile(path) && host.readFile(path) !== expected) {
+      diagnostics.push({ code: 'MANAGED_CONTENT_INVALID', severity: 'error', message: `Managed configuration differs from the ownership record: ${path}` })
+    }
   }
   if (host.regularFile(state.paths.sessionSecretFile) && !/^[A-Za-z0-9_-]{43}\n?$/u.test(host.readFile(state.paths.sessionSecretFile))) {
     diagnostics.push({ code: 'SESSION_SECRET_INVALID', severity: 'error', message: 'The managed session secret is not a valid 32-byte base64url value.' })
+  }
+  if (host.regularFile(state.paths.authStateFile) && !/"schemaVersion":\s*2/u.test(host.readFile(state.paths.authStateFile))) {
+    diagnostics.push({ code: 'AUTH_STATE_INVALID', severity: 'error', message: 'The managed authentication state is not schema v2.' })
   }
   return diagnostics
 }
@@ -79,91 +86,98 @@ function ownerDiagnostics(host: InstallerHost, state: InstallState, service: Dsh
     const stat = host.stat(path)
     if (stat.uid !== uid || stat.gid !== gid) diagnostics.push({ code: 'MANAGED_OWNER_INVALID', severity: 'error', message: `Managed path has unexpected owner or group: ${path}` })
   }
-  return diagnostics
-}
-
-function profilePackageDiagnostic(host: InstallerHost, state: InstallState): Diagnostic | undefined {
-  if (!state.profilePackageInstalledByDshAuth) return undefined
-  const manifestPath = join(state.dshHome, 'profiles', state.request.profile, 'package.json')
-  let packagePresent = false
-  if (host.regularFile(manifestPath)) {
-    try {
-      const manifest = JSON.parse(host.readFile(manifestPath)) as { readonly dependencies?: Record<string, unknown>; readonly dsh?: { readonly profile?: { readonly bundles?: unknown } } }
-      packagePresent = typeof manifest.dependencies?.['dsh-auth'] === 'string' && Array.isArray(manifest.dsh?.profile?.bundles) && manifest.dsh.profile.bundles.includes('dsh-auth')
-    } catch {
-      packagePresent = false
-    }
+  if (state.dshUid !== service.uid || state.dshGid !== service.gid) {
+    diagnostics.push({ code: 'SERVICE_IDENTITY_DRIFT', severity: 'error', message: 'Recorded DSH service UID/GID does not match the running unit.' })
   }
-  return packagePresent
-    ? undefined
-    : { code: 'PROFILE_PACKAGE_MISSING', severity: 'error', message: `The recorded DSH profile ${state.request.profile} no longer contains the dsh-auth bundle.` }
-}
-
-function recordedStateDiagnostics(host: InstallerHost, state: InstallState): Diagnostic[] {
-  if (state.request.outputDirectory !== undefined) throw new InstallerError('system doctor refuses an output-mode ownership record', ExitCode.conflict)
-  validateStatePaths(state)
-  const diagnostics = managedFileDiagnostics(host, state)
-  const serviceResult = discoverServiceDiagnostics(host, state)
-  diagnostics.push(...serviceResult.diagnostics)
-  diagnostics.push(...ownerDiagnostics(host, state, serviceResult.service))
-  const packageDiagnostic = profilePackageDiagnostic(host, state)
-  if (packageDiagnostic !== undefined) diagnostics.push(packageDiagnostic)
   return diagnostics
 }
 
-function nginxDiagnostics(host: InstallerHost, state: InstallState | undefined): Diagnostic[] {
+function digest(value: Buffer): string {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+function profileDiagnostics(host: InstallerHost, state: InstallState): Diagnostic[] {
+  const path = profileManifestPath(state)
+  if (!host.regularFile(path)) {
+    return [{ code: 'PROFILE_PACKAGE_MISSING', severity: 'error', message: `DSH profile package manifest is missing: ${path}` }]
+  }
+  return []
+}
+
+function caddyDiagnostics(host: InstallerHost, state: InstallState): Diagnostic[] {
   const diagnostics: Diagnostic[] = []
-  const nginx = discoverNginx(host)
-  const packageManager = discoverPackageManager(host)
-  if (packageManager !== undefined) diagnostics.push({ code: 'PACKAGE_MANAGER_AVAILABLE', severity: 'info', message: `Supported Nginx package source detected: ${packageManager.source}.` })
-  if (!nginx.installed) {
-    diagnostics.push({ code: 'NGINX_MISSING', severity: 'error', message: 'Nginx is not installed.', remediation: packageManager === undefined ? 'Install Nginx 1.24+ with auth_request from a trusted system repository.' : 'Review plan, then run setup with --nginx install --authorize-nginx-install.' })
-    if (packageManager === undefined) diagnostics.push({ code: 'NGINX_INSTALL_UNSUPPORTED', severity: 'error', message: 'No supported operating-system package recipe is available.' })
-  } else {
-    if (!nginx.versionSupported) diagnostics.push({ code: 'NGINX_VERSION_UNSUPPORTED', severity: 'error', message: `Nginx ${nginx.version ?? 'unknown'} is below the supported 1.24 baseline.` })
-    if (!nginx.authRequestModule) diagnostics.push({ code: 'NGINX_AUTH_REQUEST_MISSING', severity: 'error', message: 'Nginx lacks ngx_http_auth_request_module.' })
-    if (nginx.serviceName !== 'nginx.service' || nginx.serviceLoadState !== 'loaded') diagnostics.push({ code: 'NGINX_SERVICE_UNAVAILABLE', severity: 'error', message: 'nginx.service is not loaded under systemd.' })
-    if (state !== undefined && nginx.includePath !== state.paths.nginxConfigFile) diagnostics.push({ code: 'NGINX_INCLUDE_INACTIVE', severity: 'error', message: 'The recorded dsh-auth Nginx include is not selected by the active main configuration.' })
-    if (nginx.executable !== undefined) {
-      const test = host.run({ executable: nginx.executable, args: ['-t'] })
-      if (test.status !== 0 || test.error !== undefined) diagnostics.push({ code: 'NGINX_CONFIG_TEST_FAILED', severity: 'error', message: 'nginx -t failed; command output was withheld.' })
+  try {
+    const pkg = resolveCaddyPackage(host)
+    if (pkg.binarySha256 !== state.caddyBinarySha256) {
+      diagnostics.push({ code: 'CADDY_CHECKSUM_DRIFT', severity: 'error', message: 'Installed Caddy checksum does not match the ownership record.' })
+    }
+  } catch (error) {
+    if (error instanceof InstallerError) diagnostics.push(...error.diagnostics)
+  }
+  if (state.caddyVersion !== CADDY_VERSION) {
+    diagnostics.push({ code: 'CADDY_VERSION_DRIFT', severity: 'error', message: `Recorded Caddy version ${state.caddyVersion} is not ${CADDY_VERSION}.` })
+  }
+  if (host.regularFile(state.paths.caddyBinary)) {
+    if (digest(host.readFileBytes(state.paths.caddyBinary)) !== state.caddyBinarySha256) {
+      diagnostics.push({ code: 'CADDY_CHECKSUM_DRIFT', severity: 'error', message: 'Managed Caddy binary does not match the ownership-record checksum.' })
+    }
+    const version = host.run({ executable: state.paths.caddyBinary, args: ['version'] })
+    if (version.status !== 0 || !version.stdout.includes(CADDY_VERSION)) {
+      diagnostics.push({ code: 'CADDY_VERSION_INVALID', severity: 'error', message: 'Managed Caddy binary did not report the frozen version.' })
     }
   }
   const systemctl = ['/usr/bin/systemctl', '/bin/systemctl'].find(candidate => host.regularFile(candidate))
-  if (systemctl === undefined) diagnostics.push({ code: 'SYSTEMD_MISSING', severity: 'error', message: 'systemd is unavailable.' })
-  else if (host.run({ executable: systemctl, args: ['is-active', '--quiet', 'nginx.service'] }).status !== 0) {
-    diagnostics.push({ code: 'NGINX_SERVICE_INACTIVE', severity: 'error', message: 'nginx.service is not active.' })
+  if (systemctl !== undefined) {
+    const active = host.run({ executable: systemctl, args: ['is-active', '--quiet', CADDY_SERVICE_NAME] })
+    if (active.status !== 0) diagnostics.push({ code: 'CADDY_SERVICE_INACTIVE', severity: 'error', message: 'dsh-auth-caddy.service is not active.' })
   }
   return diagnostics
 }
 
-/** Run read-only health checks over the host and the recorded installation. */
-export function buildDoctorPlan(host: InstallerHost, stateFile = DEFAULT_STATE_FILE): { readonly plan: InstallationPlan; readonly state?: InstallState } {
-  const diagnostics: Diagnostic[] = []
-  const state = readInstallState(host, stateFile)
-  if (state === undefined) {
-    diagnostics.push({ code: 'INSTALLATION_NOT_FOUND', severity: 'error', message: 'No managed dsh-auth installation was found.', remediation: 'Run dsh-auth setup, or pass --output-dir when preparing an image.' })
-  } else {
-    diagnostics.push(...recordedStateDiagnostics(host, state))
+function loopbackDiagnostics(state: InstallState): Diagnostic[] {
+  const upstream = state.request.upstream
+  if (!upstream.startsWith('127.0.0.1:') && !upstream.startsWith('[::1]:')) {
+    return [{ code: 'HARNESS_NOT_LOOPBACK', severity: 'error', message: 'Harness upstream is not a loopback address.' }]
   }
-  diagnostics.push(...nginxDiagnostics(host, state))
-  const healthy = diagnostics.every(entry => entry.severity !== 'error')
-  const plan: InstallationPlan = {
-    schemaVersion: 1,
-    operation: 'doctor',
-    mode: 'system',
-    status: healthy ? 'ready' : 'blocked',
-    actions: [
-      { id: 'state', kind: 'check', description: 'Check the ownership record and managed file permissions.' },
-      { id: 'dsh-service', kind: 'check', description: 'Check the exact DSH systemd service and executable safety.' },
-      { id: 'nginx', kind: 'check', description: 'Check Nginx version, auth_request, configuration syntax, and service state.' },
-    ],
-    diagnostics,
-  }
-  return state === undefined ? { plan } : { plan, state }
+  return []
 }
 
-/** Convert a doctor result to its stable process exit code. */
+/** Build a read-only health plan from the completed ownership record. */
+export function buildDoctorPlan(host: InstallerHost, stateFile = DEFAULT_STATE_FILE): { readonly plan: InstallationPlan } {
+  const state = readInstallState(host, stateFile)
+  if (state === undefined) {
+    return { plan: { schemaVersion: 2, operation: 'doctor', mode: 'system', status: 'blocked', actions: [], diagnostics: [{ code: 'INSTALLATION_NOT_FOUND', severity: 'error', message: 'No managed installation exists.' }] } }
+  }
+  if (state.request.outputDirectory !== undefined) {
+    throw new InstallerError('system doctor refuses an output-mode ownership record', ExitCode.conflict)
+  }
+  validateStatePaths(state)
+  const discovered = discoverServiceDiagnostics(host, state)
+  const diagnostics = [
+    ...managedFileDiagnostics(host, state),
+    ...discovered.diagnostics,
+    ...ownerDiagnostics(host, state, discovered.service),
+    ...profileDiagnostics(host, state),
+    ...caddyDiagnostics(host, state),
+    ...loopbackDiagnostics(state),
+  ]
+  const healthy = diagnostics.every(entry => entry.severity !== 'error')
+  return {
+    plan: {
+      schemaVersion: 2,
+      operation: 'doctor',
+      mode: 'system',
+      status: healthy ? 'ready' : 'blocked',
+      actions: healthy ? [{ id: 'verify', kind: 'check', description: 'Verify the managed Caddy edge, authentication state, and DSH service.' }] : [],
+      diagnostics,
+    },
+  }
+}
+
 export function doctorExitCode(plan: InstallationPlan): number {
   return plan.status === 'ready' ? ExitCode.success : ExitCode.unhealthy
+}
+
+function profileManifestPath(state: InstallState): string {
+  return join(state.dshHome, 'profiles', state.request.profile, 'package.json')
 }

@@ -10,21 +10,21 @@
 
 ## Architecture
 
-- Nginx is the only public listener. Harness binds loopback; Nginx performs `auth_request`, rate limiting, security headers, and authenticated HTTP, download, SSE, and WebSocket proxying.
+- Caddy is the only public listener. Harness binds loopback; Caddy performs `forward_auth`, security headers, TLS, and authenticated HTTP, download, SSE, and WebSocket proxying.
 - The Cordis plugin owns `/auth/*`, the bilingual login page, signed CSRF values, Argon2id verification, persistent revocable sessions, and the native Harness sign-out contribution.
 - Protect the SPA, `/api/*`, `/plugins/*`, `/api/session.export`, `/api/events.mux`, `/api/events.host`, and `/plugins/events`. Public access to the upstream `/auth/verify` route must resolve as not found.
 - Integrate through Harness WebServer, Settings, index-tap, client-module, locale, and sidebar-slot extension points. Extend those seams instead of forking Harness, rewriting its assets, probing the DOM, or using Nginx `sub_filter`.
 - `cordis.patch.yml` is the normal bundle layer. `cordis.overlay.yml` is only for deployments that resolve the package outside `dsh.profile.bundles`; one deployment uses one of them.
 - `src/` is the source of truth. `lib/` is the published build output. Deployment templates live under `deploy/`; observable behavior belongs in `tests/`.
-- Read `docs/installer.md` before changing setup/plan/doctor/uninstall, Nginx or package discovery, systemd integration, managed paths, JSON/exit-code behavior, or installer release checks.
+- Read `docs/installer.md` before changing setup/plan/doctor/uninstall, Caddy platform packages, systemd integration, managed paths, JSON/exit-code behavior, or installer release checks.
 
 ## Security invariants
 
-- Keep Harness unreachable from external interfaces and `/auth/verify` reachable only through Nginx's internal subrequest location.
+- Keep Harness unreachable from external interfaces and `/auth/verify` reachable only through Caddy's internal `forward_auth` subrequest.
 - Keep production cookies `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, and `__Host-` prefixed. Plain HTTP remains an explicit evaluation mode.
 - Passwords stay out of configuration, arguments, logs, fixtures, and the repository. Accept Argon2id hashes and session secrets only through validated environment values or absolute secret-file paths.
 - Preserve server-side revocation, rolling renewal, safe return paths, exact Origin/Referer checks, trusted-proxy allowlisting, no-store authentication responses, and log redaction.
-- Validate root-executed deployment inputs before using them in paths, Nginx configuration, or service-manager commands.
+- Validate root-executed deployment inputs before using them in paths, Caddy configuration, or service-manager commands.
 
 ## Change map
 
@@ -33,7 +33,7 @@
 - Password hashing and CLI generation: `src/password.ts`, `src/cli.ts`, and `tests/password.spec.ts`.
 - Harness UI, locale, theme, and sign-out: `src/client.tsx`, `src/preferences.ts`, and `tests/client.spec.tsx`.
 - Cordis registration and configuration: `src/index.ts`, `src/config.ts`, `cordis.patch.yml`, and `tests/plugin.spec.ts`.
-- Edge routing and WebSocket/download behavior: `deploy/nginx/dsh-auth.conf.template` and `scripts/check-nginx.mjs`.
+- Edge routing and WebSocket/download behavior: `deploy/caddy/dsh-auth.Caddyfile.template` and `scripts/check-caddy.mjs`.
 - Installer discovery, typed plans, execution, recovery, doctor, and uninstall: `src/installer/`, `src/cli.ts`, and `tests/installer-*.spec.ts`.
 
 Tests assert observable behavior. Add decision-oriented comments only when code cannot express the reason for a security or compatibility choice.
@@ -44,7 +44,7 @@ Run the narrowest focused test while iterating. Before handing off a code change
 
 ```sh
 corepack pnpm run check
-corepack pnpm run check:nginx
+corepack pnpm run check:caddy
 git diff --check
 ```
 

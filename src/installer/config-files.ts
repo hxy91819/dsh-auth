@@ -7,21 +7,31 @@ function quoteEnvironment(value: string): string {
 
 /** Render the DSH service environment without embedding secret values. */
 export function renderEnvironmentFile(request: SetupRequest, paths: ManagedPaths): string {
-  return [
+  const lines = [
     '# Managed by dsh-auth. Secret values live in separate permission-restricted files.',
-    `DSH_AUTH_USER_ID=${quoteEnvironment(request.userId)}`,
-    `DSH_AUTH_USERNAME=${quoteEnvironment(request.username)}`,
-    `DSH_AUTH_ROLES=${quoteEnvironment(request.roles.join(','))}`,
-    'DSH_AUTH_TRUSTED_PROXY_ADDRESSES="127.0.0.1,::1"',
-    `DSH_AUTH_PASSWORD_HASH_FILE=${quoteEnvironment(paths.passwordHashFile)}`,
+    `DSH_AUTH_STATE_FILE=${quoteEnvironment(paths.authStateFile)}`,
     `DSH_AUTH_SESSION_SECRET_FILE=${quoteEnvironment(paths.sessionSecretFile)}`,
-    `DSH_AUTH_SESSION_STORE_FILE=${quoteEnvironment(paths.sessionStoreFile)}`,
+    `DSH_AUTH_LOGIN_TOKEN_ENABLED=${request.loginTokenEnabled ? 'true' : 'false'}`,
     `DSH_AUTH_SECURE_COOKIES=${request.mode === 'https' ? 'true' : 'false'}`,
-    '',
-  ].join('\n')
+    'DSH_AUTH_TRUSTED_PROXY_ADDRESSES="127.0.0.1,::1"',
+  ]
+  if (request.loginTokenEnabled) {
+    lines.push(`DSH_AUTH_LOGIN_TOKEN_DIRECTORY=${quoteEnvironment(paths.loginTokenDirectory)}`)
+    if (request.loginTokenErrorMessageZh !== undefined) {
+      lines.push(`DSH_AUTH_LOGIN_TOKEN_FAILURE_MESSAGE_ZH=${quoteEnvironment(request.loginTokenErrorMessageZh)}`)
+    }
+    if (request.loginTokenErrorMessageEn !== undefined) {
+      lines.push(`DSH_AUTH_LOGIN_TOKEN_FAILURE_MESSAGE_EN=${quoteEnvironment(request.loginTokenErrorMessageEn)}`)
+    }
+    lines.push('DSH_AUTH_LOGIN_TOKEN_WINDOW_SECONDS="60"')
+    lines.push('DSH_AUTH_LOGIN_TOKEN_MAX_ATTEMPTS="10"')
+    lines.push('DSH_AUTH_LOGIN_TOKEN_BLOCK_SECONDS="300"')
+  }
+  lines.push('')
+  return lines.join('\n')
 }
 
-/** Render the only systemd file owned by setup. */
+/** Render the only systemd drop-in owned by setup. */
 export function renderSystemdDropIn(paths: ManagedPaths): string {
   return `[Service]\nEnvironmentFile=${paths.environmentFile}\n`
 }
@@ -30,21 +40,23 @@ export function renderSystemdDropIn(paths: ManagedPaths): string {
 export function persistentRequest(request: SetupRequest): InstallState['request'] {
   return {
     mode: request.mode,
-    nginxPolicy: request.nginxPolicy,
     ...(request.outputDirectory === undefined ? {} : { outputDirectory: request.outputDirectory }),
     ...(request.dshService === undefined ? {} : { dshService: request.dshService }),
     ...(request.dshHome === undefined ? {} : { dshHome: request.dshHome }),
     ...(request.dshExecutable === undefined ? {} : { dshExecutable: request.dshExecutable }),
     profile: request.profile,
     packageSource: request.packageSource,
-    userId: request.userId,
-    username: request.username,
-    roles: request.roles,
+    adminBootstrap: request.adminBootstrap,
+    ...(request.adminUsername === undefined ? {} : { adminUsername: request.adminUsername }),
+    loginTokenEnabled: request.loginTokenEnabled,
+    ...(request.loginTokenErrorMessageZh === undefined ? {} : { loginTokenErrorMessageZh: request.loginTokenErrorMessageZh }),
+    ...(request.loginTokenErrorMessageEn === undefined ? {} : { loginTokenErrorMessageEn: request.loginTokenErrorMessageEn }),
     upstream: request.upstream,
     listenAddress: request.listenAddress,
     httpPort: request.httpPort,
     httpsPort: request.httpsPort,
     ...(request.serverName === undefined ? {} : { serverName: request.serverName }),
+    ...(request.tls === undefined ? {} : { tls: request.tls }),
     ...(request.certificate === undefined ? {} : { certificate: request.certificate }),
     ...(request.certificateKey === undefined ? {} : { certificateKey: request.certificateKey }),
   }
