@@ -172,6 +172,16 @@ function mockUpstream() {
       response.end('login')
       return
     }
+    if (request.url?.startsWith('/auth/admin/setup') === true) {
+      if (request.method === 'POST') {
+        response.writeHead(303, { location: '/' })
+        response.end()
+        return
+      }
+      response.writeHead(200, { 'content-type': 'text/html' })
+      response.end('setup')
+      return
+    }
     if (request.url?.startsWith('/auth/token-bootstrap.js') === true) {
       response.writeHead(200, { 'content-type': 'text/javascript' })
       response.end('bridge')
@@ -222,6 +232,13 @@ async function verifyProtocol(caddy, root, ports, certificate, key) {
       headers: { 'content-type': 'application/x-www-form-urlencoded', origin: `https://localhost:${String(ports.https)}` },
     })
     if (redemption.status !== 303 || redemption.headers.location !== '/') throw new Error('token redemption POST was not proxied untouched')
+    const setup = await request(ports.https, '/auth/admin/setup')
+    if (setup.status !== 200 || setup.body !== 'setup') throw new Error('admin setup page was not proxied untouched')
+    const setupPost = await request(ports.https, '/auth/admin/setup', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', origin: `https://localhost:${String(ports.https)}` },
+    })
+    if (setupPost.status !== 303 || setupPost.headers.location !== '/') throw new Error('admin setup POST was not proxied untouched')
     const accepted = await request(ports.https, '/echo', {
       headers: {
         cookie: 'session=valid',
@@ -272,7 +289,7 @@ try {
   process.stdout.write(`${JSON.stringify({
     version, platform, binarySha256: manifest.platforms[platform].binarySha256,
     manifestPlatforms: Object.keys(manifest.platforms).sort(), tlsModes: ['automatic', 'internal', 'manual'],
-    adminApi: 'disabled', publicVerify: 404, interactive: 303, api: 401, tokenRoutes: 'public proxied',
+    adminApi: 'disabled', publicVerify: 404, interactive: 303, api: 401, tokenRoutes: 'public proxied', setupRoute: 'public proxied',
     identityHeaders: 'verified values replaced forgeries', renewalCookie: true, cleanup: true,
   }, undefined, 2)}\n`)
 } finally {

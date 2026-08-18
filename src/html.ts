@@ -14,11 +14,15 @@ interface UiCopy {
   readonly signInTitle: string
   readonly username: string
   readonly password: string
+  readonly confirmPassword: string
   readonly signIn: string
   readonly invalidCredentials: string
   readonly rateLimited: string
+  readonly cloudConsole: string
   readonly accountTitle: string
   readonly accountLede: string
+  readonly accountConfigured: string
+  readonly accountUnconfigured: string
   readonly userId: string
   readonly roles: string
   readonly returnToHarness: string
@@ -27,6 +31,17 @@ interface UiCopy {
   readonly tokenLede: string
   readonly tokenNoscript: string
   readonly tokenFailure: string
+  readonly setupTitle: string
+  readonly setupLede: string
+  readonly setupSave: string
+  readonly setupLater: string
+  readonly setupCompleteTitle: string
+  readonly setupCompleteLede: string
+  readonly setupForbidden: string
+  readonly usernameWhitespace: string
+  readonly usernameInvalid: string
+  readonly passwordInvalid: string
+  readonly passwordMismatch: string
 }
 
 const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
@@ -34,11 +49,15 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     signInTitle: '登录 DeepSeek Harness',
     username: '用户名',
     password: '密码',
+    confirmPassword: '确认密码',
     signIn: '登录',
     invalidCredentials: '用户名或密码不正确。',
     rateLimited: '尝试次数过多，请稍后再试。',
+    cloudConsole: '请从云控制台登录。',
     accountTitle: '账户',
     accountLede: '当前浏览器已登录 DeepSeek Harness。',
+    accountConfigured: '管理员凭据已配置。',
+    accountUnconfigured: '管理员凭据尚未配置。本次登录不会再次自动提醒。',
     userId: '用户 ID',
     roles: '角色',
     returnToHarness: '返回 Harness',
@@ -47,16 +66,31 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     tokenLede: '正在完成一次性登录…',
     tokenNoscript: '此登录链接需要启用 JavaScript。请回到云控制台，在允许 JavaScript 的浏览器中重新打开该链接。',
     tokenFailure: '登录链接无效、已过期或已被使用。请回到云控制台重新获取链接。',
+    setupTitle: '设置管理员账户',
+    setupLede: '为此实例设置管理员用户名和密码，或选择稍后进入 Harness。',
+    setupSave: '保存',
+    setupLater: '稍后',
+    setupCompleteTitle: '管理员已设置',
+    setupCompleteLede: '管理员凭据已经建立。当前会话可以继续使用。',
+    setupForbidden: '此页面仅用于首次令牌登录。',
+    usernameWhitespace: '用户名不能包含首尾空白。',
+    usernameInvalid: '用户名须为 1–64 个字符，且不能包含控制字符。',
+    passwordInvalid: '密码须为 15–128 个字符，且不超过 1024 字节。',
+    passwordMismatch: '两次输入的密码不一致。',
   },
   en: {
     signInTitle: 'Sign in to DeepSeek Harness',
     username: 'Username',
     password: 'Password',
+    confirmPassword: 'Confirm password',
     signIn: 'Sign in',
     invalidCredentials: 'The username or password is incorrect.',
     rateLimited: 'Too many attempts. Try again later.',
+    cloudConsole: 'Sign in from the cloud console.',
     accountTitle: 'Account',
     accountLede: 'This browser is signed in to DeepSeek Harness.',
+    accountConfigured: 'Administrator credentials are configured.',
+    accountUnconfigured: 'Administrator credentials are not configured. This session will not remind you again.',
     userId: 'User ID',
     roles: 'Roles',
     returnToHarness: 'Return to Harness',
@@ -65,10 +99,22 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     tokenLede: 'Completing one-time sign-in…',
     tokenNoscript: 'This sign-in link requires JavaScript. Return to your cloud console and reopen the link in a browser with JavaScript enabled.',
     tokenFailure: 'The sign-in link is invalid, expired, or already used. Request a new link from your cloud console.',
+    setupTitle: 'Set up the administrator account',
+    setupLede: 'Set an administrator username and password for this instance, or continue to Harness later.',
+    setupSave: 'Save',
+    setupLater: 'Later',
+    setupCompleteTitle: 'Administrator already set up',
+    setupCompleteLede: 'Administrator credentials are already configured. This session can continue.',
+    setupForbidden: 'This page is only available during first-time token sign-in.',
+    usernameWhitespace: 'Username must not have leading or trailing whitespace.',
+    usernameInvalid: 'Username must be 1-64 characters without control characters.',
+    passwordInvalid: 'Password must be 15-128 characters and at most 1024 bytes.',
+    passwordMismatch: 'The passwords do not match.',
   },
 }
 
 export type AuthMessage = 'invalidCredentials' | 'rateLimited'
+export type SetupMessage = 'usernameWhitespace' | 'usernameInvalid' | 'passwordInvalid' | 'passwordMismatch'
 
 const STYLE = `
 :root {
@@ -269,13 +315,12 @@ export function loginPage(
   csrfToken: string,
   preferences: UiPreferences,
   message?: AuthMessage,
+  passwordLogin = true,
 ): string {
   const copy = COPY[preferences.language]
   const notice = message === undefined ? '' : `<p class="notice" role="alert">${escapeHtml(copy[message])}</p>`
-  return document(copy.signInTitle, `<section class="content">
-    <h1>${escapeHtml(copy.signInTitle)}</h1>
-    ${notice}
-    <form class="login-form" method="post" action="${escapeHtml(basePath)}/login">
+  const form = passwordLogin
+    ? `<form class="login-form" method="post" action="${escapeHtml(basePath)}/login">
       <input type="hidden" name="csrf" value="${escapeHtml(csrfToken)}">
       <input type="hidden" name="returnTo" value="${escapeHtml(returnTo)}">
       <div class="field">
@@ -287,7 +332,12 @@ export function loginPage(
         <input id="password" name="password" type="password" autocomplete="current-password" required>
       </div>
       <button type="submit">${escapeHtml(copy.signIn)}</button>
-    </form>
+    </form>`
+    : `<p class="lede">${escapeHtml(copy.cloudConsole)}</p>`
+  return document(copy.signInTitle, `<section class="content">
+    <h1>${escapeHtml(copy.signInTitle)}</h1>
+    ${notice}
+    ${form}
   </section>`, preferences)
 }
 
@@ -297,12 +347,15 @@ export function accountPage(
   session: AuthSession,
   csrfToken: string,
   preferences: UiPreferences,
+  configured = true,
 ): string {
   const copy = COPY[preferences.language]
   const roles = session.user.roles.join(', ')
+  const status = configured ? copy.accountConfigured : copy.accountUnconfigured
   return document(copy.accountTitle, `<section class="content">
     <h1>${escapeHtml(copy.accountTitle)}</h1>
     <p class="lede">${escapeHtml(copy.accountLede)}</p>
+    <p class="lede">${escapeHtml(status)}</p>
     <div class="details"><dl>
       <div class="detail"><dt>${escapeHtml(copy.username)}</dt><dd>${escapeHtml(session.user.username)}</dd></div>
       <div class="detail"><dt>${escapeHtml(copy.userId)}</dt><dd>${escapeHtml(session.user.userId)}</dd></div>
@@ -359,5 +412,59 @@ export function tokenRateLimitedPage(preferences: UiPreferences): string {
   return document(copy.tokenTitle, `<section class="content">
     <h1>${escapeHtml(copy.tokenTitle)}</h1>
     <p class="notice" role="alert">${escapeHtml(copy.rateLimited)}</p>
+  </section>`, preferences)
+}
+
+/** Render the first-time administrator setup form for a login-token session. */
+export function adminSetupPage(
+  basePath: string,
+  returnTo: string,
+  csrfToken: string,
+  preferences: UiPreferences,
+  message?: SetupMessage,
+): string {
+  const copy = COPY[preferences.language]
+  const notice = message === undefined ? '' : `<p class="notice" role="alert">${escapeHtml(copy[message])}</p>`
+  return document(copy.setupTitle, `<section class="content">
+    <h1>${escapeHtml(copy.setupTitle)}</h1>
+    <p class="lede">${escapeHtml(copy.setupLede)}</p>
+    ${notice}
+    <form class="login-form" method="post" action="${escapeHtml(basePath)}/admin/setup">
+      <input type="hidden" name="csrf" value="${escapeHtml(csrfToken)}">
+      <input type="hidden" name="returnTo" value="${escapeHtml(returnTo)}">
+      <div class="field">
+        <label for="username">${escapeHtml(copy.username)}</label>
+        <input id="username" name="username" type="text" autocomplete="username" required autofocus>
+      </div>
+      <div class="field">
+        <label for="password">${escapeHtml(copy.password)}</label>
+        <input id="password" name="password" type="password" autocomplete="new-password" required>
+      </div>
+      <div class="field">
+        <label for="confirmPassword">${escapeHtml(copy.confirmPassword)}</label>
+        <input id="confirmPassword" name="confirmPassword" type="password" autocomplete="new-password" required>
+      </div>
+      <button type="submit">${escapeHtml(copy.setupSave)}</button>
+    </form>
+    <a class="button secondary" href="${escapeHtml(returnTo)}">${escapeHtml(copy.setupLater)}</a>
+  </section>`, preferences)
+}
+
+/** Render the friendly already-configured result for setup GET/POST. */
+export function adminSetupCompletePage(preferences: UiPreferences, returnTo = '/'): string {
+  const copy = COPY[preferences.language]
+  return document(copy.setupCompleteTitle, `<section class="content">
+    <h1>${escapeHtml(copy.setupCompleteTitle)}</h1>
+    <p class="lede">${escapeHtml(copy.setupCompleteLede)}</p>
+    <a class="button" href="${escapeHtml(returnTo)}">${escapeHtml(copy.returnToHarness)}</a>
+  </section>`, preferences)
+}
+
+/** Render the forbidden result for a non-token session on first-time setup. */
+export function adminSetupForbiddenPage(preferences: UiPreferences): string {
+  const copy = COPY[preferences.language]
+  return document(copy.setupTitle, `<section class="content">
+    <h1>${escapeHtml(copy.setupTitle)}</h1>
+    <p class="notice" role="alert">${escapeHtml(copy.setupForbidden)}</p>
   </section>`, preferences)
 }

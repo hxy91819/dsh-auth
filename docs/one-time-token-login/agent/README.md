@@ -5,9 +5,9 @@
 ## 当前状态
 
 - 方案基线：`9885c1850958eaf92bd6c9fbf7c34cae6fe13e3e`，仅用于证明初次规划时的代码形态。
-- live head：STORY-04 实现完成于 `feature/story-04-token-redemption`（领取基线 `f5d8bf8`）；Harness 锁定/latest 基线仍为 `0.1.0-rc.7`。
+- live head：STORY-05 实现完成于 `feature/story-05-admin-onboarding`（领取基线 `c335111`）；Harness 锁定/latest 基线仍为 `0.1.0-rc.7`。
 - 兼容证据：官方 `dsh-v0.1.0-rc.7` tag 为 `99f6f02fecdb7dff40c3fbc9470f5907c29f74ca`；只读 checkout 位于 `/data/code/deepseek-harness-compat-dsh-v0.1.0-rc.7`。
-- READY：2/2 已通过，COMPONENT 5/6。STORY-05 可领取。
+- READY：2/2 已通过，COMPONENT 6/6。STORY-06 可领取。
 
 ## 权威资料
 

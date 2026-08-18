@@ -1,15 +1,15 @@
 ---
 story: STORY-05
 intent_version: 1
-refreshed: 待领取
-code_baseline: 待领取
+refreshed: 2026-08-18
+code_baseline: c33511181deb866bccd9a7d1bec73ac4894ee7ac
 owns: [ADMIN_ONBOARDING]
 verifies: [AUTH_STATE, TOKEN_REDEMPTION]
 ---
 
 # STORY-05 交付管理员首次初始化执行卡
 
-- 状态：阻塞，依赖 STORY-04
+- 状态：done（2026-08-18，Cursor，feature/story-05-admin-onboarding）
 - 对应：[STORY-05 交付管理员首次初始化](../stories/Story-05-交付管理员首次初始化.md)
 
 ## 目标与完成信号
@@ -45,6 +45,13 @@ POST 校验同源、CSRF、表单大小和 safe returnTo。用户名 trim 只用
 ## 领取检查
 
 确认 STORY-04 done，npm latest 等于锁定 Harness，token 登录可在 Caddy 下稳定产生带 method 的 session 并跳到固定 setup route。创建专用 worktree，记录基线、工作树和 worktrees，更新本卡。先用行为测试保存未配置、Later、设置和并发预期失败。
+
+领取记录（2026-08-18）：
+
+- STORY-04 done（`92796d1`）；live head / 领取基线 `c33511181deb866bccd9a7d1bec73ac4894ee7ac`。
+- npm latest `@deepseek-ai/dsh` = `0.1.0-rc.7`，与锁定 Harness 一致；Caddy 仍为 `v2.11.4`。
+- 未配置 token 兑换已稳定 303 `/auth/admin/setup?returnTo=%2F`，session `authenticationMethod=login-token`。
+- 工作树 `/data/code/dsh-auth-story-05`，分支 `feature/story-05-admin-onboarding`；主工作区 `main` 干净，无重叠改动。
 
 ## 执行步骤
 
@@ -89,3 +96,11 @@ git diff --check
 ## 交接
 
 交付管理员设置页面、验证器、Later、并发与会话撤销、密码登录接线、测试、起止提交和干净状态。给 STORY-06 固定两条 setup 的真实用户旅程、所有文案、浏览器入口和需要全量复核的安全场景。
+
+交付记录（2026-08-18）：
+
+- 起止：`c335111`（领取基线）→ 本卡提交（feature/story-05-admin-onboarding）。
+- 命令与退出码：`vitest run tests/password.spec.ts tests/auth-http.spec.ts tests/admin-onboarding.spec.ts` 0（17/17）；`check:code-health` 0；`typecheck` 0；`check:caddy` 0（新增 setupRoute 公开代理）；`git diff --check` 0。
+- 路由：GET 匿名 303 登录、非 token 403、未配置 token 200 表单、已配置 303 `/auth/account`；POST 校验后 Argon2id，成功 303 returnTo 并清 CSRF；并发 loser 200 完成页且不覆盖。
+- Later 为已校验 returnTo 的同源链接，不写状态；新 token 登录再次进入 setup。未配置登录页只显示云控制台说明。
+- 给 STORY-06 的输入：password/token 两条 setup 旅程、setup 文案、`/auth/admin/setup` 浏览器入口、SEC-14/15/16 与 FUN-04/05/06 待全量复核。

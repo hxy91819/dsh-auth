@@ -2,12 +2,29 @@ import { TLSSocket } from 'node:tls'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { constantTimeTextEqual, CookieSigner } from './crypto.js'
 import { authCookie, cookieNames, parseCookies } from './cookies.js'
-import { accountPage, loginPage, tokenBridgePage, tokenFailurePage, tokenRateLimitedPage, type TokenFailureMessages } from './html.js'
-import type { AuthMessage } from './html.js'
+import {
+  accountPage,
+  adminSetupCompletePage,
+  adminSetupForbiddenPage,
+  adminSetupPage,
+  loginPage,
+  tokenBridgePage,
+  tokenFailurePage,
+  tokenRateLimitedPage,
+  type AuthMessage,
+  type SetupMessage,
+  type TokenFailureMessages,
+} from './html.js'
 import { BROWSER_BOOTSTRAP_FILE, browserBootstrapSource } from './browser-bootstrap.js'
 import { LoginLimiter } from './limiter.js'
 import { LoginTokenStore, createNodeTokenHost } from './login-token-store.js'
-import { ADMIN_PASSWORD_MAX_BYTES, verifyPassword } from './password.js'
+import {
+  ADMIN_PASSWORD_MAX_BYTES,
+  assertAdministratorPassword,
+  hashPassword,
+  parseAdministratorUsername,
+  verifyPassword,
+} from './password.js'
 import { resolveUiPreferences } from './preferences.js'
 import type { HarnessUiSettings, UiPreferences } from './preferences.js'
 import { SessionStore } from './session.js'
@@ -263,6 +280,10 @@ export class AuthApplication {
         this.account(req, res)
         return
       }
+      if (path === `${this.config.basePath}/admin/setup`) {
+        await this.adminSetup(req, res, url)
+        return
+      }
       if (path === `${this.config.basePath}/logout`) {
         await this.logout(req, res)
         return
@@ -404,7 +425,13 @@ export class AuthApplication {
       return
     }
     const csrf = this.issueCsrf()
-    writeHtml(res, 200, accountPage(this.config.basePath, authenticated.session, csrf.token, preferences), {
+    writeHtml(res, 200, accountPage(
+      this.config.basePath,
+      authenticated.session,
+      csrf.token,
+      preferences,
+      this.sessions.passwordCredentials() !== undefined,
+    ), {
       'set-cookie': [
         ...this.renewalCookies(authenticated),
         this.cookie(this.cookieNames.csrf, csrf.value, 10 * 60),
@@ -544,6 +571,136 @@ export class AuthApplication {
     }
   }
 
+  private async adminSetup(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    const preferences = resolveUiPreferences(req, this.readHarnessUiSettings())
+    const returnTo = safeReturnTarget(url.searchParams.get('returnTo'))
+    if (req.method === 'GET' || req.method === 'HEAD') {
+      this.adminSetupGet(req, res, returnTo, preferences)
+      return
+    }
+    if (req.method !== 'POST') {
+      write(res, 405, 'method not allowed', { allow: 'GET, HEAD, POST', 'cache-control': 'no-store' })
+      return
+    }
+    await this.adminSetupPost(req, res, preferences)
+  }
+
+  private adminSetupGet(
+    req: IncomingMessage,
+    res: ServerResponse,
+    returnTo: string,
+    preferences: UiPreferences,
+  ): void {
+    const authenticated = this.sessions.authenticate(req, this.now())
+    if (authenticated === undefined) {
+      const target = `${this.config.basePath}/admin/setup?returnTo=${encodeURIComponent(returnTo)}`
+      redirect(res, `${this.config.basePath}/login?returnTo=${encodeURIComponent(target)}`)
+      return
+    }
+    if (this.sessions.passwordCredentials() !== undefined) {
+      redirect(res, `${this.config.basePath}/account`, this.renewalHeaders(authenticated))
+      return
+    }
+    if (authenticated.session.authenticationMethod !== 'login-token') {
+      writeHtml(res, 403, adminSetupForbiddenPage(preferences), this.renewalHeaders(authenticated))
+      return
+    }
+    const csrf = this.issueCsrf()
+    writeHtml(res, 200, adminSetupPage(this.config.basePath, returnTo, csrf.token, preferences), {
+      'set-cookie': [
+        ...this.renewalCookies(authenticated),
+        this.cookie(this.cookieNames.csrf, csrf.value, 10 * 60),
+      ],
+    })
+  }
+
+  private async adminSetupPost(req: IncomingMessage, res: ServerResponse, preferences: UiPreferences): Promise<void> {
+    if (!hasSameOrigin(req, this.config)) throw new HttpError(403, 'cross-origin request denied')
+    const form = await readForm(req)
+    const returnTo = safeReturnTarget(form.get('returnTo'))
+    if (!this.validCsrf(req, form.get('csrf'))) throw new HttpError(403, 'invalid CSRF token')
+    const authenticated = this.sessions.authenticate(req, this.now())
+    if (authenticated === undefined) {
+      const target = `${this.config.basePath}/admin/setup?returnTo=${encodeURIComponent(returnTo)}`
+      redirect(res, `${this.config.basePath}/login?returnTo=${encodeURIComponent(target)}`)
+      return
+    }
+    if (this.sessions.passwordCredentials() !== undefined) {
+      writeHtml(res, 200, adminSetupCompletePage(preferences, returnTo), this.renewalHeaders(authenticated))
+      return
+    }
+    if (authenticated.session.authenticationMethod !== 'login-token') {
+      writeHtml(res, 403, adminSetupForbiddenPage(preferences), this.renewalHeaders(authenticated))
+      return
+    }
+    const submitted = this.readSetupCredentials(form)
+    if (submitted.message !== undefined) {
+      this.renderAdminSetup(res, 400, returnTo, preferences, authenticated, submitted.message)
+      return
+    }
+    const passwordHash = await hashPassword(submitted.password)
+    const result = this.sessions.initializeAdministrator(
+      authenticated.session.token,
+      submitted.username,
+      passwordHash,
+      this.now(),
+    )
+    if (result === 'already-configured') {
+      writeHtml(res, 200, adminSetupCompletePage(preferences, returnTo), this.renewalHeaders(authenticated))
+      return
+    }
+    if (result !== 'initialized') {
+      const target = `${this.config.basePath}/admin/setup?returnTo=${encodeURIComponent(returnTo)}`
+      redirect(res, `${this.config.basePath}/login?returnTo=${encodeURIComponent(target)}`)
+      return
+    }
+    redirect(res, returnTo, {
+      'set-cookie': [
+        ...this.renewalCookies(authenticated),
+        this.cookie(this.cookieNames.csrf, '', 0),
+      ],
+    })
+  }
+
+  private readSetupCredentials(form: URLSearchParams): {
+    readonly username: string
+    readonly password: string
+    readonly message?: SetupMessage
+  } {
+    try {
+      const username = parseAdministratorUsername(form.get('username') ?? '')
+      const password = form.get('password') ?? ''
+      const confirmPassword = form.get('confirmPassword') ?? ''
+      if (password !== confirmPassword) return { username, password, message: 'passwordMismatch' }
+      assertAdministratorPassword(password)
+      return { username, password }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : ''
+      if (detail.includes('whitespace')) return { username: '', password: '', message: 'usernameWhitespace' }
+      if (detail.includes('15-128') || detail.includes('1024')) {
+        return { username: '', password: '', message: 'passwordInvalid' }
+      }
+      return { username: '', password: '', message: 'usernameInvalid' }
+    }
+  }
+
+  private renderAdminSetup(
+    res: ServerResponse,
+    status: number,
+    returnTo: string,
+    preferences: UiPreferences,
+    authenticated: SessionAuthentication,
+    message?: SetupMessage,
+  ): void {
+    const csrf = this.issueCsrf()
+    writeHtml(res, status, adminSetupPage(this.config.basePath, returnTo, csrf.token, preferences, message), {
+      'set-cookie': [
+        ...this.renewalCookies(authenticated),
+        this.cookie(this.cookieNames.csrf, csrf.value, 10 * 60),
+      ],
+    })
+  }
+
   private renderTokenFailure(res: ServerResponse, status: number, preferences: UiPreferences): void {
     writeTokenHtml(res, status, tokenFailurePage(preferences, {
       ...(this.config.loginTokenFailureMessageZh === undefined ? {} : { zh: this.config.loginTokenFailureMessageZh }),
@@ -559,7 +716,14 @@ export class AuthApplication {
     message?: AuthMessage,
   ): void {
     const csrf = this.issueCsrf()
-    writeHtml(res, status, loginPage(this.config.basePath, returnTo, csrf.token, preferences, message), {
+    writeHtml(res, status, loginPage(
+      this.config.basePath,
+      returnTo,
+      csrf.token,
+      preferences,
+      message,
+      this.sessions.passwordCredentials() !== undefined,
+    ), {
       'set-cookie': this.cookie(this.cookieNames.csrf, csrf.value, 10 * 60),
     })
   }

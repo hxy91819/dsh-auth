@@ -1,5 +1,6 @@
 import { isIP } from 'node:net'
 import { isAbsolute, normalize } from 'node:path'
+import { parseAdministratorUsername } from '../password.js'
 import { InstallerError } from './errors.js'
 import { ExitCode, type AdminBootstrap, type EdgeMode, type SetupRequest, type TlsMode } from './types.js'
 
@@ -77,13 +78,13 @@ function validatePackageSource(value: string): string {
 
 /** Normalize and accept a v2 administrator username. */
 function normalizeAdministratorUsername(value: string): string {
-  const normalized = value.normalize('NFC')
-  if (normalized.trim() !== normalized) usage('admin username must not have leading or trailing whitespace')
-  const points = Array.from(normalized).length
-  if (points < 1 || points > 64 || /\p{C}/u.test(normalized)) {
-    usage('admin username must be 1-64 Unicode code points without control characters')
+  try {
+    return parseAdministratorUsername(value)
+  } catch (error) {
+    usage(error instanceof Error
+      ? error.message.replace('administrator username', 'admin username')
+      : 'admin username is invalid')
   }
-  return normalized
 }
 
 /** Accept optional token failure copy that cannot carry control characters. */

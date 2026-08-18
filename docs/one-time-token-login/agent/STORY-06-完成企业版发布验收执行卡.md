@@ -9,7 +9,7 @@ verifies: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPT
 
 # STORY-06 完成企业版发布验收执行卡
 
-- 状态：阻塞，依赖 STORY-05
+- 状态：可领取，依赖 STORY-05 已完成
 - 对应：[STORY-06 完成企业版发布验收](../stories/Story-06-完成企业版发布验收.md)
 
 ## 目标与完成信号

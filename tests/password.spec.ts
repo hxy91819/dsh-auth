@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { hashPassword, parsePasswordHash, verifyPassword } from '../src/password.js'
+import { hashPassword, parseAdministratorUsername, parsePasswordHash, verifyPassword } from '../src/password.js'
 
 describe('Argon2id password hashes', () => {
   it('generates a bounded PHC hash and verifies only the submitted secret', async () => {
@@ -22,5 +22,18 @@ describe('Argon2id password hashes', () => {
 
   it('rejects administrator passwords shorter than the v2 policy', async () => {
     await expect(hashPassword('fourteen-char.')).rejects.toThrow(/15-128/u)
+  })
+})
+
+describe('administrator username policy', () => {
+  it('normalizes NFC and rejects whitespace, control characters, and length boundaries', () => {
+    expect(parseAdministratorUsername('e\u0301lite')).toBe('élite')
+    expect(parseAdministratorUsername('管理员')).toBe('管理员')
+    expect(parseAdministratorUsername('a'.repeat(64))).toHaveLength(64)
+    expect(() => parseAdministratorUsername(' leading')).toThrow(/whitespace/u)
+    expect(() => parseAdministratorUsername('trailing ')).toThrow(/whitespace/u)
+    expect(() => parseAdministratorUsername('bad\u0007name')).toThrow(/1-64/u)
+    expect(() => parseAdministratorUsername('a'.repeat(65))).toThrow(/1-64/u)
+    expect(() => parseAdministratorUsername('')).toThrow(/1-64/u)
   })
 })

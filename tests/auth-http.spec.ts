@@ -80,15 +80,17 @@ describe('observable authentication flow', () => {
     try {
       const page = await fetch(`${unconfigured.baseUrl}/auth/login`)
       const html = await page.text()
+      expect(html).not.toContain('name="password"')
+      expect(html).toMatch(/cloud console|云控制台/u)
       const denied = await fetch(`${unconfigured.baseUrl}/auth/login`, {
         method: 'POST',
         redirect: 'manual',
         headers: { ...proxyHeaders(), cookie: cookiePair(page.headers, CSRF_COOKIE) },
         body: new URLSearchParams({
-          csrf: hiddenValue(html, 'csrf'), returnTo: '/', username: 'test-account', password: credentials.password,
+          csrf: 'unused', returnTo: '/', username: 'test-account', password: credentials.password,
         }),
       })
-      expect(denied.status).toBe(401)
+      expect(denied.status).toBeGreaterThanOrEqual(400)
       expect(denied.headers.getSetCookie().some(value => value.startsWith(`${SESSION_COOKIE}=`))).toBe(false)
     } finally {
       unconfigured.server.close()
