@@ -41,10 +41,10 @@ const HTML_SECURITY_HEADERS = {
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',
 } as const
+/** Keep same-origin referrer-policy: Chrome sends Origin null for form POSTs under no-referrer. */
 const TOKEN_PAGE_SECURITY_HEADERS = {
   ...HTML_SECURITY_HEADERS,
   'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-  'referrer-policy': 'no-referrer',
 } as const
 
 function headerValue(req: IncomingMessage, name: string): string | undefined {
@@ -98,14 +98,6 @@ function hasSameOrigin(req: IncomingMessage, config: ResolvedConfig): boolean {
   } catch {
     return false
   }
-}
-
-/** Chrome sends Origin null after history.replaceState on the fragment bridge; CSRF still binds the POST. */
-function hasTokenPostOrigin(req: IncomingMessage, config: ResolvedConfig): boolean {
-  if (hasSameOrigin(req, config)) return true
-  if (headerValue(req, 'origin') !== 'null') return false
-  const fetchSite = headerValue(req, 'sec-fetch-site')
-  return fetchSite === undefined || fetchSite === 'same-origin' || fetchSite === 'none'
 }
 
 function protectedRequestOriginAllowed(req: IncomingMessage, config: ResolvedConfig): boolean {
@@ -541,7 +533,7 @@ export class AuthApplication {
       writeTokenHtml(res, 429, tokenRateLimitedPage(preferences), { 'retry-after': String(retryAfter) })
       return
     }
-    if (!hasTokenPostOrigin(req, this.config)) throw new HttpError(403, 'cross-origin request denied')
+    if (!hasSameOrigin(req, this.config)) throw new HttpError(403, 'cross-origin request denied')
     if (!this.validCsrf(req, form.get('csrf'))) throw new HttpError(403, 'invalid CSRF token')
     const submitted = form.get('token')
     if (submitted === null || submitted.length === 0 || submitted.length > 256

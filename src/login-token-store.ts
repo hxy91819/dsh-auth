@@ -17,6 +17,9 @@ const LOGIN_TOKEN_CAPACITY = 32
 const TOKEN_DIGEST_PATTERN = /^[0-9a-f]{64}$/u
 const CONSUMING_PREFIX = '.dsh_otl_v1_consuming_'
 const TEMP_PREFIX = '.dsh_otl_v1_tmp_'
+const ISSUE_LOCK_NAME = '.dsh_otl_v1_issue.lock'
+const ISSUE_LOCK_RETRY_MS = 15
+const ISSUE_LOCK_ACQUIRE_MS = 10_000
 const MAX_TOKEN_FILE_BYTES = 512
 const MAX_GENERATION_ATTEMPTS = 8
 const TOKEN_FILE_MODE = 0o600
@@ -256,6 +259,19 @@ function serializeMetadata(metadata: LoginTokenMetadata): string {
   return `${JSON.stringify({ schemaVersion: 1, issuedAt: metadata.issuedAt, expiresAt: metadata.expiresAt })}\n`
 }
 
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return systemErrorCode(error) !== 'ESRCH'
+  }
+}
+
 interface ManagedEntry {
   readonly name: string
   readonly path: string
@@ -283,6 +299,11 @@ export class LoginTokenStore {
     if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < LOGIN_TOKEN_TTL_SECONDS.min || ttlSeconds > LOGIN_TOKEN_TTL_SECONDS.max) {
       throw new LoginTokenError('usage', 'LOGIN_TOKEN_TTL_INVALID', `login token TTL must be ${String(LOGIN_TOKEN_TTL_SECONDS.min)}-${String(LOGIN_TOKEN_TTL_SECONDS.max)} seconds`)
     }
+    this.requireDirectory()
+    return this.withIssueLock(() => this.publishIssuedToken(input.ttlSeconds, input.owner))
+  }
+
+  private publishIssuedToken(ttlSeconds: number, requestedOwner: { readonly uid: number; readonly gid: number } | undefined): IssuedLoginToken {
     const issuedAt = this.now()
     const expiresAt = issuedAt + ttlSeconds * 1000
     const owner = this.requireDirectory()
@@ -299,7 +320,7 @@ export class LoginTokenStore {
       try {
         this.host.writeNewFile(temporary, serializeMetadata({ issuedAt, expiresAt }), TOKEN_FILE_MODE)
         this.host.fsyncFile?.(temporary)
-        if (input.owner !== undefined) this.host.chown(temporary, input.owner.uid, input.owner.gid)
+        if (requestedOwner !== undefined) this.host.chown(temporary, requestedOwner.uid, requestedOwner.gid)
       } catch {
         this.removeQuietly(temporary)
         throw new LoginTokenError('execution', 'LOGIN_TOKEN_WRITE_FAILED', 'login token metadata could not be written')
@@ -318,6 +339,62 @@ export class LoginTokenStore {
       return { token, issuedAt, expiresAt }
     }
     throw new LoginTokenError('execution', 'LOGIN_TOKEN_GENERATION_EXHAUSTED', 'login token generation could not avoid an existing digest')
+  }
+
+  /** Serialize capacity check and publish so concurrent CLI processes cannot exceed 32. */
+  private withIssueLock<T>(run: () => T): T {
+    const lockPath = join(this.directory, ISSUE_LOCK_NAME)
+    const payload = this.acquireIssueLock(lockPath)
+    try {
+      return run()
+    } finally {
+      this.releaseIssueLock(lockPath, payload)
+    }
+  }
+
+  private acquireIssueLock(lockPath: string): string {
+    const deadline = Date.now() + ISSUE_LOCK_ACQUIRE_MS
+    while (Date.now() <= deadline) {
+      const payload = `${String(process.pid)}\n${this.host.randomBytes(8).toString('hex')}\n`
+      try {
+        this.host.writeNewFile(lockPath, payload, TOKEN_FILE_MODE)
+        return payload
+      } catch (error) {
+        if (systemErrorCode(error) !== 'EEXIST') {
+          throw new LoginTokenError('execution', 'LOGIN_TOKEN_LOCK_FAILED', 'the login token issue lock could not be created')
+        }
+      }
+      this.reclaimStaleIssueLock(lockPath)
+      sleepSync(ISSUE_LOCK_RETRY_MS)
+    }
+    throw new LoginTokenError('execution', 'LOGIN_TOKEN_LOCK_FAILED', 'the login token issue lock could not be acquired')
+  }
+
+  private reclaimStaleIssueLock(lockPath: string): void {
+    let current: string
+    try {
+      current = this.host.readFile(lockPath)
+    } catch {
+      return
+    }
+    const pidLine = current.split('\n', 1)[0]
+    const pid = pidLine === undefined ? Number.NaN : Number(pidLine)
+    if (!Number.isInteger(pid) || pid <= 0 || processExists(pid)) return
+    let confirmed: string
+    try {
+      confirmed = this.host.readFile(lockPath)
+    } catch {
+      return
+    }
+    if (confirmed === current) this.removeQuietly(lockPath)
+  }
+
+  private releaseIssueLock(lockPath: string, payload: string): void {
+    try {
+      if (this.host.readFile(lockPath) === payload) this.host.removeFile(lockPath)
+    } catch {
+      this.removeQuietly(lockPath)
+    }
   }
 
   /** Atomically claim one token for redemption; leftover claims stay consumed. */

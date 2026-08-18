@@ -24,6 +24,8 @@
 - Keep production cookies `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, and `__Host-` prefixed. Plain HTTP remains an explicit evaluation mode.
 - Passwords stay out of configuration, arguments, logs, fixtures, and the repository. Accept Argon2id hashes and session secrets only through validated environment values or absolute secret-file paths.
 - Preserve server-side revocation, rolling renewal, safe return paths, exact Origin/Referer checks, trusted-proxy allowlisting, no-store authentication responses, and log redaction.
+- Keep login-token issue capacity at 32 unexpired files across processes; check and publish under one exclusive directory lock.
+- Keep token-bridge HTML on `same-origin` referrer-policy so Chrome form POSTs send a real Origin. `no-referrer` makes Chrome send `Origin: null`.
 - Validate root-executed deployment inputs before using them in paths, Caddy configuration, or service-manager commands.
 
 ## Change map
@@ -35,6 +37,7 @@
 - Cordis registration and configuration: `src/index.ts`, `src/config.ts`, `cordis.patch.yml`, and `tests/plugin.spec.ts`.
 - Edge routing and WebSocket/download behavior: `deploy/caddy/dsh-auth.Caddyfile.template` and `scripts/check-caddy.mjs`.
 - Installer discovery, typed plans, execution, recovery, doctor, and uninstall: `src/installer/`, `src/cli.ts`, and `tests/installer-*.spec.ts`.
+- Login-token origin, bootstrap, and capacity: `src/application.ts`, `src/token-bootstrap.ts`, `src/login-token-store.ts`, and `tests/login-token-*.spec.ts`.
 
 Tests assert observable behavior. Add decision-oriented comments only when code cannot express the reason for a security or compatibility choice.
 

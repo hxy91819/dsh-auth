@@ -62,7 +62,7 @@ Removing or weakening any invariant requires a new security review. Do not compe
 
 - Passwords are verified against a resource-bounded Argon2id hash. Login failures do not reveal whether the username or password was incorrect.
 - Login attempts are rate-limited at the application layer. Rate limiting reduces online guessing and resource abuse but is not a denial-of-service guarantee against distributed sources.
-- Login and logout use signed double-submit CSRF values and exact Origin/Referer validation.
+- Login, logout, and login-token redemption use signed double-submit CSRF values and exact Origin/Referer validation.
 - Protected unsafe methods and browser WebSocket handshakes are checked at the authentication subrequest before Caddy rewrites the upstream Origin expected by Harness.
 - Return targets accept only absolute paths on the current origin. Authentication and account responses use `no-store`; HTML receives a restrictive CSP and framing protections.
 - Session cookies contain signed opaque random tokens. Authentication also requires a matching server-side session record, allowing logout and administrative secret rotation to revoke sessions.
