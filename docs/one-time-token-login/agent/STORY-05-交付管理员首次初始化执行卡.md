@@ -40,10 +40,11 @@ POST 校验同源、CSRF、表单大小和 safe returnTo。用户名 trim 只用
 - [安全矩阵](./安全威胁与验收矩阵.md) SEC-14、15、16、FUN-04、05、06。
 - STORY-01 initialize API、STORY-04 token session 与 redirect 交接。
 - 代码入口：`src/application.ts`、`src/html.ts`、`src/password.ts`、`src/preferences.ts`、`tests/auth-http.spec.ts` 及新增 onboarding/browser E2E。
+- Harness/Caddy 基线：锁定 Harness `0.1.0-rc.7` 与 Caddy `v2.11.4`；领取时 npm latest 必须与锁定 Harness 一致。
 
 ## 领取检查
 
-确认 STORY-04 done，token 登录可稳定产生带 method 的 session 并跳到固定 setup route。创建专用 worktree，记录基线、工作树和 worktrees，更新本卡。先用行为测试保存未配置、Later、设置和并发预期失败。
+确认 STORY-04 done，npm latest 等于锁定 Harness，token 登录可在 Caddy 下稳定产生带 method 的 session 并跳到固定 setup route。创建专用 worktree，记录基线、工作树和 worktrees，更新本卡。先用行为测试保存未配置、Later、设置和并发预期失败。
 
 ## 执行步骤
 

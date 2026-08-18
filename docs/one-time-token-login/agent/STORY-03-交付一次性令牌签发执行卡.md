@@ -37,10 +37,11 @@ verifies: [INSTALLER_V2]
 - [安全矩阵](./安全威胁与验收矩阵.md) SEC-02、10、11、12、21、FUN-07、08。
 - STORY-02 交接的 v2 install-state、路径和 service identity。
 - 代码入口：`src/cli.ts`、`src/installer/plan.ts` ownership parser、`src/crypto.ts`、新增 token store、`tests/installer-cli.spec.ts` 和新增 token-store 行为测试。
+- Harness/Caddy 基线：锁定 Harness `0.1.0-rc.7` 与 Caddy `v2.11.4`；领取时 npm latest 必须与锁定 Harness 一致。
 
 ## 领取检查
 
-确认 STORY-02 done、v2 JSON/路径提交可复现，且主工作区无重叠 token 改动。创建同级专用 worktree，记录基线并更新本卡。先写失败测试覆盖格式、TTL、容量、system/container 权限和 redaction。
+确认 STORY-02 done、v2 JSON/Caddy/路径提交可复现，npm latest 等于锁定 Harness，且主工作区无重叠 token 改动。创建同级专用 worktree，记录基线并更新本卡。先写失败测试覆盖格式、TTL、容量、system/container 权限和 redaction。
 
 ## 执行步骤
 

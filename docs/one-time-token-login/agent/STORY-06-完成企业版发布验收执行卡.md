@@ -1,10 +1,10 @@
 ---
 story: STORY-06
-intent_version: 1
+intent_version: 2
 refreshed: 待领取
 code_baseline: 待领取
 owns: [RELEASE_ACCEPTANCE]
-verifies: [AUTH_STATE, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPTION, ADMIN_ONBOARDING]
+verifies: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPTION, ADMIN_ONBOARDING]
 ---
 
 # STORY-06 完成企业版发布验收执行卡
@@ -14,12 +14,13 @@ verifies: [AUTH_STATE, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPTION, ADMIN_ONB
 
 ## 目标与完成信号
 
-在一个 acceptance commit 上关闭全部安全矩阵，完成 systemd 与容器真实旅程、代码与 Nginx 检查、打包、公开运维文档和秘密扫描。完成信号是 RELEASE 1/1，任何维护者可凭证据复现发布结论和 v1 卸载重装路径。
+在验收时的 npm latest Harness 和一个 acceptance commit 上关闭全部矩阵，完成 systemd、容器、Caddy 平台分发/TLS、代码检查、打包、公开运维文档和秘密扫描。完成信号是 RELEASE 1/1，任何维护者可复现发布结论和 v1 卸载重装路径。
 
 ## 决策边界
 
 - 本 Story 修复验收发现的缺陷和缺失测试，但不新增产品能力或改变冻结接口；需要改变时停止并插入 Story 或 REPLAN。
-- 不把 mock-only 测试当作真实 Nginx、浏览器、systemd 或容器证据。
+- 不把 mock-only 测试当作真实 Caddy、浏览器、systemd 或容器证据。
+- 领取时再次解析 npm latest；若与锁定版不同，先撤销发布 readiness 并刷新 Harness 基线。
 - v1 升级只记录和验证显式卸载重装，不实现迁移脚本或自动删除。
 - 公共 README 只写产品、安装、云接入和运维；贡献执行细节留在 AGENTS、installer 文档和本专题。
 - 发布前按仓库规则扫描文件与 Git metadata，并使用批准的公开身份；不在未授权情况下 push 或发布。
@@ -28,38 +29,38 @@ verifies: [AUTH_STATE, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPTION, ADMIN_ONB
 
 先固定 STORY-05 完成提交为候选，在新的验收 worktree 中不接受并行功能改动。把[安全矩阵](./安全威胁与验收矩阵.md)转成固定分母清单，逐项关联自动测试、真实 E2E 或人工只读检查；所有结果必须来自同一候选。
 
-扩展真实 E2E 使用一次性 profile、秘密、进程和端口，覆盖 password/login-token 两种 setup、systemd 签发、fragment 浏览器兑换、Later、首次设置、后续密码、续期、logout、重启和重放。容器/离线证据使用 output 产物、显式 auth-state/public-origin 和同形 JSON；不影响已有服务。
+扩展真实 E2E 使用一次性 profile、秘密、进程和端口，在锁定与 latest Harness 上覆盖 password/login-token 两种 setup、systemd 签发、fragment 浏览器兑换、Later、首次设置、后续密码、续期、logout、重启和重放。容器/离线证据使用 output 产物、显式 auth-state/public-origin 和同形 JSON；不影响已有服务。
 
-验证 Nginx access log、应用 stdout/stderr、计划、JSON errors、状态目录、打包产物和 Git metadata。只使用生成的测试 token/密码；证据中保存哈希或 redacted 结构，不保存 bearer secret。公开文档说明签发成功输出是敏感信息、TTL/容量、双语文案、权限、doctor、重置、卸载重装和常见错误。
+验证 x64/ARM64 平台包完整性、automatic/local ACME、manual TLS、Caddy access log、应用输出、计划、JSON errors、状态目录、打包产物和 Git metadata。只使用生成的测试 token/密码；证据中保存哈希或 redacted 结构，不保存 bearer secret。公开文档说明签发成功输出、平台包、TLS、权限、doctor、重置、卸载重装和常见错误。
 
 ## 权威输入
 
 - [Epic](../epics/EPIC-ONE-TIME-TOKEN-LOGIN.md)、[门禁](./门禁.md)、[安全矩阵](./安全威胁与验收矩阵.md)。
 - STORY-01 至 05 的交接提交、命令、固定分母和未关闭风险。
 - 仓库 `AGENTS.md`、`SECURITY.md`、`README.md`、`docs/installer.md`、`docs/releasing.md`、`docs/code-health/README.md`。
-- 验证入口：package scripts、`scripts/check-nginx.mjs`、`scripts/real-integration.mjs`、release validation tests。
+- 验证入口：`test:e2e`、`test:e2e:latest-dsh`、`check:caddy`、Caddy E2E、release validation tests。
 
 ## 领取检查
 
-确认 STORY-01 至 05 均 done、COMPONENT 5/5、交接提交形成线性可复现候选。检查主仓/远端/worktrees/status，无并行认证或发布修改；创建专用验收 worktree，填写本卡基线。确认本机 Nginx、OpenSSL、`ss` 和 Chrome/Chromium 前置条件，再开始长测试。
+确认 STORY-01、01.1 至 05 均 done、COMPONENT 6/6、交接提交形成线性候选。解析 npm latest；不同于精确锁定时停止并先刷新基线。检查主仓/远端/worktrees/status，无并行认证或发布修改；创建专用验收 worktree。确认 Caddy、OpenSSL、`ss` 和 Chrome/Chromium 前置条件，再开始长测试。
 
 ## 执行步骤
 
 ### 1. 冻结候选和矩阵
 
-记录 candidate commit、依赖锁、Node/pnpm/DSH/Nginx/浏览器版本。把 SEC-01..25、FUN-01..10 标为未验证并分配唯一证据路径。完成条件：没有空主责或仅靠历史版本通过的项。
+记录 candidate commit、依赖锁、Node/pnpm、锁定/latest DSH、Caddy、浏览器版本。把 SEC-01..26、FUN-01..13 标为未验证并分配唯一证据路径。完成条件：没有空主责或仅靠历史版本通过的项。
 
 ### 2. 运行全量静态与功能门禁
 
-执行统一 check、Nginx、diff 和 package 检查；先修复根因，再从统一入口完整复验。完成条件：所有命令在候选提交退出 0，代码健康不新增例外。
+执行统一 check、Caddy、锁定/latest Harness、diff 和 package 检查；先修复根因，再从统一入口完整复验。完成条件：所有命令在候选提交退出 0，代码健康不新增例外。
 
-### 3. 运行真实 systemd 与浏览器 E2E
+### 3. 运行真实 Caddy、systemd 与浏览器 E2E
 
 覆盖签发、URL/history/log、兑换、Later、首次设置、密码登录、Cookie/续期/logout、并发、重启、失败和卸载重装。完成条件：所有进程、端口、profile 和临时秘密由 E2E 所有并清理。
 
-### 4. 验证容器与运维恢复
+### 4. 验证平台分发、容器与运维恢复
 
-使用 output 模式产物验证容器签发/兑换；验证 doctor、reset-password、uninstall、v1 拒绝、写入/服务失败回滚。完成条件：systemd 与容器行为只在发现方式不同，JSON 与安全语义一致。
+验证 x64/ARM64 缺包/篡改、automatic/manual TLS、端口冲突、output 模式签发/兑换，以及 doctor、reset-password、uninstall、v1 拒绝、写入/服务失败回滚。完成条件：安装不下载二进制，systemd 与容器 JSON 和安全语义一致。
 
 ### 5. 更新公开文档
 
@@ -73,17 +74,19 @@ verifies: [AUTH_STATE, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPTION, ADMIN_ONB
 
 ```bash
 corepack pnpm run check
-corepack pnpm run check:nginx
+corepack pnpm run check:caddy
 corepack pnpm run test:e2e
+corepack pnpm run test:e2e:latest-dsh
 npm pack --dry-run
 git diff --check
 ```
 
-另保存容器 smoke、v1 重装、doctor/reset/uninstall 结果，以及秘密扫描和 Git metadata 检查。交接报告必须给出 SEC 25/25、FUN 10/10、COMPONENT 5/5、RELEASE 1/1；任何跳过项保持未通过。
+另保存 Caddy 平台包/TLS、容器 smoke、v1 重装、doctor/reset/uninstall、秘密扫描和 Git metadata 检查。交接报告必须给出 SEC 26/26、FUN 13/13、COMPONENT 6/6、RELEASE 1/1；任何跳过项保持未通过。
 
 ## 停止条件
 
-- 候选提交在验收期间变化，或出现并行认证/Nginx/installer 修改。
+- 候选提交在验收期间变化，或出现并行认证/Caddy/installer 修改。
+- npm latest 与锁定 Harness 不同且基线尚未刷新。
 - 缺少真实 E2E 前置条件且无法在隔离环境补齐。
 - 任一 token、密码、私有路径、服务名或非公开邮箱进入包、日志、文档或 Git metadata。
 - 修复需要改变公开 v2 接口、认证政策、状态 schema、部署边界或 Story 意图。

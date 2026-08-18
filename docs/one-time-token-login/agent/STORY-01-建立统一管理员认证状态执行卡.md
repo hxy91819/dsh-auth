@@ -29,7 +29,7 @@ verifies: []
 
 同目录临时文件使用独占创建和 `0600`，完整写入后 fsync 文件、rename 到目标、fsync 父目录。任何步骤失败恢复内存快照并清理严格命名的临时文件。加载拒绝 symlink、非普通文件、宽权限、过大/空文件、未知 schema、重复 session 和不一致时间。
 
-管理员用户名和 Argon2id 可以同时为 null 或同时有效，不允许半配置。状态的 `secretId` 与当前 session secret 不一致时保留管理员凭据、清空 session 并原子写回。Session 只存 token、authenticationMethod 和时间；`session`、`verify`、account 与 Nginx headers 每次从当前管理员状态派生 `userId=admin`、`roles=[admin]` 和 username。
+管理员用户名和 Argon2id 可以同时为 null 或同时有效，不允许半配置。状态的 `secretId` 与当前 session secret 不一致时保留管理员凭据、清空 session 并原子写回。Session 只存 token、authenticationMethod 和时间；`session`、`verify`、account 与边缘身份 Header 每次从当前管理员状态派生 `userId=admin`、`roles=[admin]` 和 username。
 
 提供单次原子操作 `initializeAdministrator(currentSession, username, hash)`：仅未配置时成功；保留指定 session、撤销其他 session、更新管理员。具体 HTTP 输入和 hashing 由 STORY-05 调用。
 
@@ -38,11 +38,12 @@ verifies: []
 - [用户需求](./用户需求.md)、[核心决策](./核心决策.md)、[接口与参数契约](./接口与参数契约.md)。
 - [安全矩阵](./安全威胁与验收矩阵.md) SEC-14、15、16、17、19、23、24。
 - 代码入口：`src/session.ts`、`src/config.ts`、`src/application.ts`、`src/cookies.ts`、`tests/session-persistence.spec.ts`、`tests/auth-http.spec.ts`。
+- Harness 基线：锁定 `0.1.0-rc.7`；领取时 npm latest 必须与锁定版一致，扩展点以官方 rc.7 checkout 为证据。
 - 质量边界：仓库 `AGENTS.md` 与 `docs/code-health/README.md`。
 
 ## 领取检查
 
-确认 STORY-01 `intent_version: 1`；以 Agent 入口记录的参数契约稳定化提交为最低基线，复核最新主线没有重叠的未提交改动；记录当前 branch、HEAD、origin、`git status --short` 和 `git worktree list`。从领取时的最新已提交基线创建同级专用 worktree，更新本卡 `refreshed`、`code_baseline`、Story owner/status，并运行现有 session/auth 聚焦测试保存基线结果。
+确认 STORY-01 `intent_version: 1`；再次读取 npm latest 并要求它等于仓库精确锁定 Harness；复核最新主线没有重叠的未提交改动。记录当前 branch、HEAD、origin、`git status --short` 和 `git worktree list`。从领取时的最新已提交基线创建同级专用 worktree，更新本卡 `refreshed`、`code_baseline`、Story owner/status，并运行现有 session/auth 聚焦测试保存基线结果。
 
 ## 执行步骤
 

@@ -20,7 +20,7 @@ verifies: [AUTH_STATE, TOKEN_ISSUANCE]
 
 - fragment、原子消费顺序、统一 401、路由、CSP 和成功跳转以[接口契约](./接口与参数契约.md)为准。
 - 本 Story 只决定兑换后跳到首次设置页，不实现该页表单。
-- 不使用 query token、inline token script、DOM 探测、Nginx `sub_filter` 或 Harness 修改。
+- 不使用 query token、inline token script、DOM 探测、边缘响应改写或 Harness 修改。
 - token disabled 时完整 token 路由为 404，不能只让 POST 失败。
 - consume 后的任何错误不恢复 token；可用性补偿只能要求重新签发。
 
@@ -30,18 +30,19 @@ verifies: [AUTH_STATE, TOKEN_ISSUANCE]
 
 POST 先校验 method、content type、20 KiB、trusted proxy client IP、独立 limiter、精确 Origin/Referer 和 CSRF，再清理严格匹配且已过期的受管文件并调用 STORY-03 consume。consume 对摘要目标执行 rename 到严格 `.consuming-*`，随后读取元数据、判断期限并删除；任何 raw token 不进错误对象。只有有效消费完成后调用 STORY-01 SessionStore create(`login-token`)。
 
-已配置管理员成功 303 `/`；未配置成功 303 `/auth/admin/setup?returnTo=%2F`。invalid/malformed/missing/expired/used/corrupt 均用同一 401 token failure page。zh/en 自定义文案在配置阶段验证，HTML 层统一 escape。Nginx 为 GET/POST 代理 route；POST 应用限流独立于密码 limiter，verify 仍只 internal。
+已配置管理员成功 303 `/`；未配置成功 303 `/auth/admin/setup?returnTo=%2F`。invalid/malformed/missing/expired/used/corrupt 均用同一 401 token failure page。zh/en 自定义文案在配置阶段验证，HTML 层统一 escape。Caddy 代理 GET/POST；POST 应用限流独立于密码 limiter，公开 verify 仍为 404。
 
 ## 权威输入
 
 - [核心决策](./核心决策.md)、[接口与参数契约](./接口与参数契约.md)。
 - [安全矩阵](./安全威胁与验收矩阵.md) SEC-01、03、04、05、06、07、08、13、22、23、24。
 - STORY-01 的 SessionStore create/authenticate，STORY-03 的 consume API 和状态机。
-- 代码入口：`src/application.ts`、`src/html.ts`、`src/preferences.ts`、`src/limiter.ts`、浏览器 bootstrap 模块、`deploy/nginx/dsh-auth.conf.template`、`scripts/check-nginx.mjs`、HTTP/browser tests。
+- 代码入口：`src/application.ts`、`src/html.ts`、`src/preferences.ts`、`src/limiter.ts`、浏览器 bootstrap 模块、Caddy 模板与 `check:caddy`、HTTP/browser tests。
+- Harness/Caddy 基线：锁定 Harness `0.1.0-rc.7` 与 Caddy `v2.11.4`；领取时 npm latest 必须与锁定 Harness 一致。
 
 ## 领取检查
 
-确认 STORY-03 done，使用实际文件系统复核 consume 原子语义；确认 DSH WebServer prefix、index tap 和现有浏览器扩展仍与基线一致。创建专用 worktree，记录 HEAD/status/worktrees，更新本卡并保存 token route 的首个失败测试。
+确认 STORY-03 done，使用实际文件系统复核 consume 原子语义；确认 npm latest 等于锁定 Harness，DSH WebServer 和浏览器扩展仍与 rc.7 基线一致。创建专用 worktree，记录 HEAD/status/worktrees，更新本卡并保存 token route 的首个失败测试。
 
 ## 执行步骤
 
@@ -61,7 +62,7 @@ POST 先校验 method、content type、20 KiB、trusted proxy client IP、独立
 
 把 token 状态映射到单一 401 AuthMessage，不把内部原因输出。完成条件：所有失败 body/status/headers 同形，自定义/回退文案 escaped 且 no-store。
 
-### 5. 更新 Nginx 与真实行为测试
+### 5. 更新 Caddy 与真实行为测试
 
 接入公开 token 页面但不暴露 verify；验证 access log 不含 token、protected HTTP/SSE/WS/download 未回归。记录证据并交接。
 
@@ -69,21 +70,21 @@ POST 先校验 method、content type、20 KiB、trusted proxy client IP、独立
 
 ```bash
 corepack pnpm vitest run tests/auth-http.spec.ts tests/browser-bootstrap.spec.ts tests/login-token-http.spec.ts
-corepack pnpm run check:nginx
+corepack pnpm run check:caddy
 corepack pnpm run check:code-health
 corepack pnpm run typecheck
 git diff --check
 ```
 
-证据包含 GET/HEAD/预取不消费、history 和 Referer、兑换触发过期清理、并发双 POST、消费后会话失败、所有失败同形、限流隔离、文案注入、Nginx access log 和受保护路由。
+证据包含 GET/HEAD/预取不消费、history 和 Referer、兑换触发过期清理、并发双 POST、消费后会话失败、所有失败同形、限流隔离、文案注入、Caddy access log 和受保护路由。
 
 ## 停止条件
 
 - 浏览器必须依赖 inline script、unsafe CSP 或 query token 才能完成一击登录。
-- Nginx 无法避免 token 出现在 access log，或 public verify 暴露。
+- Caddy 无法避免 token 出现在 access log，或 public verify 暴露。
 - consume API 会在会话失败时恢复 token，或无法区分安全冲突与普通无效。
 - 要改变成功会话、Cookie、returnTo、统一失败或 disabled 404 语义。
 
 ## 交接
 
-交付 fragment 桥接、HTTP 兑换、Nginx、限流、失败页、测试、起止提交和干净状态。给 STORY-05 固定 token 成功后的 session authenticationMethod、管理员 configured 判断、`/auth/admin/setup?returnTo=/` 跳转和 CSRF 页面能力。
+交付 fragment 桥接、HTTP 兑换、Caddy 接线、限流、失败页、测试、起止提交和干净状态。给 STORY-05 固定 token 成功后的 session authenticationMethod、管理员 configured 判断、`/auth/admin/setup?returnTo=/` 跳转和 CSRF 页面能力。

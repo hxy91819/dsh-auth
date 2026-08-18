@@ -5,7 +5,7 @@ title: 一次性令牌登录与企业版 v2
 status: todo
 owner: dsh-auth 产品与工程团队
 updated: 2026-08-18
-coverage: [AUTH_STATE, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPTION, ADMIN_ONBOARDING, RELEASE_ACCEPTANCE]
+coverage: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPTION, ADMIN_ONBOARDING, RELEASE_ACCEPTANCE]
 ---
 
 # Epic：一次性令牌登录与企业版 v2
@@ -20,16 +20,17 @@ coverage: [AUTH_STATE, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPTION, ADMIN_ONB
 
 | 门禁 | Epic 成功条件 |
 | --- | --- |
-| READY：可以开工 | 已提交代码基线、需求、v2 接口、安全边界和执行卡一致，首个 Story 可独立领取 |
-| COMPONENT：各部分完成 | 认证状态、安装器、令牌签发、令牌兑换和管理员初始化五个结果各自通过行为与质量检查 |
-| RELEASE：可以发布 | 全量检查、真实 E2E、Nginx、打包、秘密扫描、重装和回退说明全部通过 |
+| READY：可以开工 | 最新 Harness 已固定并验证；已提交代码基线、v2 接口、安全边界和执行卡一致 |
+| COMPONENT：各部分完成 | 认证状态、Caddy、安装器、令牌签发、令牌兑换和管理员初始化六个结果各自通过行为与质量检查 |
+| RELEASE：可以发布 | 最新 Harness、Caddy、全量检查、真实 E2E、打包、秘密扫描、重装和回退说明全部通过 |
 
 ## Story 地图
 
 | Story | 交付结果 | 门禁 | 依赖 |
 | --- | --- | --- | --- |
 | [STORY-01 建立统一管理员认证状态](../stories/Story-01-建立统一管理员认证状态.md) | 固定管理员身份、凭据和会话使用同一持久状态 | READY | 无 |
-| [STORY-02 建立企业版 v2 安装契约](../stories/Story-02-建立企业版v2安装契约.md) | setup、配置、受管路径和运维命令使用 v2 契约 | COMPONENT | STORY-01 |
+| [STORY-01.1 验证并冻结内置 Caddy](../stories/Story-01.1-验证并冻结内置Caddy.md) | 标准 Caddy 满足认证边界、实时连接和性能门槛 | COMPONENT | STORY-01 |
+| [STORY-02 建立企业版 v2 安装契约](../stories/Story-02-建立企业版v2安装契约.md) | setup、Caddy、受管路径和运维命令使用 v2 契约 | COMPONENT | STORY-01.1 |
 | [STORY-03 交付一次性令牌签发](../stories/Story-03-交付一次性令牌签发.md) | systemd 与容器可安全签发短期登录链接 | COMPONENT | STORY-02 |
 | [STORY-04 交付一次性令牌兑换](../stories/Story-04-交付一次性令牌兑换.md) | 浏览器安全、原子地换取正常管理员会话 | COMPONENT | STORY-03 |
 | [STORY-05 交付管理员首次初始化](../stories/Story-05-交付管理员首次初始化.md) | 用户可设置管理员凭据或选择 Later | COMPONENT | STORY-04 |
@@ -40,6 +41,7 @@ coverage: [AUTH_STATE, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPTION, ADMIN_ONB
 - 管理员内部 ID 和角色固定为 `admin`；本期不实现普通用户。
 - 密码初始化和令牌初始化是显式二选一；令牌能力启用后长期保留。
 - 令牌会话与密码会话共用现有 72 小时滚动策略和安全 Cookie。
+- Caddy 由项目固定版本、独占配置和独立服务管理，不探测或复用主机已有 Caddy/Nginx。
 - 不实现浏览器内修改既有密码、云厂商用户映射、审计后台或旧版自动迁移。
 - 自定义失败文案只支持纯文本，不支持 HTML、品牌组件或外部链接。
 - 根 README 仍只面向公共安装和运维，不承载本项目动态状态。
