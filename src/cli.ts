@@ -19,6 +19,7 @@ import { ExitCode, type InstallationPlan, type InstallerHost, type PasswordSourc
 import { validateAbsolutePath, validateSetupRequest } from './installer/validation.js'
 
 const HELP = `Usage:
+  dsh-auth --help
   dsh-auth setup [options]
   dsh-auth plan [options]
   dsh-auth doctor [--json]
@@ -28,29 +29,36 @@ const HELP = `Usage:
   dsh-auth secret
 
 Setup options:
-  --non-interactive                 require flags instead of prompts
-  --json                            emit one machine-readable JSON document
-  --dry-run                         alias for the plan command
-  --nginx require|install|skip      explicit Nginx policy
-  --authorize-nginx-install         authorize supported OS package commands
-  --dsh-service NAME.service        exact existing DSH Web systemd unit
-  --dsh-home /absolute/path         Harness home when service discovery cannot infer it
-  --dsh-bin /absolute/path          DSH executable when service discovery cannot infer it
-  --profile NAME                    DSH profile (default: web)
-  --package dsh-auth@VERSION|/x.tgz pinned registry or offline source
-  --user-id ID --username NAME      configured account identity
-  --roles ID[,ID...]                roles (default: admin)
-  --password-stdin                  read the password from stdin
-  --password-file /absolute/path    read a 0600 plaintext secret file
-  --mode https|http                 public edge mode
-  --upstream 127.0.0.1:PORT         loopback DSH listener (default: 127.0.0.1:3080)
-  --listen-address IP               edge bind address
-  --http-port PORT                  HTTP/redirect port
-  --https-port PORT                 HTTPS port
+  --help                            print this help and exit
+  --non-interactive                 required in automation; use flags instead of prompts
+  --json                            optional; emit one machine-readable JSON document
+  --dry-run                         optional; alias for the plan command
+  --nginx require|install|skip      required Nginx policy
+  --authorize-nginx-install         required with --nginx install
+  --dsh-service NAME.service        required for system setup; omit only with --output-dir
+  --dsh-home /absolute/path         optional; Harness home when discovery cannot infer it
+  --dsh-bin /absolute/path          optional; DSH executable when discovery cannot infer it
+  --profile NAME                    optional DSH profile (default: web)
+  --package dsh-auth@VERSION|/x.tgz optional pinned registry or offline source
+  --user-id ID --username NAME      required account identity
+  --roles ID[,ID...]                optional roles (default: admin)
+  --password-stdin                  first-time setup; read the password from stdin
+  --password-file /absolute/path    first-time setup; read a 0600 plaintext secret file
+  --mode https|http                 required public edge mode
+  --upstream 127.0.0.1:PORT         optional loopback DSH listener (default: 127.0.0.1:3080)
+  --listen-address IP               required edge bind address
+  --http-port PORT                  optional HTTP/redirect port
+  --https-port PORT                 optional HTTPS port
   --server-name HOST                required HTTPS hostname
   --certificate /absolute/path      required HTTPS certificate
   --certificate-key /absolute/path  required HTTPS private key
-  --output-dir /absolute/path       render offline/container files; requires --nginx skip
+  --output-dir /absolute/path       optional offline/container files; requires --nginx skip
+
+Non-interactive setup requires --non-interactive, --nginx, --mode, --user-id,
+--username, --listen-address, and either --password-stdin or --password-file.
+System setup also requires --dsh-service. HTTPS also requires --server-name,
+--certificate, and --certificate-key. Remaining flags have defaults or apply
+only with --nginx install, --mode https, or --output-dir.
 
 Plain HTTP is accepted only on loopback or RFC1918/ULA addresses. Nginx package
 installation and uninstall each require their exact authorization flag in
