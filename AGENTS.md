@@ -53,3 +53,7 @@ git diff --check
 Run `corepack pnpm run test:e2e` for changes to authentication policy, edge routing, browser integration, session persistence, packaging, or release behavior. The command owns a disposable DSH profile, secrets, processes, and ports; it requires Caddy (or a verified test binary), OpenSSL, `ss`, and Chrome or Chromium and leaves existing services untouched.
 
 Before a public push, scan files and Git metadata for credentials, local paths, private service names, logs, and non-public email addresses. Use the repository-approved personal open-source identity, inspect the packed artifact with `npm pack --dry-run`, and verify the remote commit after pushing.
+
+## Land
+
+When the user asks to land, merge, or 合入 a PR, follow `.cursor/rules/land.mdc`. Run `autoreview` when that skill is available, then require every CI check on the PR HEAD to have completed successfully. Merge only after both gates pass.
