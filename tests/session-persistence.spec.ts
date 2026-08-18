@@ -132,4 +132,26 @@ describe('persistent renewable sessions', () => {
     rotated.server.close()
     await once(rotated.server, 'close')
   }, 30_000)
+
+  it('keeps only the configured session capacity across restarts', async () => {
+    const credentials = await testCredentials()
+    const root = mkdtempSync(join(tmpdir(), 'dsh-auth-session-capacity-'))
+    roots.push(root)
+    const sessionStoreFile = join(root, 'sessions.json')
+    const config = testConfig(credentials, { sessionStoreFile, maxSessions: 1 })
+    const initial = await startTestServer(config)
+    const first = await login(initial.baseUrl, credentials)
+    const second = await login(initial.baseUrl, credentials)
+
+    expect((await fetch(`${initial.baseUrl}/auth/verify`, { headers: { cookie: first.cookie } })).status).toBe(401)
+    expect((await fetch(`${initial.baseUrl}/auth/verify`, { headers: { cookie: second.cookie } })).status).toBe(204)
+    initial.server.close()
+    await once(initial.server, 'close')
+
+    const restarted = await startTestServer(config)
+    expect((await fetch(`${restarted.baseUrl}/auth/verify`, { headers: { cookie: first.cookie } })).status).toBe(401)
+    expect((await fetch(`${restarted.baseUrl}/auth/verify`, { headers: { cookie: second.cookie } })).status).toBe(204)
+    restarted.server.close()
+    await once(restarted.server, 'close')
+  }, 30_000)
 })

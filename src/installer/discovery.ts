@@ -143,7 +143,7 @@ export function discoverDshService(
 }
 
 /** Reject a root service executable reachable through writable path components. */
-export function assertRootOwnedExecutable(host: InstallerHost, executable: string): void {
+function assertRootOwnedExecutable(host: InstallerHost, executable: string): void {
   assertRootOwnedPath(host, executable, false)
 }
 

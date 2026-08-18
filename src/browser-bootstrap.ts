@@ -2,7 +2,7 @@
 export const BROWSER_BOOTSTRAP_FILE = 'browser-bootstrap.js'
 
 /** Meta name used by the browser half to discover the configured route prefix. */
-export const AUTH_BASE_PATH_META = 'dsh-auth-base-path'
+const AUTH_BASE_PATH_META = 'dsh-auth-base-path'
 
 const RANDOM_UUID_BOOTSTRAP = `(() => {
   const api = globalThis.crypto
