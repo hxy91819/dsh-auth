@@ -56,4 +56,9 @@ Before a public push, scan files and Git metadata for credentials, local paths, 
 
 ## Land
 
-When the user asks to land, merge, or 合入 a PR, follow `.cursor/rules/land.mdc`. Run `autoreview` when that skill is available, then require every CI check on the PR HEAD to have completed successfully. Merge only after both gates pass.
+When the user asks to land, merge, or 合入 a PR, identify that PR and its HEAD SHA. Merge only after both gates succeed on that exact SHA.
+
+1. Autoreview. If an `autoreview` skill is available (project `.agents/skills/autoreview` or `.claude/skills/autoreview`, or global `~/.agents` / `~/.claude`), read it and run it against the PR branch with `--mode branch --base origin/<pr-base>`. Skip this gate only when the skill is absent, and say so. A clean helper exit with no accepted/actionable findings is required. Remaining findings stop the land. If review requires code changes, stop, report them, and wait for a new HEAD plus a fresh CI run.
+2. CI. Every check run on the PR HEAD must be `completed` and `success`. Query `gh pr checks` and the commit check-runs API for that SHA. Duplicate `push` and `pull_request` jobs both count. Pending, queued, failed, cancelled, or timed-out checks block land. Combined Status API `pending` with an empty status list is not evidence of failure when check-runs are green.
+
+Draft, conflicted, or non-mergeable PRs stay unmerged. Use `gh pr merge` with the repository default method after both gates pass.
