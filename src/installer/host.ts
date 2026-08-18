@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync, chmodSync, chownSync } from 'node:fs'
+import { closeSync, constants, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync, chmodSync, chownSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -61,6 +61,28 @@ export class NodeInstallerHost implements InstallerHost {
 
   realpath(path: string): string {
     return realpathSync(path)
+  }
+
+  listDirectory(path: string): readonly string[] {
+    return readdirSync(path)
+  }
+
+  fsyncFile(path: string): void {
+    const descriptor = openSync(path, constants.O_RDONLY)
+    try {
+      fsyncSync(descriptor)
+    } finally {
+      closeSync(descriptor)
+    }
+  }
+
+  fsyncDirectory(path: string): void {
+    const descriptor = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY)
+    try {
+      fsyncSync(descriptor)
+    } finally {
+      closeSync(descriptor)
+    }
   }
 
   stat(path: string): ReturnType<InstallerHost['stat']> {

@@ -1,0 +1,214 @@
+import { createHash } from 'node:crypto'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import { NodeInstallerHost } from '../src/installer/host.js'
+import { LoginTokenError, LoginTokenStore, type TokenStoreHost } from '../src/login-token-store.js'
+
+const roots: string[] = []
+
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+})
+
+function tokenDirectory(): string {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-auth-token-store-'))
+  roots.push(root)
+  const directory = join(root, 'login-tokens')
+  mkdirSync(directory, { mode: 0o700 })
+  return directory
+}
+
+function storeFor(directory: string, now: () => number, random?: () => Buffer, host: TokenStoreHost = new NodeInstallerHost()): LoginTokenStore {
+  return new LoginTokenStore({ host, directory, now, ...(random === undefined ? {} : { random }) })
+}
+
+function digestOf(token: string): string {
+  return createHash('sha256').update(token).digest('hex')
+}
+
+function expectStoreFailure(action: () => unknown): LoginTokenError {
+  try {
+    action()
+  } catch (error) {
+    expect(error).toBeInstanceOf(LoginTokenError)
+    return error as LoginTokenError
+  }
+  throw new Error('expected the store to fail')
+}
+
+class FaultyTokenHost extends NodeInstallerHost {
+  private remaining: number
+
+  constructor(private readonly failing: 'writeNewFile' | 'renameFile', times: number) {
+    super()
+    this.remaining = times
+  }
+
+  override writeNewFile(path: string, content: string | Buffer, mode: number): void {
+    if (this.failing === 'writeNewFile' && this.remaining > 0) {
+      this.remaining -= 1
+      throw new Error('synthetic token write failure')
+    }
+    super.writeNewFile(path, content, mode)
+  }
+
+  override renameFile(from: string, to: string): void {
+    if (this.failing === 'renameFile' && this.remaining > 0) {
+      this.remaining -= 1
+      throw new Error('synthetic token rename failure')
+    }
+    super.renameFile(from, to)
+  }
+}
+
+describe('login token store', () => {
+  it('issues digest-named metadata files without writing the raw token', () => {
+    const directory = tokenDirectory()
+    const issued = storeFor(directory, () => 0).issue({ ttlSeconds: 300 })
+
+    expect(issued.token).toMatch(/^dsh_otl_v1_[A-Za-z0-9_-]{43}$/u)
+    expect(issued.issuedAt).toBe(0)
+    expect(issued.expiresAt - issued.issuedAt).toBe(300_000)
+    const path = join(directory, digestOf(issued.token))
+    expect(readFileSync(path, 'utf8')).toBe(`${JSON.stringify({ schemaVersion: 1, issuedAt: 0, expiresAt: 300_000 })}\n`)
+    expect(readFileSync(path, 'utf8')).not.toContain(issued.token)
+    expect(statSync(path).mode & 0o777).toBe(0o600)
+    expect(readdirSync(directory)).toHaveLength(1)
+  })
+
+  it('rejects TTL values outside the frozen range before touching the directory', () => {
+    const directory = tokenDirectory()
+    const subject = storeFor(directory, () => 0)
+    for (const ttlSeconds of [59, 301, 60.5, Number.NaN]) {
+      expect(expectStoreFailure((): void => { subject.issue({ ttlSeconds }) }).kind).toBe('usage')
+    }
+    expect(readdirSync(directory)).toHaveLength(0)
+  })
+
+  it('caps unexpired tokens at 32 and frees capacity after expiry', () => {
+    const directory = tokenDirectory()
+    let clock = 0
+    let counter = 0
+    const subject = storeFor(directory, () => clock, (): Buffer => {
+      counter += 1
+      return Buffer.alloc(32, counter)
+    })
+    for (let index = 0; index < 32; index += 1) subject.issue({ ttlSeconds: 60 })
+    expect(expectStoreFailure((): void => { subject.issue({ ttlSeconds: 60 }) }).kind).toBe('capacity')
+
+    clock = 60_000
+    const fresh = subject.issue({ ttlSeconds: 300 })
+    expect(readdirSync(directory)).toEqual([digestOf(fresh.token)])
+  })
+
+  it('cleans only strictly named expired managed files', () => {
+    const directory = tokenDirectory()
+    writeFileSync(join(directory, 'zzz-operator-file'), 'keep\n')
+    writeFileSync(join(directory, '.dsh_otl_v1_tmp_deadbeef'), 'stale temp\n')
+    writeFileSync(join(directory, 'g'.repeat(64)), 'uppercase lookalike\n')
+    writeFileSync(join(directory, '.dsh_otl_v1_consuming_zzz'), 'unknown consuming lookalike\n')
+    let clock = 0
+    const subject = storeFor(directory, () => clock)
+    const issued = subject.issue({ ttlSeconds: 60 })
+
+    clock = 60_000
+    subject.issue({ ttlSeconds: 60 })
+    const names = readdirSync(directory)
+    expect(names).toContain('zzz-operator-file')
+    expect(names).toContain('.dsh_otl_v1_tmp_deadbeef')
+    expect(names).toContain('g'.repeat(64))
+    expect(names).toContain('.dsh_otl_v1_consuming_zzz')
+    expect(names).not.toContain(digestOf(issued.token))
+  })
+
+  it('treats an unparseable managed file as a safe conflict without deleting it', () => {
+    const directory = tokenDirectory()
+    const corrupt = 'c'.repeat(64)
+    writeFileSync(join(directory, corrupt), '{broken\n', { mode: 0o600 })
+    const oversized = 'd'.repeat(64)
+    writeFileSync(join(directory, oversized), `${JSON.stringify({ schemaVersion: 1, issuedAt: 0, expiresAt: 60_000, extra: true })}\n`, { mode: 0o600 })
+
+    const subject = storeFor(directory, () => 0)
+    expect(expectStoreFailure((): void => { subject.issue({ ttlSeconds: 60 }) }).kind).toBe('conflict')
+    expect(readFileSync(join(directory, corrupt), 'utf8')).toBe('{broken\n')
+    expect(readFileSync(join(directory, oversized), 'utf8')).toContain('extra')
+  })
+
+  it('regenerates on digest collision and fails once retries are exhausted', () => {
+    const directory = tokenDirectory()
+    const first = Buffer.alloc(32, 7)
+    const second = Buffer.alloc(32, 9)
+    const sequence = [first, first, second]
+    const subject = storeFor(directory, () => 0, (): Buffer => sequence.shift() ?? second)
+    const one = subject.issue({ ttlSeconds: 60 })
+    const two = subject.issue({ ttlSeconds: 60 })
+    expect(one.token).not.toBe(two.token)
+    expect(readdirSync(directory)).toHaveLength(2)
+
+    const stuck = storeFor(directory, () => 0, (): Buffer => first)
+    expect(expectStoreFailure((): void => { stuck.issue({ ttlSeconds: 60 }) }).kind).toBe('execution')
+    expect(readdirSync(directory)).toHaveLength(2)
+  })
+
+  it('leaves no file behind when the metadata write fails', () => {
+    const directory = tokenDirectory()
+    const subject = storeFor(directory, () => 0, undefined, new FaultyTokenHost('writeNewFile', 1))
+    expect(expectStoreFailure((): void => { subject.issue({ ttlSeconds: 60 }) }).kind).toBe('execution')
+    expect(readdirSync(directory)).toHaveLength(0)
+  })
+
+  it('cleans the temporary file and keeps prior tokens when rename fails', () => {
+    const directory = tokenDirectory()
+    storeFor(directory, () => 0).issue({ ttlSeconds: 60 })
+    const subject = storeFor(directory, () => 0, undefined, new FaultyTokenHost('renameFile', 1))
+    expect(expectStoreFailure((): void => { subject.issue({ ttlSeconds: 60 }) }).kind).toBe('execution')
+    const names = readdirSync(directory)
+    expect(names).toHaveLength(1)
+    expect(names[0]).toMatch(/^[0-9a-f]{64}$/u)
+  })
+
+  it('claims a token exactly once and invalidates expired or unknown tokens', () => {
+    const directory = tokenDirectory()
+    let clock = 0
+    const subject = storeFor(directory, () => clock)
+    const issued = subject.issue({ ttlSeconds: 60 })
+
+    const claim = subject.claim(issued.token)
+    if (claim.status !== 'claimed') throw new Error('expected the first claim to succeed')
+    expect(claim.issuedAt).toBe(0)
+    expect(claim.expiresAt).toBe(60_000)
+    expect(subject.claim(issued.token).status).toBe('invalid')
+    expect(readdirSync(directory)).toEqual([`.dsh_otl_v1_consuming_${digestOf(issued.token)}`])
+    subject.releaseClaim(claim)
+    expect(readdirSync(directory)).toHaveLength(0)
+
+    clock = 60_000
+    const second = subject.issue({ ttlSeconds: 60 })
+    expect(subject.claim('not-a-login-token').status).toBe('invalid')
+    expect(subject.claim(`dsh_otl_v1_${'A'.repeat(43)}`).status).toBe('invalid')
+    clock = 120_000
+    expect(subject.claim(second.token).status).toBe('invalid')
+    expect(readdirSync(directory)).toHaveLength(0)
+  })
+
+  it('publishes owned metadata for the service user', () => {
+    const processEuid = process.geteuid?.()
+    if (processEuid !== 0) return
+    const directory = tokenDirectory()
+    const issued = storeFor(directory, () => 0).issue({ ttlSeconds: 60, owner: { uid: 4242, gid: 4243 } })
+    expect(statSync(join(directory, digestOf(issued.token)))).toMatchObject({ uid: 4242, gid: 4243 })
+  })
+
+  it('supports concurrent issuers without overwriting existing tokens', () => {
+    const directory = tokenDirectory()
+    const clock = 0
+    const left = storeFor(directory, () => clock, (): Buffer => Buffer.alloc(32, 21))
+    const right = storeFor(directory, () => clock, (): Buffer => Buffer.alloc(32, 22))
+    const first = left.issue({ ttlSeconds: 60 })
+    const second = right.issue({ ttlSeconds: 60 })
+    expect(readdirSync(directory).sort()).toEqual([digestOf(first.token), digestOf(second.token)].sort())
+    expect(readFileSync(join(directory, digestOf(first.token)), 'utf8')).toContain('"expiresAt":60000')
+  })
+})

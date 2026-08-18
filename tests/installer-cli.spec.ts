@@ -1,7 +1,12 @@
 import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { declaredFlagNames } from '../src/installer/cli-parser.js'
 import { runCli } from '../src/cli.js'
+import { NodeInstallerHost } from '../src/installer/host.js'
 import { FakeCliIo, FakeInstallerHost } from './installer-helpers.js'
 
 const PASSWORD = 'sufficient-test-password'
@@ -269,5 +274,306 @@ describe('installer CLI', () => {
 
     const duplicate = new FakeCliIo(false)
     expect(await runCli(['plan', '--json', '--json'], duplicate, host)).toBe(2)
+  })
+
+  it('keeps issue-login-token options out of setup and plan', async () => {
+    const io = new FakeCliIo(false)
+    expect(await runCli(['plan', ...OUTPUT_ARGS, '--ttl-seconds', '60'], io, outputHost())).toBe(2)
+    expect(await runCli(['plan', ...OUTPUT_ARGS, '--authorize-login-token-issue'], io, outputHost())).toBe(2)
+  })
+})
+
+const TOKEN_SYSTEM_ARGS = [
+  '--json', '--non-interactive', '--mode', 'http', '--listen-address', '10.0.0.20',
+  '--dsh-service', 'dsh-web.service', '--admin-bootstrap', 'login-token', '--login-token', 'enabled',
+] as const
+const ISSUE_ARGS = ['issue-login-token', '--non-interactive', '--authorize-login-token-issue'] as const
+const TOKEN_URL = /^http:\/\/10\.0\.0\.20:8080\/auth\/token#token=dsh_otl_v1_[A-Za-z0-9_-]{43}$/u
+
+function tokenSystemHost(): FakeInstallerHost {
+  const host = new FakeInstallerHost()
+  host.withSystemdService()
+  host.installCaddyPackage()
+  return host
+}
+
+function digestOf(token: string): string {
+  return createHash('sha256').update(token).digest('hex')
+}
+
+function tokenFromUrl(url: string): string {
+  return url.slice(url.indexOf('#token=') + '#token='.length)
+}
+
+function containerHost(callerUid: number): FakeInstallerHost {
+  const host = new FakeInstallerHost()
+  host.uid = callerUid
+  host.addDirectory('/srv/app', 0o755)
+  host.addDirectory('/srv/app/state', 0o700, 1000, 1000)
+  host.addFile('/srv/app/state/auth-state.json', '{}\n', 0o600, 1000, 1000)
+  host.addDirectory('/srv/app/state/login-tokens', 0o700, 1000, 1000)
+  host.addFile('/srv/app/dsh-auth.env', 'DSH_AUTH_STATE_FILE="/srv/app/state/auth-state.json"\nDSH_AUTH_LOGIN_TOKEN_ENABLED=true\n', 0o600, 1000, 1000)
+  return host
+}
+
+function containerArgs(): string[] {
+  return ['issue-login-token', '--non-interactive', '--authorize-login-token-issue',
+    '--auth-state-file', '/srv/app/state/auth-state.json', '--public-origin', 'https://auth.example.test']
+}
+
+class FirstWriteFailsIo extends FakeCliIo {
+  private failedOnce = false
+
+  override writeOut(value: string): void {
+    if (!this.failedOnce) {
+      this.failedOnce = true
+      throw new Error('synthetic stdout failure')
+    }
+    super.writeOut(value)
+  }
+}
+
+describe('issue-login-token CLI', () => {
+  it('issues a system token from the recorded installation and prints one URL', async () => {
+    const host = tokenSystemHost()
+    await expect(runCli(['setup', ...TOKEN_SYSTEM_ARGS], new FakeCliIo(false), host)).resolves.toBe(0)
+
+    const io = new FakeCliIo(false)
+    expect(await runCli(ISSUE_ARGS, io, host)).toBe(0)
+    const output = io.outputs.join('')
+    expect(output.trim()).toMatch(TOKEN_URL)
+    expect(output.trim().split('\n')).toHaveLength(1)
+    expect(io.errors).toEqual([])
+    const token = tokenFromUrl(output.trim())
+    const path = `/var/lib/dsh-auth/login-tokens/${digestOf(token)}`
+    expect(host.fileExists(path)).toBe(true)
+    const metadata = JSON.parse(host.readFile(path)) as { schemaVersion: number; issuedAt: number; expiresAt: number }
+    expect(metadata.schemaVersion).toBe(1)
+    expect(metadata.expiresAt - metadata.issuedAt).toBe(300_000)
+    expect(Number.isSafeInteger(metadata.issuedAt)).toBe(true)
+    expect(Number.isSafeInteger(metadata.expiresAt)).toBe(true)
+    expect(host.readFile(path)).not.toContain(token)
+    expect(host.stat(path)).toMatchObject({ uid: 0, gid: 0, mode: 0o600 })
+  }, 30_000)
+
+  it('emits the JSON v2 success document as the only bearer-secret output', async () => {
+    const host = tokenSystemHost()
+    await runCli(['setup', ...TOKEN_SYSTEM_ARGS], new FakeCliIo(false), host)
+    const before = Date.now()
+
+    const io = new FakeCliIo(false)
+    expect(await runCli([...ISSUE_ARGS, '--json'], io, host)).toBe(0)
+    const document = JSON.parse(io.outputs.join('')) as { schemaVersion: number; command: string; status: string; exitCode: number; token: string; loginUrl: string; expiresAt: string }
+    expect(document).toMatchObject({ schemaVersion: 2, command: 'issue-login-token', status: 'success', exitCode: 0 })
+    expect(document.token).toMatch(/^dsh_otl_v1_[A-Za-z0-9_-]{43}$/u)
+    expect(document.loginUrl).toBe(`http://10.0.0.20:8080/auth/token#token=${document.token}`)
+    expect(document.expiresAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u)
+    const remaining = Date.parse(document.expiresAt) - before
+    expect(remaining).toBeGreaterThan(299_000)
+    expect(remaining).toBeLessThanOrEqual(300_500)
+    expect(io.errors).toEqual([])
+  }, 30_000)
+
+  it('accepts TTL boundaries 60 and 300 and rejects everything else before writing', async () => {
+    const host = tokenSystemHost()
+    await runCli(['setup', ...TOKEN_SYSTEM_ARGS], new FakeCliIo(false), host)
+    for (const ttl of ['59', '301', '0', 'abc', '60.5']) {
+      const io = new FakeCliIo(false)
+      expect(await runCli([...ISSUE_ARGS, '--ttl-seconds', ttl], io, host)).toBe(2)
+      expect(`${io.outputs.join('')}${io.errors.join('')}`).not.toMatch(/dsh_otl_v1_/u)
+    }
+    expect(host.listDirectory('/var/lib/dsh-auth/login-tokens')).toHaveLength(0)
+
+    const before = Date.now()
+    const io = new FakeCliIo(false)
+    expect(await runCli([...ISSUE_ARGS, '--json', '--ttl-seconds', '60'], io, host)).toBe(0)
+    const remaining = Date.parse((JSON.parse(io.outputs.join('')) as { expiresAt: string }).expiresAt) - before
+    expect(remaining).toBeGreaterThan(59_000)
+    expect(remaining).toBeLessThanOrEqual(60_500)
+  }, 30_000)
+
+  it('requires the exact confirmation word in interactive mode only', async () => {
+    const host = tokenSystemHost()
+    await runCli(['setup', ...TOKEN_SYSTEM_ARGS], new FakeCliIo(false), host)
+
+    const confirmed = new FakeCliIo(true, ['issue-login-token'])
+    expect(await runCli(['issue-login-token'], confirmed, host)).toBe(0)
+    expect(confirmed.prompts.join('')).toContain('issue-login-token')
+    expect(confirmed.outputs.join('').trim().split('\n').at(-1)).toMatch(TOKEN_URL)
+
+    const denied = new FakeCliIo(true, ['issue'])
+    expect(await runCli(['issue-login-token'], denied, host)).toBe(7)
+    expect(denied.outputs.join('')).not.toContain('#token=')
+    expect(denied.errors).toEqual([])
+
+    const unauthorized = new FakeCliIo(false)
+    expect(await runCli(['issue-login-token', '--non-interactive'], unauthorized, host)).toBe(2)
+    expect(host.listDirectory('/var/lib/dsh-auth/login-tokens')).toHaveLength(1)
+  }, 30_000)
+
+  it('keeps the published token after a stdout failure without leaking it', async () => {
+    const host = tokenSystemHost()
+    await runCli(['setup', ...TOKEN_SYSTEM_ARGS], new FakeCliIo(false), host)
+
+    const io = new FirstWriteFailsIo(false)
+    expect(await runCli(ISSUE_ARGS, io, host)).toBe(6)
+    expect(io.errors.join('')).not.toMatch(/dsh_otl_v1_/u)
+    const files = host.listDirectory('/var/lib/dsh-auth/login-tokens')
+    expect(files).toHaveLength(1)
+    expect(files[0]).toMatch(/^[0-9a-f]{64}$/u)
+    expect(host.readFile(`/var/lib/dsh-auth/login-tokens/${files[0] ?? ''}`)).toContain('"schemaVersion":1')
+  }, 30_000)
+
+  it('rejects the 33rd unexpired token and keeps failures secret-free', async () => {
+    const host = tokenSystemHost()
+    await runCli(['setup', ...TOKEN_SYSTEM_ARGS], new FakeCliIo(false), host)
+    let counter = 0
+    host.randomBytes = (size: number): Buffer => {
+      counter += 1
+      return Buffer.alloc(size, counter % 251)
+    }
+    for (let index = 0; index < 32; index += 1) {
+      expect(await runCli(ISSUE_ARGS, new FakeCliIo(false), host)).toBe(0)
+    }
+    expect(host.listDirectory('/var/lib/dsh-auth/login-tokens')).toHaveLength(32)
+
+    const io = new FakeCliIo(false)
+    expect(await runCli([...ISSUE_ARGS, '--json'], io, host)).toBe(4)
+    const output = io.outputs.join('')
+    expect(output).toContain('LOGIN_TOKEN_CAPACITY_EXCEEDED')
+    expect(output).not.toMatch(/dsh_otl_v1_/u)
+  }, 30_000)
+
+  it('refuses systemd issue for non-root callers, disabled installs, and tampered state', async () => {
+    const host = tokenSystemHost()
+    await runCli(['setup', ...TOKEN_SYSTEM_ARGS], new FakeCliIo(false), host)
+    host.uid = 1000
+    const nonRoot = new FakeCliIo(false)
+    expect(await runCli(ISSUE_ARGS, nonRoot, host)).toBe(5)
+    expect(`${nonRoot.outputs.join('')}${nonRoot.errors.join('')}`).toContain('LOGIN_TOKEN_ROOT_REQUIRED')
+    host.uid = 0
+
+    const state = JSON.parse(host.readFile('/etc/dsh-auth/install-state.json')) as { publicOrigin: string }
+    state.publicOrigin = 'https://evil.example'
+    host.addFile('/etc/dsh-auth/install-state.json', `${JSON.stringify(state)}\n`, 0o600)
+    const tampered = new FakeCliIo(false)
+    expect(await runCli(ISSUE_ARGS, tampered, host)).toBe(4)
+    expect(tampered.outputs.join('') + tampered.errors.join('')).not.toMatch(/dsh_otl_v1_/u)
+  }, 30_000)
+
+  it('refuses issuance when the recorded installation disabled tokens', async () => {
+    const host = tokenSystemHost()
+    const args = TOKEN_SYSTEM_ARGS.map(value => value === 'enabled' ? 'disabled' : value).map(value => value === 'login-token' ? 'password' : value)
+    await expect(runCli(['setup', ...args, '--admin-username', 'admin', '--password-stdin'], new FakeCliIo(false, [], [], PASSWORD), host)).resolves.toBe(0)
+
+    const io = new FakeCliIo(false)
+    expect(await runCli(ISSUE_ARGS, io, host)).toBe(3)
+    expect(io.outputs.join('') + io.errors.join('')).toContain('LOGIN_TOKEN_DISABLED')
+    expect(host.listDirectory('/var/lib/dsh-auth/login-tokens')).toHaveLength(0)
+  }, 30_000)
+
+  it('refuses missing or schema v1 system state before generating any token', async () => {
+    const empty = tokenSystemHost()
+    const missingIo = new FakeCliIo(false)
+    expect(await runCli(ISSUE_ARGS, missingIo, empty)).toBe(4)
+    expect(missingIo.outputs.join('') + missingIo.errors.join('')).toContain('INSTALLATION_NOT_FOUND')
+
+    const v1 = tokenSystemHost()
+    v1.addDirectory('/etc/dsh-auth', 0o750)
+    v1.addFile('/etc/dsh-auth/install-state.json', `${JSON.stringify({ schemaVersion: 1, status: 'installed' })}\n`, 0o600)
+    const v1Io = new FakeCliIo(false)
+    expect(await runCli(ISSUE_ARGS, v1Io, v1)).toBe(4)
+    expect(v1Io.outputs.join('') + v1Io.errors.join('')).toContain('SCHEMA_V1_UNSUPPORTED')
+  })
+
+  it('rejects unknown flags and half of the container input pair', async () => {
+    const host = tokenSystemHost()
+    await runCli(['setup', ...TOKEN_SYSTEM_ARGS], new FakeCliIo(false), host)
+    const io = new FakeCliIo(false)
+    expect(await runCli(['issue-login-token', '--dry-run'], io, host)).toBe(2)
+    expect(await runCli([...ISSUE_ARGS, '--public-origin', 'https://auth.example.test'], io, host)).toBe(2)
+    expect(await runCli([...ISSUE_ARGS, '--auth-state-file', 'relative/state.json', '--public-origin', 'https://auth.example.test'], io, host)).toBe(2)
+    expect(host.listDirectory('/var/lib/dsh-auth/login-tokens')).toHaveLength(0)
+  }, 30_000)
+
+  it('issues for the container owner and for root with matching ownership', async () => {
+    const ownerHost = containerHost(1000)
+    const ownerIo = new FakeCliIo(false)
+    expect(await runCli(containerArgs(), ownerIo, ownerHost)).toBe(0)
+    const ownerUrl = ownerIo.outputs.join('').trim()
+    expect(ownerUrl).toBe(`https://auth.example.test/auth/token#token=${tokenFromUrl(ownerUrl)}`)
+    const ownerDigest = digestOf(tokenFromUrl(ownerUrl))
+    expect(ownerHost.fileExists(`/srv/app/state/login-tokens/${ownerDigest}`)).toBe(true)
+    expect(ownerHost.readFile(`/srv/app/state/login-tokens/${ownerDigest}`)).not.toContain(tokenFromUrl(ownerUrl))
+
+    const rootHost = containerHost(0)
+    const rootIo = new FakeCliIo(false)
+    expect(await runCli(containerArgs(), rootIo, rootHost)).toBe(0)
+    const rootDigest = digestOf(tokenFromUrl(rootIo.outputs.join('').trim()))
+    expect(rootHost.stat(`/srv/app/state/login-tokens/${rootDigest}`)).toMatchObject({ uid: 1000, gid: 1000, mode: 0o600 })
+  })
+
+  it('refuses container callers that are neither root nor the state owner', async () => {
+    const host = containerHost(1000)
+    host.addFile('/srv/app/state/auth-state.json', '{}\n', 0o600, 0, 0)
+    const io = new FakeCliIo(false)
+    expect(await runCli(containerArgs(), io, host)).toBe(5)
+    expect(io.outputs.join('') + io.errors.join('')).toContain('LOGIN_TOKEN_CALLER_NOT_AUTHORIZED')
+    expect(host.listDirectory('/srv/app/state/login-tokens')).toHaveLength(0)
+  })
+
+  it('rejects unsafe public origins before any state validation writes', async () => {
+    for (const origin of ['http://8.8.8.8:8080', 'https://example.com/path', 'https://user@example.com', 'https://example.com/?q=1', 'https://example.com#t', 'ftp://example.com', 'example.com']) {
+      const io = new FakeCliIo(false)
+      const host = containerHost(1000)
+      expect(await runCli([...containerArgs().slice(0, 5), '--public-origin', origin], io, host)).toBe(2)
+      expect(`${io.outputs.join('')}${io.errors.join('')}`).not.toMatch(/dsh_otl_v1_/u)
+    }
+  })
+
+  it('fails closed on container drift: missing token directory, wrong modes, and policy files', async () => {
+    const missingDir = containerHost(1000)
+    missingDir.entries.delete('/srv/app/state/login-tokens')
+    const missingIo = new FakeCliIo(false)
+    expect(await runCli(containerArgs(), missingIo, missingDir)).toBe(4)
+
+    const wideMode = containerHost(1000)
+    wideMode.chmod('/srv/app/state/auth-state.json', 0o644)
+    const wideIo = new FakeCliIo(false)
+    expect(await runCli(containerArgs(), wideIo, wideMode)).toBe(4)
+
+    const missingEnv = containerHost(1000)
+    missingEnv.entries.delete('/srv/app/dsh-auth.env')
+    const envIo = new FakeCliIo(false)
+    expect(await runCli(containerArgs(), envIo, missingEnv)).toBe(3)
+    expect(envIo.outputs.join('') + envIo.errors.join('')).toContain('LOGIN_TOKEN_POLICY_MISSING')
+
+    const disabledEnv = containerHost(1000)
+    disabledEnv.addFile('/srv/app/dsh-auth.env', 'DSH_AUTH_LOGIN_TOKEN_ENABLED=false\n', 0o600, 1000, 1000)
+    const disabledIo = new FakeCliIo(false)
+    expect(await runCli(containerArgs(), disabledIo, disabledEnv)).toBe(3)
+    expect(disabledIo.outputs.join('') + disabledIo.errors.join('')).toContain('LOGIN_TOKEN_DISABLED')
+  })
+
+  it('refuses a symlinked container state file on the real filesystem', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-auth-issue-container-'))
+    try {
+      const stateDirectory = join(root, 'state')
+      mkdirSync(stateDirectory, { mode: 0o700 })
+      writeFileSync(join(root, 'dsh-auth.env'), 'DSH_AUTH_LOGIN_TOKEN_ENABLED=true\n', { mode: 0o600 })
+      writeFileSync(join(root, 'target.json'), '{}\n', { mode: 0o600 })
+      chmodSync(join(root, 'target.json'), 0o600)
+      symlinkSync(join(root, 'target.json'), join(stateDirectory, 'auth-state.json'))
+      mkdirSync(join(stateDirectory, 'login-tokens'), { mode: 0o700 })
+
+      const io = new FakeCliIo(false)
+      expect(await runCli([
+        'issue-login-token', '--non-interactive', '--authorize-login-token-issue',
+        '--auth-state-file', join(stateDirectory, 'auth-state.json'), '--public-origin', 'http://127.0.0.1:8080',
+      ], io, new NodeInstallerHost())).toBe(4)
+      expect(io.errors.join('')).not.toMatch(/dsh_otl_v1_/u)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })

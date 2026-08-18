@@ -15,7 +15,12 @@ interface FakeEntry {
 export class FakeInstallerHost implements InstallerHost {
   readonly platform = 'linux' as const
   arch = 'x64' as string
-  readonly effectiveUid = 0
+  uid = 0
+
+  get effectiveUid(): number | undefined {
+    return this.uid
+  }
+
   readonly entries = new Map<string, FakeEntry>()
   readonly commands: CommandSpec[] = []
   readonly busyPorts = new Set<string>()
@@ -145,6 +150,11 @@ export class FakeInstallerHost implements InstallerHost {
   realpath(path: string): string {
     if (!this.entries.has(path)) throw new Error(`ENOENT: ${path}`)
     return path
+  }
+
+  listDirectory(path: string): readonly string[] {
+    if (this.entries.get(path)?.directory !== true) throw new Error(`ENOTDIR: ${path}`)
+    return [...this.entries.keys()].filter(candidate => candidate !== path && dirname(candidate) === path).map(candidate => candidate.slice(path.length + 1))
   }
 
   stat(path: string): ReturnType<InstallerHost['stat']> {

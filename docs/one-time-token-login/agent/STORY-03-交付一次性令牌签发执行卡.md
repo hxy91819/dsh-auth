@@ -1,15 +1,15 @@
 ---
 story: STORY-03
 intent_version: 1
-refreshed: 待领取
-code_baseline: 待领取
+refreshed: 2026-08-18
+code_baseline: c7075123eb52cca412d1b2152eb65ac3bdc91849
 owns: [TOKEN_ISSUANCE]
 verifies: [INSTALLER_V2]
 ---
 
 # STORY-03 交付一次性令牌签发执行卡
 
-- 状态：可领取，依赖 STORY-02 已完成实现（尚未提交）
+- 状态：done（2026-08-18，opencode，feature/story-03-login-token-issuance）
 - 对应：[STORY-03 交付一次性令牌签发](../stories/Story-03-交付一次性令牌签发.md)
 
 ## 目标与完成信号
@@ -86,3 +86,13 @@ git diff --check
 ## 交接
 
 交付签发命令、token store、system/container 解析、测试、起止提交和干净状态。给 STORY-04 固定 consume API、文件状态机、过期/损坏结果分类和不会包含 raw token 的诊断边界。
+
+交付记录（2026-08-18）：
+
+- 起止：`c707512`（领取基线）→ 本卡提交（feature/story-03-login-token-issuance）。
+- 命令与退出码：`corepack pnpm run test` 0（117/117，含 login-token-store 11 项、issue-login-token CLI 13 项）；`corepack pnpm run check` 0（publint client.js CJS 警告为基线已有）；`corepack pnpm run check:caddy` 0；`corepack pnpm run typecheck` 0；`git diff --check` 0。
+- 固定分母：TTL 60/300 秒闭区间、容量 32/33、RNG 冲突重试上限 8、token `dsh_otl_v1_`+43 字符、文件名 SHA-256 64 hex、元数据仅 schemaVersion/issuedAt/expiresAt、临时/抢占前缀 `.dsh_otl_v1_tmp_`/`.dsh_otl_v1_consuming_`。
+- 故障注入证据：写失败/rename 失败（FaultyTokenHost）、RNG 冲突与耗尽、stdout 首写失败保留已发布文件、容器 symlink（真实文件系统）、UID 越权（systemd 非 root=5、容器非 root 非 owner=5）、公网 HTTP/带路径/query/fragment/userinfo origin=2。
+- 输出扫描：所有失败路径 stdout/stderr/JSON 断言不含 `dsh_otl_v1_` 前缀。
+- 数据副作用：测试仅使用 mkdtemp 临时目录与内存 FakeInstallerHost；无真实 systemd/端口/进程改动。
+- 给 STORY-04 的 consume API：`LoginTokenStore.claim(token)` 返回 `claimed|invalid`（内部先清理过期，再以 rename 抢占到 `.dsh_otl_v1_consuming_<digest>`，解析失败或过期一律 invalid 且不恢复文件）；`releaseClaim(claim)` 在会话持久化成功后删除抢占文件；残留 consuming 文件视为已消费，仅由严格命名+过期清理删除；损坏受管文件形成安全冲突（conflict，不静默删除）。

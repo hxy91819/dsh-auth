@@ -162,6 +162,26 @@ export function publicOrigin(request: SetupRequest): string {
   return `http://${request.listenAddress}:${String(request.httpPort)}`
 }
 
+/** Accept exactly one http or https origin without userinfo, path, query, or fragment. */
+export function validatePublicOrigin(value: string): string {
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    usage('--public-origin must be an absolute http or https origin')
+  }
+  if ((parsed.protocol !== 'https:' && parsed.protocol !== 'http:')
+    || parsed.username !== '' || parsed.password !== ''
+    || parsed.pathname !== '/' || parsed.search !== '' || parsed.hash !== ''
+    || parsed.host === '') {
+    usage('--public-origin must be a single origin without userinfo, path, query, or fragment')
+  }
+  if (parsed.protocol === 'http:' && !isPrivateAddress(parsed.hostname)) {
+    usage('plain HTTP --public-origin must use a private, ULA, or loopback literal address')
+  }
+  return `${parsed.protocol}//${parsed.host}`
+}
+
 export function parseAdminBootstrap(value: string | undefined): AdminBootstrap | undefined {
   if (value === undefined) return undefined
   if (value !== 'password' && value !== 'login-token') usage('--admin-bootstrap must be password or login-token')

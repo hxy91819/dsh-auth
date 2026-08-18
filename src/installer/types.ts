@@ -185,6 +185,9 @@ export interface InstallerHost {
   fileExists(path: string): boolean
   regularFile(path: string): boolean
   realpath(path: string): string
+  listDirectory(path: string): readonly string[]
+  fsyncFile?(path: string): void
+  fsyncDirectory?(path: string): void
   stat(path: string): { readonly uid: number; readonly gid: number; readonly mode: number; readonly size: number; readonly isDirectory: boolean }
   mkdir(path: string, mode: number): void
   writeNewFile(path: string, content: string | Buffer, mode: number): void

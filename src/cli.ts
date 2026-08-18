@@ -6,16 +6,18 @@ import { createInterface } from 'node:readline/promises'
 import { StringDecoder } from 'node:string_decoder'
 import { stdin as processStdin, stdout as processStdout, stderr as processStderr } from 'node:process'
 import { assertAdministratorPassword, hashPassword } from './password.js'
+import { LoginTokenError, LoginTokenStore } from './login-token-store.js'
 import { parseArguments, renderHelp, type ParsedArguments } from './installer/cli-parser.js'
 import { discoverHost } from './installer/discovery.js'
 import { buildDoctorPlan, doctorExitCode } from './installer/doctor.js'
 import { InstallerError } from './installer/errors.js'
 import { executeSetup, type SetupSecrets } from './installer/executor.js'
 import { NodeInstallerHost } from './installer/host.js'
+import { resolveContainerLoginTokenContext, resolveSystemdLoginTokenContext } from './installer/issue-login-token.js'
 import { prepareSetup } from './installer/plan.js'
 import { resetManagedPassword } from './installer/reset-password.js'
 import { executeUninstall, prepareUninstall } from './installer/uninstall.js'
-import { ExitCode, type InstallationPlan, type InstallerHost, type PasswordSource, type SetupRequest } from './installer/types.js'
+import { ExitCode, type ExitCodeValue, type InstallationPlan, type InstallerHost, type PasswordSource, type SetupRequest } from './installer/types.js'
 import { parseAdminBootstrap, parseLoginTokenPolicy, parseTlsMode, validateAbsolutePath, validateSetupRequest } from './installer/validation.js'
 
 interface CliIo {
@@ -368,7 +370,9 @@ async function confirmInteractiveSetup(io: CliIo, plan: InstallationPlan): Promi
 }
 
 async function runSetupOrPlan(parsed: ParsedArguments, io: CliIo, host: InstallerHost, command: 'setup' | 'plan'): Promise<number> {
-  const invalid = [...parsed.flags].filter(option => option === '--authorize-uninstall' || option === '--authorize-password-reset')
+  const invalid = [...parsed.flags, ...parsed.values.keys()].filter(option =>
+    option === '--authorize-uninstall' || option === '--authorize-password-reset' || option === '--authorize-login-token-issue'
+    || option === '--ttl-seconds' || option === '--auth-state-file' || option === '--public-origin')
   if (invalid.length > 0) throw new InstallerError(`${command} does not accept ${invalid.join(', ')}`, ExitCode.usage)
   const json = parsed.flags.has('--json')
   const interactive = io.interactive && !parsed.flags.has('--non-interactive')
@@ -450,6 +454,76 @@ async function runUninstall(parsed: ParsedArguments, io: CliIo, host: InstallerH
   return ExitCode.success
 }
 
+function loginTokenExitCode(kind: LoginTokenError['kind']): ExitCodeValue {
+  if (kind === 'usage') return ExitCode.usage
+  if (kind === 'execution') return ExitCode.execution
+  return ExitCode.conflict
+}
+
+function ttlSecondsOption(value: string | undefined): number {
+  if (value === undefined) return 300
+  if (!/^\d{1,3}$/u.test(value) || Number(value) < 60 || Number(value) > 300) {
+    throw new InstallerError('--ttl-seconds must be an integer from 60 to 300', ExitCode.usage)
+  }
+  return Number(value)
+}
+
+async function authorizeLoginTokenIssue(parsed: ParsedArguments, io: CliIo): Promise<boolean> {
+  const interactive = io.interactive && !parsed.flags.has('--non-interactive')
+  if (interactive) {
+    io.writeOut('This writes a one-time bearer login URL to stdout. Anyone holding the URL can sign in until it expires.\n')
+    return (await io.readLine('Type issue-login-token to continue: ')).trim() === 'issue-login-token'
+  }
+  if (!parsed.flags.has('--authorize-login-token-issue')) {
+    throw new InstallerError('non-interactive login token issue requires --authorize-login-token-issue', ExitCode.usage)
+  }
+  return true
+}
+
+async function runIssueLoginToken(parsed: ParsedArguments, io: CliIo, host: InstallerHost): Promise<number> {
+  assertAcceptedOptions(
+    parsed,
+    ['--ttl-seconds', '--auth-state-file', '--public-origin', '--authorize-login-token-issue', '--non-interactive', '--json'],
+    'issue-login-token accepts only --ttl-seconds, --auth-state-file with --public-origin, --non-interactive, --authorize-login-token-issue, and --json',
+  )
+  const authStateFile = parsed.values.get('--auth-state-file')
+  const publicOrigin = parsed.values.get('--public-origin')
+  if ((authStateFile === undefined) !== (publicOrigin === undefined)) {
+    throw new InstallerError('--auth-state-file and --public-origin must be provided together', ExitCode.usage)
+  }
+  const context = authStateFile === undefined || publicOrigin === undefined
+    ? resolveSystemdLoginTokenContext(host)
+    : resolveContainerLoginTokenContext(host, authStateFile, publicOrigin)
+  if (!await authorizeLoginTokenIssue(parsed, io)) return ExitCode.cancelled
+  let issued
+  try {
+    const store = new LoginTokenStore({ host, directory: context.tokenDirectory, now: () => Date.now() })
+    issued = store.issue({ ttlSeconds: ttlSecondsOption(parsed.values.get('--ttl-seconds')), ...(context.owner === undefined ? {} : { owner: context.owner }) })
+  } catch (error) {
+    if (error instanceof LoginTokenError) {
+      const exitCode = loginTokenExitCode(error.kind)
+      throw new InstallerError(error.message, exitCode, [{ code: error.code, severity: 'error', message: error.message }])
+    }
+    throw error
+  }
+  const loginUrl = `${context.publicOrigin}/auth/token#token=${issued.token}`
+  const document = {
+    schemaVersion: 2,
+    command: 'issue-login-token',
+    status: 'success',
+    exitCode: ExitCode.success,
+    token: issued.token,
+    loginUrl,
+    expiresAt: new Date(issued.expiresAt).toISOString(),
+  }
+  try {
+    io.writeOut(parsed.flags.has('--json') ? `${JSON.stringify(document)}\n` : `${loginUrl}\n`)
+  } catch {
+    throw new InstallerError('login token output failed; the issued token file remains and will expire unused', ExitCode.execution)
+  }
+  return ExitCode.success
+}
+
 async function dispatchCommand(parsed: ParsedArguments, io: CliIo, host: InstallerHost): Promise<number> {
   if (parsed.flags.has('--help') || parsed.flags.has('-h') || parsed.command === 'help') {
     io.writeOut(renderHelp())
@@ -470,6 +544,7 @@ async function dispatchCommand(parsed: ParsedArguments, io: CliIo, host: Install
   if (parsed.command === 'doctor') return runDoctor(parsed, io, host)
   if (parsed.command === 'reset-password') return await runResetPassword(parsed, io, host)
   if (parsed.command === 'uninstall') return await runUninstall(parsed, io, host)
+  if (parsed.command === 'issue-login-token') return await runIssueLoginToken(parsed, io, host)
   return await runLegacy(parsed, io)
 }
 

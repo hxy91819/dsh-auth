@@ -39,8 +39,12 @@ const FLAG_DECLARATIONS: readonly FlagDeclaration[] = [
   { name: '--certificate', kind: 'value', valueHint: '/absolute/path', help: 'required with --tls manual' },
   { name: '--certificate-key', kind: 'value', valueHint: '/absolute/path', help: 'required with --tls manual' },
   { name: '--output-dir', kind: 'value', valueHint: '/absolute/path', help: 'optional offline/container files; skips systemd' },
+  { name: '--ttl-seconds', kind: 'value', valueHint: '60..300', help: 'login token lifetime for issue-login-token (default: 300)' },
+  { name: '--auth-state-file', kind: 'value', valueHint: '/absolute/path', help: 'explicit 0600 state file for container token issue' },
+  { name: '--public-origin', kind: 'value', valueHint: 'ORIGIN', help: 'single http(s) origin paired with --auth-state-file' },
   { name: '--authorize-password-reset', kind: 'boolean', help: 'required for non-interactive password reset' },
   { name: '--authorize-uninstall', kind: 'boolean', help: 'required for non-interactive uninstall' },
+  { name: '--authorize-login-token-issue', kind: 'boolean', help: 'required for non-interactive token issue' },
 ]
 
 const VALUE_OPTIONS = new Set(FLAG_DECLARATIONS.filter(flag => flag.kind === 'value').map(flag => flag.name))
@@ -123,6 +127,8 @@ export function parseArguments(argv: readonly string[]): ParsedArguments {
   return { ...(command === undefined ? {} : { command }), values, flags }
 }
 
+const ISSUE_TOKEN_FLAGS = new Set(['--ttl-seconds', '--auth-state-file', '--public-origin', '--authorize-login-token-issue'])
+
 function flagLine(flag: FlagDeclaration): string {
   const name = flag.valueHint === undefined ? flag.name : `${flag.name} ${flag.valueHint}`
   return `  ${name.padEnd(35)} ${flag.help}`
@@ -131,7 +137,9 @@ function flagLine(flag: FlagDeclaration): string {
 /** Frozen usage text generated from the same flag declarations used by the parser. */
 export function renderHelp(): string {
   const global = FLAG_DECLARATIONS.filter(flag => flag.global === true)
-  const setup = FLAG_DECLARATIONS.filter(flag => flag.global !== true && flag.name !== '--authorize-password-reset' && flag.name !== '--authorize-uninstall')
+  const authorize = FLAG_DECLARATIONS.filter(flag => flag.name === '--authorize-password-reset' || flag.name === '--authorize-uninstall')
+  const setup = FLAG_DECLARATIONS.filter(flag => flag.global !== true && !authorize.includes(flag) && !ISSUE_TOKEN_FLAGS.has(flag.name))
+  const issueToken = FLAG_DECLARATIONS.filter(flag => ISSUE_TOKEN_FLAGS.has(flag.name))
   return `Usage:
   dsh-auth --help
   dsh-auth --version
@@ -143,6 +151,11 @@ export function renderHelp(): string {
                           [--authorize-password-reset]
   dsh-auth uninstall [--non-interactive] [--json] [--dry-run]
                      [--authorize-uninstall]
+  dsh-auth issue-login-token [--ttl-seconds 60..300]
+                             [--auth-state-file PATH
+                              --public-origin ORIGIN]
+                             [--non-interactive]
+                             [--authorize-login-token-issue] [--json]
   dsh-auth hash [--password-stdin]
   dsh-auth secret
 
@@ -152,6 +165,9 @@ ${global.map(flagLine).join('\n')}
 Setup options:
 ${setup.map(flagLine).join('\n')}
 
+Issue login token options:
+${issueToken.map(flagLine).join('\n')}
+
 When stdin and stdout are TTYs and --non-interactive is not set, setup prompts
 for missing values. Otherwise it requires --admin-bootstrap and --login-token.
 Password initialization also requires --admin-username. System setup also
@@ -159,6 +175,14 @@ requires --dsh-service. HTTPS also requires --server-name. HTTP requires
 --listen-address. A ready password setup also requires exactly one of
 --password-stdin or --password-file; plan, login-token initialization, and
 unchanged reruns do not.
+
+issue-login-token prints a bearer login URL to stdout and nothing else. Without
+--auth-state-file it derives paths from the recorded system installation and
+requires root; with --auth-state-file it also requires --public-origin and
+accepts root or the state file owner. Interactive use asks for the exact word
+issue-login-token; non-interactive use requires --non-interactive together with
+--authorize-login-token-issue. The TTL defaults to 300 seconds and accepts
+60-300.
 
 Flags accept a space-separated --name value form or --name=value. Duplicate
 flags and unknown flags fail with exit code 2. Global flags may precede the
