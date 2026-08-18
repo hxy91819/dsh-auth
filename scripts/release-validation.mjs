@@ -369,6 +369,9 @@ export function createReleaseArtifact(repositoryRoot, tag, directory, reportPath
   const existingTarballs = readdirSync(directory).filter(name => name.endsWith('.tgz'))
   if (existingTarballs.length !== 0) throw new ReleaseValidationError('release directory already contains a tarball')
 
+  // Packer writes gitignored vendor/caddy. Release pack keeps --ignore-scripts so
+  // prepack/postpack do not rebuild or delete that tree before the tarball exists.
+  runRequired('node', ['scripts/pack-caddy-platform.mjs', '--clean'], repositoryRoot)
   const dryRun = runRequired('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], repositoryRoot)
   const packSummary = validatePackReport(JSON.parse(dryRun.stdout), identity.version)
   if (reportPath !== undefined) writeJson(reportPath, JSON.parse(dryRun.stdout))

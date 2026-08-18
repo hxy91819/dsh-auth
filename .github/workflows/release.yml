@@ -83,6 +83,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
+      # Release pack uses --ignore-scripts, so prepack does not vendor Caddy.
+      # The packer lives in the tag checkout; this step is required before inspect.
+      - name: Vendor official Caddy binaries for the release tarball
+        run: node scripts/pack-caddy-platform.mjs --clean
+
       - name: Create and inspect the single release artifact
         env:
           RELEASE_TAG: ${{ inputs.tag }}
