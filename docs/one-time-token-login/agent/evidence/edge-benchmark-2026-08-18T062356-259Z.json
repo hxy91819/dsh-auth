@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-18T06:23:56.211Z",
+  "purpose": "dsh-auth edge selection only",
+  "tools": {
+    "node": "v24.15.0",
+    "nginx": "nginx version: nginx/1.26.3",
+    "caddy": "v2.11.4 h1:XKxkMTgNSizEvKG6QHue6cAsFOteU2qA61w2tKkCWi0="
+  },
+  "requestSet": {
+    "path": "/benchmark",
+    "bodyBytes": 1032,
+    "warmupRequests": 200,
+    "sampleRequests": 1200,
+    "concurrency": 20,
+    "rounds": 3
+  },
+  "samples": {
+    "nginx": [
+      {
+        "requests": 1200,
+        "concurrency": 20,
+        "requestsPerSecond": 2332.4751159600696,
+        "p50Milliseconds": 7.739257,
+        "p95Milliseconds": 9.870056,
+        "serverErrors": 0
+      },
+      {
+        "requests": 1200,
+        "concurrency": 20,
+        "requestsPerSecond": 2569.024843148884,
+        "p50Milliseconds": 7.086232,
+        "p95Milliseconds": 8.675564,
+        "serverErrors": 0
+      },
+      {
+        "requests": 1200,
+        "concurrency": 20,
+        "requestsPerSecond": 2658.9870158207336,
+        "p50Milliseconds": 6.819019,
+        "p95Milliseconds": 8.78602,
+        "serverErrors": 0
+      }
+    ],
+    "caddy": [
+      {
+        "requests": 1200,
+        "concurrency": 20,
+        "requestsPerSecond": 3293.29108523887,
+        "p50Milliseconds": 5.352757,
+        "p95Milliseconds": 7.30466,
+        "serverErrors": 0
+      },
+      {
+        "requests": 1200,
+        "concurrency": 20,
+        "requestsPerSecond": 3426.759505006303,
+        "p50Milliseconds": 5.444829,
+        "p95Milliseconds": 6.765469,
+        "serverErrors": 0
+      },
+      {
+        "requests": 1200,
+        "concurrency": 20,
+        "requestsPerSecond": 3776.1561592625076,
+        "p50Milliseconds": 4.876473,
+        "p95Milliseconds": 7.126427,
+        "serverErrors": 0
+      }
+    ]
+  },
+  "realtime": {
+    "nginx": {
+      "sse": true,
+      "websocket": true
+    },
+    "caddy": {
+      "sse": true,
+      "websocket": true
+    }
+  },
+  "summary": {
+    "nginxThroughput": 2569.024843148884,
+    "caddyThroughput": 3426.759505006303,
+    "throughputRatio": 1.3338755809017726,
+    "nginxP95": 8.78602,
+    "caddyP95": 7.126427,
+    "p95Ratio": 0.8111098085367435,
+    "serverErrors": 0,
+    "passed": true
+  }
+}

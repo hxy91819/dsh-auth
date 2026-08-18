@@ -79,7 +79,7 @@ function hasSameOrigin(req: IncomingMessage, config: ResolvedConfig): boolean {
 function protectedRequestOriginAllowed(req: IncomingMessage, config: ResolvedConfig): boolean {
   const originalMethod = headerValue(req, 'x-original-method') ?? 'GET'
   const originalUpgrade = headerValue(req, 'x-original-upgrade')
-  if ((originalMethod === 'GET' || originalMethod === 'HEAD') && originalUpgrade === undefined) return true
+  if ((originalMethod === 'GET' || originalMethod === 'HEAD') && !originalUpgrade) return true
   const fetchSite = headerValue(req, 'sec-fetch-site')
   if (fetchSite !== undefined && fetchSite !== 'same-origin' && fetchSite !== 'none') return false
   return hasSameOrigin(req, config)

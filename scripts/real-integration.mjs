@@ -1,5 +1,5 @@
 /**
- * Exercise the packed bundle through a real DSH, TLS Nginx, and headless
+ * Exercise the packed bundle through a real DSH, TLS edge, and headless
  * browser. The test owns every generated profile, secret, process, and port.
  */
 import { randomBytes } from 'node:crypto'
@@ -11,7 +11,9 @@ import { spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
 import http from 'node:http'
 import https from 'node:https'
+import http2 from 'node:http2'
 import WebSocket from 'ws'
+import { renderCaddyfile } from './caddy-config.mjs'
 
 const checkout = resolve(import.meta.dirname, '..')
 const HELP = `Usage:
@@ -31,6 +33,9 @@ Environment:
   DSH_E2E_CWD         Absolute DSH workspace path (default: repository root).
   DSH_E2E_DSH_BIN     Absolute DSH executable (default: local dependency).
   DSH_E2E_CHROME_BIN  Absolute Chrome/Chromium executable (default: auto-detect).
+  DSH_E2E_EDGE        nginx or caddy (default: nginx).
+  DSH_E2E_CADDY_BIN   Absolute Caddy executable (required for caddy).
+  DSH_E2E_CADDY_TLS   manual or internal (default: manual).
 
 Outputs:
   Writes a JSON behavior summary to stdout and exits 0 on success. Failures
@@ -40,6 +45,7 @@ Outputs:
 Examples:
   corepack pnpm run test:e2e
   DSH_E2E_CHROME_BIN=/usr/bin/chromium node scripts/real-integration.mjs packed/dsh-auth-0.1.13.tgz
+  DSH_E2E_EDGE=caddy DSH_E2E_CADDY_BIN=/opt/dsh-auth/caddy node scripts/real-integration.mjs
 `
 
 const args = process.argv.slice(2).filter(argument => argument !== '--')
@@ -85,6 +91,13 @@ const dshExecutable = executable(
   'DSH executable',
 )
 const browserExecutable = chromeExecutable()
+const edgeRuntime = process.env.DSH_E2E_EDGE ?? 'nginx'
+if (edgeRuntime !== 'nginx' && edgeRuntime !== 'caddy') throw new Error('DSH_E2E_EDGE must be nginx or caddy')
+const caddyExecutable = edgeRuntime === 'caddy'
+  ? executable(process.env.DSH_E2E_CADDY_BIN ?? '', 'DSH_E2E_CADDY_BIN')
+  : undefined
+const caddyTls = process.env.DSH_E2E_CADDY_TLS ?? 'manual'
+if (caddyTls !== 'manual' && caddyTls !== 'internal') throw new Error('DSH_E2E_CADDY_TLS must be manual or internal')
 const root = mkdtempSync(join(tmpdir(), 'dsh-auth-real-integration-'))
 const home = join(root, 'dsh-home')
 const secrets = join(root, 'secrets')
@@ -93,7 +106,7 @@ mkdirSync(secrets, { mode: 0o700 })
 mkdirSync(nginxRoot, { recursive: true })
 
 let dshProcess
-let nginxProcess
+let edgeProcess
 let chromeProcess
 
 function checked(command, args, options = {}) {
@@ -187,7 +200,7 @@ function clientRequest(client, port, path, options = {}) {
     const req = client.request({
       hostname: '127.0.0.1', port, path,
       method: options.method ?? 'GET', headers,
-      ...client === https ? { rejectUnauthorized: false } : {},
+      ...client === https ? { rejectUnauthorized: false, servername: 'localhost' } : {},
     }, response => {
       const chunks = []
       response.on('data', chunk => { chunks.push(Buffer.from(chunk)) })
@@ -242,6 +255,7 @@ async function websocketStatus(port, cookie) {
       headers,
       origin: `https://localhost:${String(port)}`,
       rejectUnauthorized: false,
+      servername: 'localhost',
     })
     socket.once('open', () => {
       socket.close()
@@ -254,6 +268,57 @@ async function websocketStatus(port, cookie) {
     socket.once('error', error => {
       if (socket.readyState !== WebSocket.CLOSED) rejectSocket(error)
     })
+  })
+}
+
+async function http2Status(port, path) {
+  const client = http2.connect(`https://localhost:${String(port)}`, { rejectUnauthorized: false })
+  try {
+    const request = client.request({ ':method': 'GET', ':path': path })
+    const [headers] = await once(request, 'response')
+    request.close()
+    return headers[':status']
+  } finally {
+    client.close()
+  }
+}
+
+async function sseStatus(port, cookie) {
+  return await new Promise((resolveStream, rejectStream) => {
+    const request = https.request({
+      hostname: '127.0.0.1', port, path: '/plugins/events',
+      headers: { host: `localhost:${String(port)}`, ...cookie === undefined ? {} : { cookie } },
+      rejectUnauthorized: false,
+      servername: 'localhost',
+    })
+    const timer = setTimeout(() => {
+      request.destroy()
+      rejectStream(new Error('SSE did not produce an initial frame'))
+    }, 5_000)
+    request.once('response', response => {
+      if (response.statusCode !== 200) {
+        clearTimeout(timer)
+        response.resume()
+        resolveStream({ status: response.statusCode })
+        return
+      }
+      let body = ''
+      response.on('data', chunk => {
+        body += chunk.toString()
+        if (!body.includes(': connected\n\n') || !body.includes('"type":"graph"')) return
+        clearTimeout(timer)
+        response.destroy()
+        resolveStream({ status: response.statusCode, contentType: response.headers['content-type'], initialFrame: true })
+      })
+      response.once('error', error => {
+        if (!response.destroyed) rejectStream(error)
+      })
+    })
+    request.once('error', error => {
+      clearTimeout(timer)
+      rejectStream(error)
+    })
+    request.end()
   })
 }
 
@@ -324,7 +389,7 @@ async function main() {
     DSH_AUTH_USER_ID: 'integration-user',
     DSH_AUTH_USERNAME: 'integration-account',
     DSH_AUTH_ROLES: 'admin,operator',
-    DSH_AUTH_TRUSTED_PROXY_ADDRESSES: '127.0.0.2',
+    DSH_AUTH_TRUSTED_PROXY_ADDRESSES: edgeRuntime === 'nginx' ? '127.0.0.2' : '127.0.0.1',
     DSH_AUTH_PASSWORD_HASH_FILE: hashFile,
     DSH_AUTH_SESSION_SECRET_FILE: secretFile,
     DSH_AUTH_SESSION_RENEWAL_SECONDS: '1',
@@ -341,36 +406,52 @@ async function main() {
     'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
     '-subj', '/CN=localhost', '-keyout', key, '-out', certificate,
   ])
-  const replacements = new Map([
-    ['${DSH_UPSTREAM}', `127.0.0.1:${String(dshPort)}`],
-    ['${DSH_HTTP_LISTEN}', `127.0.0.1:${String(httpPort)}`],
-    ['${DSH_HTTPS_LISTEN}', `127.0.0.1:${String(httpsPort)}`],
-    ['${DSH_PUBLIC_SERVER_NAME}', 'localhost'],
-    ['${DSH_PUBLIC_HTTPS_AUTHORITY}', `localhost:${String(httpsPort)}`],
-    ['${DSH_TLS_CERTIFICATE}', certificate],
-    ['${DSH_TLS_CERTIFICATE_KEY}', key],
-    ['${DSH_LOGIN_RATE}', '100r/s'],
-    ['${DSH_LOGIN_BURST}', '20'],
-  ])
-  let rendered = readFileSync(join(checkout, 'deploy/nginx/dsh-auth.conf.template'), 'utf8')
-  for (const [placeholder, value] of replacements) rendered = rendered.replaceAll(placeholder, value)
-  rendered = rendered.replace('    client_max_body_size 170m;', '    client_max_body_size 170m;\n    proxy_bind 127.0.0.2;')
-  const nginxConfig = join(nginxRoot, 'nginx.conf')
-  writeFileSync(nginxConfig, [
-    `pid ${join(nginxRoot, 'nginx.pid')};`,
-    `error_log ${join(nginxRoot, 'error.log')} notice;`,
-    'events {}',
-    'http {',
-    `  access_log ${join(nginxRoot, 'access.log')};`,
-    rendered,
-    '}',
-    '',
-  ].join('\n'))
-  checked('nginx', ['-t', '-p', nginxRoot, '-c', nginxConfig])
-  nginxProcess = child('nginx', ['-p', nginxRoot, '-c', nginxConfig, '-g', 'daemon off;'], { cwd: checkout })
-  await waitUntil(async () => (await request(httpsPort, '/auth/login')).status === 200, 'Nginx', [
+  if (edgeRuntime === 'nginx') {
+    const replacements = new Map([
+      ['${DSH_UPSTREAM}', `127.0.0.1:${String(dshPort)}`],
+      ['${DSH_HTTP_LISTEN}', `127.0.0.1:${String(httpPort)}`],
+      ['${DSH_HTTPS_LISTEN}', `127.0.0.1:${String(httpsPort)}`],
+      ['${DSH_PUBLIC_SERVER_NAME}', 'localhost'],
+      ['${DSH_PUBLIC_HTTPS_AUTHORITY}', `localhost:${String(httpsPort)}`],
+      ['${DSH_TLS_CERTIFICATE}', certificate],
+      ['${DSH_TLS_CERTIFICATE_KEY}', key],
+      ['${DSH_LOGIN_RATE}', '100r/s'],
+      ['${DSH_LOGIN_BURST}', '20'],
+    ])
+    let rendered = readFileSync(join(checkout, 'deploy/nginx/dsh-auth.conf.template'), 'utf8')
+    for (const [placeholder, value] of replacements) rendered = rendered.replaceAll(placeholder, value)
+    rendered = rendered.replace('    client_max_body_size 170m;', '    client_max_body_size 170m;\n    proxy_bind 127.0.0.2;')
+    const nginxConfig = join(nginxRoot, 'nginx.conf')
+    writeFileSync(nginxConfig, [
+      `pid ${join(nginxRoot, 'nginx.pid')};`,
+      `error_log ${join(nginxRoot, 'error.log')} notice;`,
+      'events {}',
+      'http {',
+      `  access_log ${join(nginxRoot, 'access.log')};`,
+      rendered,
+      '}',
+      '',
+    ].join('\n'))
+    checked('nginx', ['-t', '-p', nginxRoot, '-c', nginxConfig])
+    edgeProcess = child('nginx', ['-p', nginxRoot, '-c', nginxConfig, '-g', 'daemon off;'], { cwd: checkout })
+  } else {
+    const caddyConfig = join(nginxRoot, 'Caddyfile')
+    writeFileSync(caddyConfig, renderCaddyfile({
+      publicHost: 'localhost', httpPort, httpsPort, listenAddress: '127.0.0.1',
+      upstream: `127.0.0.1:${String(dshPort)}`,
+      tls: caddyTls === 'internal' ? { mode: 'internal' } : { mode: 'manual', certificate, key },
+    }))
+    checked(caddyExecutable, ['validate', '--config', caddyConfig, '--adapter', 'caddyfile'], {
+      env: { ...process.env, XDG_DATA_HOME: join(nginxRoot, 'data'), XDG_CONFIG_HOME: join(nginxRoot, 'config') },
+    })
+    edgeProcess = child(caddyExecutable, ['run', '--config', caddyConfig, '--adapter', 'caddyfile'], {
+      cwd: checkout,
+      env: { ...process.env, XDG_DATA_HOME: join(nginxRoot, 'data'), XDG_CONFIG_HOME: join(nginxRoot, 'config') },
+    })
+  }
+  await waitUntil(async () => (await request(httpsPort, '/auth/login')).status === 200, edgeRuntime, [
     { name: 'DSH', process: dshProcess },
-    { name: 'Nginx', process: nginxProcess },
+    { name: edgeRuntime, process: edgeProcess },
   ])
 
   chromeProcess = child(browserExecutable, [
@@ -380,7 +461,7 @@ async function main() {
   ], { cwd: checkout })
   await waitUntil(async () => (await fetch(`http://127.0.0.1:${String(chromePort)}/json/version`)).ok, 'Chrome', [
     { name: 'DSH', process: dshProcess },
-    { name: 'Nginx', process: nginxProcess },
+    { name: edgeRuntime, process: edgeProcess },
     { name: 'Chrome', process: chromeProcess },
   ])
 
@@ -408,7 +489,10 @@ async function main() {
     'HTTP did not redirect to the configured canonical HTTPS authority',
   )
   const unknownHost = await request(httpsPort, '/', { headers: { host: 'attacker.example' } })
-  assert(unknownHost.status === 421 && unknownHost.headers.location === undefined, 'unknown Host was not rejected')
+  assert(
+    unknownHost.status === 421 && unknownHost.headers.location === undefined,
+    `unknown Host was not rejected (status ${String(unknownHost.status)}, location ${String(unknownHost.headers.location)})`,
+  )
 
   const pageDenied = await request(httpsPort, '/')
   assert(
@@ -425,13 +509,18 @@ async function main() {
   assert((await request(httpsPort, '/api/host.describe')).status === 401, 'unauthenticated API was not 401')
   assert((await request(httpsPort, '/auth/verify')).status === 404, 'verify route was public')
   assert((await request(httpsPort, '/auth/browser-bootstrap.js')).status === 404, 'HTTP compatibility script was served in HTTPS mode')
-  assert(await websocketStatus(httpsPort) === 401, 'unauthenticated WebSocket was not rejected')
+  const unauthenticatedWebSocket = await websocketStatus(httpsPort)
+  assert(unauthenticatedWebSocket === 401, `unauthenticated WebSocket returned ${String(unauthenticatedWebSocket)}`)
+  const unauthenticatedSse = await sseStatus(httpsPort)
+  const expectedSseDenial = edgeRuntime === 'caddy' ? 401 : 303
+  assert(unauthenticatedSse.status === expectedSseDenial, 'unauthenticated SSE was not rejected')
+  assert(await http2Status(httpsPort, '/auth/login') === 200, `${edgeRuntime} did not negotiate HTTP/2`)
   const oversizedLogin = await request(httpsPort, '/auth/login', {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: `padding=${'x'.repeat(21 * 1024)}`,
   })
-  assert(oversizedLogin.status === 413, 'Nginx did not reject an oversized authentication body')
+  assert(oversizedLogin.status === 413, `${edgeRuntime} did not reject an oversized authentication body`)
 
   const login = await request(httpsPort, '/auth/login?returnTo=%2Fworkspace')
   const loginHtml = login.body.toString('utf8')
@@ -473,7 +562,7 @@ async function main() {
   assert(
     (Array.isArray(spa.headers['set-cookie']) ? spa.headers['set-cookie'] : [spa.headers['set-cookie']])
       .some(field => field?.startsWith('__Host-dsh_auth_session=')),
-    'Nginx did not forward the renewed session cookie from auth_request',
+    `${edgeRuntime} did not forward the renewed session cookie from the authentication check`,
   )
   assert(!spaHtml.includes('browser-bootstrap.js'), 'HTTPS SPA included the HTTP compatibility script')
   const sessionView = await request(httpsPort, '/auth/session', { headers: { cookie: session.pair } })
@@ -505,6 +594,11 @@ async function main() {
   assert(downloadHead.status === 200, 'authenticated download preflight failed')
   const download = await request(httpsPort, downloadPath, { headers: { cookie: session.pair } })
   assert(download.status === 200 && download.body.length > 0, 'authenticated download returned no artifact')
+  const sse = await sseStatus(httpsPort, session.pair)
+  assert(
+    sse.status === 200 && sse.contentType === 'text/event-stream' && sse.initialFrame === true,
+    'authenticated SSE did not deliver its initial frame',
+  )
   assert(await websocketStatus(httpsPort, session.pair) === 101, 'authenticated real WebSocket did not upgrade')
 
   await terminate(dshProcess)
@@ -581,20 +675,24 @@ async function main() {
   process.stdout.write(JSON.stringify({
     packageInstall: 'offline tarball',
     harnessVersion,
+    edgeRuntime,
+    http2: 200,
     harnessUiSettings: 'live locale/theme sync',
     canonicalHttpRedirect: httpRedirect.status,
     unknownHost: unknownHost.status,
     oversizedAuthBody: oversizedLogin.status,
     unauthenticatedPage: pageDenied.status,
     unauthenticatedApi: 401,
+    unauthenticatedSse: unauthenticatedSse.status,
     unauthenticatedWebSocket: 401,
     httpsCompatibilityScript: 404,
     authenticatedSpa: spa.status,
     authClientBundle: authClient.status,
     authenticatedApi: createdResponse.status,
     authenticatedDownload: download.status,
+    authenticatedSse: sse.status,
     authenticatedWebSocket: 101,
-    sessionRenewal: 'Set-Cookie via auth_request',
+    sessionRenewal: `Set-Cookie via ${edgeRuntime === 'caddy' ? 'forward_auth' : 'auth_request'}`,
     sessionPersistence: 'survived DSH restart',
     browserSidebarSignOut: 'Sign out -> /auth/login',
     logoutRevocation: 401,
@@ -606,7 +704,7 @@ async function main() {
 try {
   await main()
 } finally {
-  await terminate(nginxProcess)
+  await terminate(edgeProcess)
   await terminate(dshProcess)
   await terminate(chromeProcess)
   rmSync(root, { recursive: true, force: true })

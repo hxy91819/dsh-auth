@@ -1,0 +1,109 @@
+{
+	admin off
+	auto_https disable_redirects
+}
+
+http://{{PUBLIC_HOST}}:{{HTTP_PORT}}, http://:{{HTTP_PORT}} {
+	bind {{LISTEN_ADDRESS}}
+	@invalid_host not host {{PUBLIC_HOST}}
+	respond @invalid_host 421
+	redir https://{{PUBLIC_AUTHORITY}}{uri} 308
+}
+
+https://{{PUBLIC_HOST}}:{{HTTPS_PORT}}, https://:{{HTTPS_PORT}} {
+	bind {{LISTEN_ADDRESS}}
+	{{TLS_DIRECTIVE}}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "same-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+
+	route {
+		@invalid_host not host {{PUBLIC_HOST}}
+		respond @invalid_host 421
+
+		@public_verify path /auth/verify
+		respond @public_verify 404
+
+		@auth path /auth /auth/*
+		handle @auth {
+			request_body {
+				max_size 20KiB
+			}
+			reverse_proxy {{UPSTREAM}} {
+				header_up Host {upstream_hostport}
+				header_up X-Forwarded-Host {{PUBLIC_AUTHORITY}}
+				header_up X-Forwarded-Proto {scheme}
+				header_up X-Real-IP {remote_host}
+			}
+		}
+
+		request_body {
+			max_size 170MiB
+		}
+
+		intercept {
+			@auth_denied {
+				status 401
+				header X-Dsh-Auth-Login *
+			}
+			handle_response @auth_denied {
+				@interactive not path /api /api/* /plugins/events
+				handle @interactive {
+					header Location https://{{PUBLIC_AUTHORITY}}{resp.header.X-Dsh-Auth-Login}
+					respond 303
+				}
+			}
+		}
+
+		request_header -X-Dsh-Auth-User-Id
+		request_header -X-Dsh-Auth-Username
+		request_header -X-Dsh-Auth-Roles
+		request_header -X-Dsh-Auth-Renewal
+		request_header -X-Forwarded-For
+		request_header -X-Forwarded-Host
+		request_header -X-Forwarded-Proto
+		request_header -X-Real-IP
+		request_header -X-Original-Method
+		request_header -X-Original-URI
+		request_header -X-Original-Upgrade
+		request_header -X-Dsh-Auth-Original-Method
+		request_header -X-Dsh-Auth-Original-URI
+		request_header -X-Dsh-Auth-Original-Upgrade
+		request_header X-Dsh-Auth-Original-Method {method}
+		request_header X-Dsh-Auth-Original-URI {uri}
+		@upgrade header Upgrade *
+		request_header @upgrade X-Dsh-Auth-Original-Upgrade {header.Upgrade}
+
+		forward_auth {{UPSTREAM}} {
+			uri /auth/verify
+			header_up -Connection
+			header_up -Upgrade
+			header_up Host {upstream_hostport}
+			header_up X-Forwarded-Host {{PUBLIC_AUTHORITY}}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Real-IP {remote_host}
+			header_up X-Original-URI {header.X-Dsh-Auth-Original-URI}
+			header_up X-Original-Method {header.X-Dsh-Auth-Original-Method}
+			header_up X-Original-Upgrade {header.X-Dsh-Auth-Original-Upgrade}
+			copy_headers X-Dsh-Auth-User-Id X-Dsh-Auth-Username X-Dsh-Auth-Roles Set-Cookie>X-Dsh-Auth-Renewal
+		}
+
+		@renewed expression `{http.request.header.X-Dsh-Auth-Renewal} != ""`
+		header @renewed +Set-Cookie {http.request.header.X-Dsh-Auth-Renewal}
+		request_header -X-Dsh-Auth-Renewal
+		request_header -X-Dsh-Auth-Original-Method
+		request_header -X-Dsh-Auth-Original-URI
+		request_header -X-Dsh-Auth-Original-Upgrade
+
+		reverse_proxy {{UPSTREAM}} {
+			flush_interval -1
+			header_up Host {upstream_hostport}
+			header_up Origin http://{upstream_hostport}
+		}
+	}
+}

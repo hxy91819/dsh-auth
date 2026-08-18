@@ -1,0 +1,256 @@
+/**
+ * Validate the fixed Caddy release, generated configs, and observable auth edge protocol.
+ */
+import { createHash, randomBytes } from 'node:crypto'
+import { spawn, spawnSync } from 'node:child_process'
+import { accessSync, constants, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import https from 'node:https'
+import { createServer as createHttpServer } from 'node:http'
+import { createServer as createTcpServer } from 'node:net'
+import { tmpdir } from 'node:os'
+import { isAbsolute, join } from 'node:path'
+import { once } from 'node:events'
+import { renderCaddyfile } from './caddy-config.mjs'
+import { caddyReleaseManifest, currentCaddyPlatform, prepareCaddyRelease } from './caddy-release.mjs'
+
+const HELP = `Usage:
+  node scripts/check-caddy.mjs [--caddy ABSOLUTE_PATH]
+
+Description:
+  Verify the pinned Caddy manifest and current-platform binary, validate manual,
+  internal, and automatic TLS configs, then exercise the forward-auth boundary
+  against a disposable upstream. Without --caddy, the official pinned archive
+  is downloaded into an isolated directory and verified before use.
+
+Options:
+  --caddy PATH  Use an already available absolute Caddy executable.
+  -h, --help    Show this help.
+
+Outputs:
+  Prints one JSON result to stdout. Exit 0 means integrity, config, cleanup,
+  redirects, API denial, renewal Cookie, and forged-header replacement passed.
+  Invalid arguments exit 2; runtime or validation failures exit nonzero.
+
+Examples:
+  node scripts/check-caddy.mjs
+  node scripts/check-caddy.mjs --caddy /opt/dsh-auth/caddy
+`
+
+function parseArguments() {
+  const args = process.argv.slice(2).filter(argument => argument !== '--')
+  if (args.includes('--help') || args.includes('-h')) {
+    process.stdout.write(HELP)
+    process.exit(0)
+  }
+  if (args.length === 0) return {}
+  if (args.length !== 2 || args[0] !== '--caddy' || args[1]?.startsWith('-') === true) {
+    process.stderr.write(HELP)
+    process.exit(2)
+  }
+  if (!isAbsolute(args[1])) throw new Error('--caddy must be an absolute path')
+  accessSync(args[1], constants.X_OK)
+  return { caddy: args[1] }
+}
+
+function checked(command, args, options = {}) {
+  const result = spawnSync(command, args, { encoding: 'utf8', ...options })
+  if (result.error !== undefined) throw result.error
+  if (result.status !== 0) throw new Error(`${command} failed\n${result.stdout}${result.stderr}`)
+  return result.stdout
+}
+
+function sha256(path) {
+  return createHash('sha256').update(readFileSync(path)).digest('hex')
+}
+
+async function availablePort() {
+  const server = createTcpServer()
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const address = server.address()
+  if (address === null || typeof address === 'string') throw new Error('failed to allocate a port')
+  server.close()
+  await once(server, 'close')
+  return address.port
+}
+
+function request(port, path, options = {}) {
+  return new Promise((resolveRequest, rejectRequest) => {
+    const request = https.request({
+      hostname: '127.0.0.1', port, path, method: options.method ?? 'GET',
+      headers: { host: `localhost:${String(port)}`, ...options.headers },
+      rejectUnauthorized: false,
+      servername: 'localhost',
+    }, response => {
+      const chunks = []
+      response.on('data', chunk => { chunks.push(Buffer.from(chunk)) })
+      response.on('end', () => resolveRequest({
+        status: response.statusCode,
+        headers: response.headers,
+        body: Buffer.concat(chunks).toString('utf8'),
+      }))
+    })
+    request.once('error', rejectRequest)
+    request.end()
+  })
+}
+
+async function waitForEdge(port, process) {
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    if (process.exitCode !== null) throw new Error(`Caddy exited early with ${String(process.exitCode)}`)
+    try {
+      if ((await request(port, '/auth/login')).status === 200) return
+    } catch {
+      await new Promise(resolveTimeout => setTimeout(resolveTimeout, 50))
+    }
+  }
+  throw new Error('Caddy did not become ready')
+}
+
+async function terminate(process) {
+  if (process === undefined || process.exitCode !== null) return
+  process.kill('SIGTERM')
+  await Promise.race([once(process, 'exit'), new Promise(resolveTimeout => setTimeout(resolveTimeout, 3_000))])
+  if (process.exitCode === null) {
+    process.kill('SIGKILL')
+    await once(process, 'exit')
+  }
+}
+
+function validateManifest(manifest) {
+  if (manifest.caddyVersion !== '2.11.4') throw new Error('Caddy version pin drifted')
+  if (!/^https:\/\/github\.com\/caddyserver\/caddy\/releases\/download\/v2\.11\.4$/u.test(manifest.releaseBaseUrl)) {
+    throw new Error('Caddy release source drifted')
+  }
+  if (!/^[a-f0-9]{64}$/u.test(manifest.licenseSha256)) throw new Error('Caddy license checksum is invalid')
+  for (const platform of ['linux-x64', 'linux-arm64']) {
+    const entry = manifest.platforms?.[platform]
+    if (entry === undefined || !/^[a-f0-9]{128}$/u.test(entry.archiveSha512)
+      || !/^[a-f0-9]{64}$/u.test(entry.binarySha256)) {
+      throw new Error(`Caddy manifest is incomplete for ${platform}`)
+    }
+  }
+}
+
+function validateConfigs(caddy, root, ports, certificate, key) {
+  const environment = { ...process.env, XDG_DATA_HOME: join(root, 'data'), XDG_CONFIG_HOME: join(root, 'config') }
+  for (const tls of [{ mode: 'manual', certificate, key }, { mode: 'internal' }, { mode: 'automatic' }]) {
+    const rendered = renderCaddyfile({
+      publicHost: 'localhost', listenAddress: '127.0.0.1', upstream: `127.0.0.1:${String(ports.upstream)}`,
+      httpPort: ports.http, httpsPort: ports.https, tls,
+    })
+    const formatted = checked(caddy, ['fmt', '-'], { input: rendered })
+    if (formatted !== rendered) throw new Error(`rendered ${tls.mode} Caddy config is not formatted`)
+    const path = join(root, `Caddyfile.${tls.mode}`)
+    writeFileSync(path, rendered)
+    checked(caddy, ['validate', '--config', path, '--adapter', 'caddyfile'], { env: environment })
+    const adapted = JSON.parse(checked(caddy, ['adapt', '--config', path, '--adapter', 'caddyfile']))
+    if (adapted.admin?.disabled !== true) throw new Error('Caddy Admin API is not disabled')
+  }
+}
+
+function mockUpstream() {
+  return createHttpServer((request, response) => {
+    if (request.url === '/auth/verify') {
+      if (request.headers.cookie !== 'session=valid') {
+        response.writeHead(401, { 'x-dsh-auth-login': `/auth/login?returnTo=${encodeURIComponent(request.headers['x-original-uri'] ?? '/')}` })
+        response.end()
+        return
+      }
+      response.writeHead(204, {
+        'x-dsh-auth-user-id': 'verified-admin',
+        'x-dsh-auth-username': 'verified-name',
+        'x-dsh-auth-roles': 'admin',
+        'set-cookie': 'renewed=yes; Secure; HttpOnly; Path=/',
+      })
+      response.end()
+      return
+    }
+    if (request.url?.startsWith('/auth/login') === true) {
+      response.writeHead(200, { 'content-type': 'text/plain' })
+      response.end('login')
+      return
+    }
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify(request.headers))
+  })
+}
+
+async function verifyProtocol(caddy, root, ports, certificate, key) {
+  const upstream = mockUpstream()
+  upstream.listen(ports.upstream, '127.0.0.1')
+  await once(upstream, 'listening')
+  const config = join(root, 'Caddyfile.protocol')
+  writeFileSync(config, renderCaddyfile({
+    publicHost: 'localhost', listenAddress: '127.0.0.1', upstream: `127.0.0.1:${String(ports.upstream)}`,
+    httpPort: ports.http, httpsPort: ports.https, tls: { mode: 'manual', certificate, key },
+  }))
+  const edge = spawn(caddy, ['run', '--config', config, '--adapter', 'caddyfile'], {
+    stdio: ['ignore', 'ignore', 'pipe'],
+    env: { ...process.env, XDG_DATA_HOME: join(root, 'protocol-data'), XDG_CONFIG_HOME: join(root, 'protocol-config') },
+  })
+  try {
+    await waitForEdge(ports.https, edge)
+    const page = await request(ports.https, '/')
+    if (page.status !== 303 || page.headers.location !== `https://localhost:${String(ports.https)}/auth/login?returnTo=%2F`) {
+      throw new Error('Caddy did not map an interactive denial to the canonical 303')
+    }
+    if ((await request(ports.https, '/api/example')).status !== 401) throw new Error('Caddy did not preserve API 401')
+    if ((await request(ports.https, '/auth/verify')).status !== 404) throw new Error('public verify was exposed')
+    const accepted = await request(ports.https, '/echo', {
+      headers: {
+        cookie: 'session=valid',
+        'x-dsh-auth-user-id': 'forged',
+        'x-dsh-auth-username': 'forged',
+        'x-dsh-auth-roles': 'owner',
+        'x-forwarded-host': 'attacker.invalid',
+        'x-forwarded-proto': 'http',
+        'x-real-ip': '203.0.113.9',
+      },
+    })
+    const seen = JSON.parse(accepted.body)
+    if (seen['x-dsh-auth-user-id'] !== 'verified-admin' || seen['x-dsh-auth-username'] !== 'verified-name'
+      || seen['x-dsh-auth-roles'] !== 'admin') throw new Error('verified identity did not replace forged headers')
+    if (seen['x-forwarded-host'] === 'attacker.invalid' || seen['x-forwarded-proto'] === 'http'
+      || seen['x-real-ip'] === '203.0.113.9') throw new Error('forged forwarding headers reached the upstream')
+    const cookies = Array.isArray(accepted.headers['set-cookie']) ? accepted.headers['set-cookie'] : [accepted.headers['set-cookie']]
+    if (!cookies.some(value => value?.startsWith('renewed=yes;'))) throw new Error('renewal Cookie was not forwarded')
+  } finally {
+    await terminate(edge)
+    upstream.close()
+    await once(upstream, 'close')
+  }
+}
+
+const root = mkdtempSync(join(tmpdir(), 'dsh-auth-check-caddy-'))
+let caddy
+try {
+  const options = parseArguments()
+  const manifest = caddyReleaseManifest()
+  validateManifest(manifest)
+  caddy = options.caddy
+  if (caddy === undefined) caddy = (await prepareCaddyRelease(join(root, 'runtime'))).binary
+  const platform = currentCaddyPlatform()
+  if (sha256(caddy) !== manifest.platforms[platform].binarySha256) throw new Error('Caddy binary SHA-256 mismatch')
+  const version = checked(caddy, ['version']).trim().split(/\s+/u)[0]
+  if (version !== `v${manifest.caddyVersion}`) throw new Error(`unexpected Caddy version: ${version}`)
+
+  const certificate = join(root, 'certificate.pem')
+  const key = join(root, 'key.pem')
+  checked('openssl', [
+    'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+    '-subj', `/CN=localhost-${randomBytes(4).toString('hex')}`, '-keyout', key, '-out', certificate,
+  ])
+  const ports = { upstream: await availablePort(), http: await availablePort(), https: await availablePort() }
+  validateConfigs(caddy, root, ports, certificate, key)
+  await verifyProtocol(caddy, root, ports, certificate, key)
+  process.stdout.write(`${JSON.stringify({
+    version, platform, binarySha256: manifest.platforms[platform].binarySha256,
+    manifestPlatforms: Object.keys(manifest.platforms).sort(), tlsModes: ['automatic', 'internal', 'manual'],
+    adminApi: 'disabled', publicVerify: 404, interactive: 303, api: 401,
+    identityHeaders: 'verified values replaced forgeries', renewalCookie: true, cleanup: true,
+  }, undefined, 2)}\n`)
+} finally {
+  rmSync(root, { recursive: true, force: true })
+}

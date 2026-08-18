@@ -173,6 +173,15 @@ describe('observable authentication flow', () => {
     })
     expect(sameOriginWebSocket.status).toBe(204)
 
+    const emptyUpgrade = await fetch(`${running.baseUrl}/auth/verify`, {
+      headers: {
+        cookie: sessionCookie,
+        'x-original-method': 'GET',
+        'x-original-upgrade': '',
+      },
+    })
+    expect(emptyUpgrade.status).toBe(204)
+
     const missingOrigin = await fetch(`${running.baseUrl}/auth/verify`, {
       headers: {
         cookie: sessionCookie,
