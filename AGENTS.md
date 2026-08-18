@@ -53,3 +53,12 @@ git diff --check
 Run `corepack pnpm run test:e2e` for changes to authentication policy, edge routing, browser integration, session persistence, packaging, or release behavior. The command owns a disposable DSH profile, secrets, processes, and ports; it requires Caddy (or a verified test binary), OpenSSL, `ss`, and Chrome or Chromium and leaves existing services untouched.
 
 Before a public push, scan files and Git metadata for credentials, local paths, private service names, logs, and non-public email addresses. Use the repository-approved personal open-source identity, inspect the packed artifact with `npm pack --dry-run`, and verify the remote commit after pushing.
+
+## Land
+
+When the user asks to land, merge, or 合入 a PR, identify that PR and its HEAD SHA. Merge only after both gates succeed on that exact SHA.
+
+1. Autoreview. If an `autoreview` skill is available (project `.agents/skills/autoreview` or `.claude/skills/autoreview`, or global `~/.agents` / `~/.claude`), read it and run it against the PR branch with `--mode branch --base origin/<pr-base>`. Skip this gate only when the skill is absent, and say so. A clean helper exit with no accepted/actionable findings is required. Remaining findings stop the land. If review requires code changes, stop, report them, and wait for a new HEAD plus a fresh CI run.
+2. CI. Every check run on the PR HEAD must be `completed` and `success`. Query `gh pr checks` and the commit check-runs API for that SHA. Duplicate `push` and `pull_request` jobs both count. Pending, queued, failed, cancelled, or timed-out checks block land. Combined Status API `pending` with an empty status list is not evidence of failure when check-runs are green.
+
+Draft, conflicted, or non-mergeable PRs stay unmerged. Use `gh pr merge` with the repository default method after both gates pass.
