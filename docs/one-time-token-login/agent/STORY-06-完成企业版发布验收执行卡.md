@@ -9,7 +9,7 @@ verifies: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPT
 
 # STORY-06 完成企业版发布验收执行卡
 
-- 状态：进行中（2026-08-18，Cursor，feature/story-06-release-acceptance）
+- 状态：已完成（2026-08-18，Cursor，`v0.1.15` / `ecd5704`）
 - 对应：[STORY-06 完成企业版发布验收](../stories/Story-06-完成企业版发布验收.md)
 
 ## 目标与完成信号
@@ -106,8 +106,8 @@ git diff --check
 - 锁定/latest Harness、password/login-token、Caddy manual+internal E2E 均退出 0。gitleaks 与 privacy 通过。Git 作者仅为批准公开身份与 Dependabot。
 - 本地 packer 写入主包 `vendor/caddy` 双架构布局；`npm pack` 产出 82 files / 32.9 MB，含 x64+ARM64 Caddy。`pack-smoke` 与 `installer-e2e` 对 `dsh-auth-0.1.15.tgz` 离线通过，不注入第二包。独立平台包方案已撤销。
 - live systemd：在现有 DSH Web 单元上卸载 v1 Nginx 安装后执行 v2 setup。`doctor --json` 退出 0；未认证 `/` 重定向到登录；公网 `/auth/verify` 为 404；loopback Harness 仍只监听本机；主机 Nginx `:80` 未改动。验收中修复 DynamicUser `STATE_DIRECTORY`、Caddyfile bind-mount 与 manual TLS 源证书校验。证据不记录主机标识、公网地址或秘密路径。
-- SEC-26 / FUN-12 / FUN-10 已关闭。RELEASE 保持 0/1，直到 `dsh-auth@0.1.15` 出现在官方 npm 与 GitHub Release。不弃用 `0.1.14`，除非用户明确授权。
+- SEC-26 / FUN-12 / FUN-10 已关闭。`dsh-auth@0.1.15` 已发布为 npm `latest`，GitHub Release 含同一 tarball。未弃用 `0.1.14`。RELEASE 1/1。
 
 ## 交接
 
-交付 acceptance commit、全部命令/退出码、环境版本、SEC/FUN 固定分母、E2E artifact/checksum、system/container/reinstall 结果、pack 清单、秘密扫描、cleanup、Git 状态和发布阻塞。若未获用户明确授权，只提交分支并报告，不 push、不发布。
+交付 acceptance commit `ecd5704`、tag `v0.1.15`、npm `dsh-auth@0.1.15`、GitHub Release 与 live systemd 重装结论。未弃用 `0.1.14`。

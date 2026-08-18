@@ -3,11 +3,10 @@ kind: story
 id: STORY-06
 epic: EPIC-ONE-TIME-TOKEN-LOGIN
 title: 完成企业版发布验收
-status: in_progress
+status: done
 gate: RELEASE
 owner: Cursor
 depends_on: [STORY-05]
-blocker: 待 npm/GitHub 发布 dsh-auth@0.1.15；不弃用 0.1.14
 updated: 2026-08-18
 intent_version: 2
 ---
@@ -36,7 +35,7 @@ intent_version: 2
 - [x] 完成统一代码健康、功能、构建、包结构和 Caddy 检查。
 - [x] 完成密码与令牌两种初始化的真实 E2E 和失败注入。
 - [x] 完成 systemd、容器、doctor、uninstall 和重装验收。
-- [ ] 检查打包产物、Git 元数据、日志和证据并形成发布结论。
+- [x] 检查打包产物、Git 元数据、日志和证据并形成发布结论。
 
 ## 验收标准
 

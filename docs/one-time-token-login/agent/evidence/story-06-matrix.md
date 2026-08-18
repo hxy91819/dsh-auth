@@ -1,9 +1,9 @@
 # STORY-06 验收矩阵
 
-- Candidate：`4b26ad2621c0e8696cb3257a6fa73acb968731f9`（领取基线）；acceptance commit 待关闭 RELEASE 时回填
+- Candidate：acceptance `ecd5704acbccdeb00a4948ecd3bac1e78e6641b6`（tag `v0.1.15`）；领取基线 `4b26ad2621c0e8696cb3257a6fa73acb968731f9`
 - 锁定 / npm latest Harness：`0.1.0-rc.7`
 - Caddy：`v2.11.4` / 包装 `dsh.1`
-- 状态：同一工作树上的命令、退出码与产物；未关闭项保持未通过
+- 状态：SEC 26/26、FUN 13/13、RELEASE 1/1；npm `latest` = `0.1.15`
 
 ## 环境
 
@@ -78,4 +78,4 @@
 
 ## 发布阻塞
 
-1. `dsh-auth@0.1.15` 尚未出现在官方 npm 或 GitHub Release。live 与离线证据来自本地 tarball。不弃用 `0.1.14`，除非用户明确授权。
+无。`dsh-auth@0.1.15` 为 npm `latest`；`0.1.14` 仍可安装，未弃用。
