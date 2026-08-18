@@ -86,7 +86,7 @@ function protectedRequestOriginAllowed(req: IncomingMessage, config: ResolvedCon
 }
 
 /** Keep redirects on this origin and preserve only an absolute path/query. */
-export function safeReturnTarget(value: string | null | undefined): string {
+function safeReturnTarget(value: string | null | undefined): string {
   if (value === undefined || value === null || value.length === 0 || value.length > 4096) return '/'
   let hasControl = false
   for (let index = 0; index < value.length; index += 1) {
@@ -462,9 +462,4 @@ export class AuthApplication {
   private cookie(name: string, value: string, maxAgeSeconds: number): string {
     return authCookie(name, value, maxAgeSeconds, this.config.secureCookies)
   }
-}
-
-/** Public helper for tests and non-Cordis Node hosts. */
-export function createAuthApplication(config: ResolvedConfig, now?: () => number): AuthApplication {
-  return new AuthApplication(config, now)
 }

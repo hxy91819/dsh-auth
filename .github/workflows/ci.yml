@@ -21,6 +21,33 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
+  code-health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.14.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.15.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Enforce production code health
+        run: pnpm run check:code-health
+      - name: Generate code health reports
+        if: success() || failure()
+        run: pnpm run report:code-health
+      - name: Upload code health reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: code-health-reports
+          path: .tmp/code-health/
+          if-no-files-found: error
+          retention-days: 90
+
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -38,7 +65,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Audit production and development dependencies
         run: pnpm audit --audit-level high
-      - run: pnpm run check
+      - run: pnpm run check:functional
       - run: pnpm run check:nginx
       - run: pnpm pack --pack-destination packed
       - run: node scripts/pack-smoke.mjs packed/dsh-auth-*.tgz

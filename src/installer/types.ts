@@ -13,7 +13,7 @@ export const ExitCode = {
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode]
 
 /** Nginx handling selected by an operator. */
-export type NginxPolicy = 'require' | 'install' | 'skip'
+type NginxPolicy = 'require' | 'install' | 'skip'
 
 /** Public edge mode. */
 export type EdgeMode = 'https' | 'http'

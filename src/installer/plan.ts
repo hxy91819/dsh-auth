@@ -3,6 +3,7 @@ import { assertRootOwnedDirectory } from './discovery.js'
 import { InstallerError } from './errors.js'
 import { persistentRequest, renderEnvironmentFile, renderSystemdDropIn, requestFingerprint } from './config-files.js'
 import { renderNginxConfig } from './nginx.js'
+import { expectedManagedOwners } from './ownership.js'
 import { ExitCode, type Diagnostic, type HostDiscovery, type InstallationPlan, type InstallerHost, type InstallState, type ManagedPaths, type PlanAction, type PreparedSetup, type SetupRequest } from './types.js'
 import { validateServiceName, validateSetupRequest } from './validation.js'
 
@@ -53,8 +54,7 @@ export function bootstrapStatePath(paths: ManagedPaths): string {
   return `${paths.configDirectory}.installing.json`
 }
 
-export function readInstallState(host: InstallerHost, path: string): InstallState | undefined {
-  if (!host.fileExists(path)) return undefined
+function parseInstallState(host: InstallerHost, path: string): Partial<InstallState> {
   const stateStat = host.stat(path)
   if (stateStat.isDirectory || (stateStat.mode & 0o077) !== 0 || (path.startsWith('/etc/') && stateStat.uid !== 0)) {
     throw new InstallerError('dsh-auth state file ownership or permissions are unsafe', ExitCode.conflict)
@@ -73,20 +73,14 @@ export function readInstallState(host: InstallerHost, path: string): InstallStat
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new InstallerError('dsh-auth state file is invalid', ExitCode.conflict)
   }
-  const candidate = value as Partial<InstallState>
-  const request = candidate.request as Partial<SetupRequest> | undefined
-  const paths = candidate.paths as Partial<ManagedPaths> | undefined
-  const pathValues = paths === undefined ? [] : Object.values(paths)
-  if (
+  return value
+}
+
+function hasSupportedIdentity(candidate: Partial<InstallState>): boolean {
+  const invalid = (
     candidate.schemaVersion !== 1
     || (candidate.status !== 'installing' && candidate.status !== 'installed')
     || typeof candidate.fingerprint !== 'string'
-    || request === undefined
-    || paths === undefined
-    || pathValues.length !== 10
-    || pathValues.some(entry => typeof entry !== 'string')
-    || !Array.isArray(candidate.createdPaths)
-    || candidate.createdPaths.some(entry => typeof entry !== 'string')
     || typeof candidate.dshService !== 'string'
     || typeof candidate.dshUser !== 'string'
     || typeof candidate.dshHome !== 'string'
@@ -95,37 +89,73 @@ export function readInstallState(host: InstallerHost, path: string): InstallStat
     || candidate.nginxService !== 'nginx.service'
     || typeof candidate.nginxInstalledByDshAuth !== 'boolean'
     || typeof candidate.profilePackageInstalledByDshAuth !== 'boolean'
-    || (candidate.activation !== undefined && (
-      typeof candidate.activation.dshWasActive !== 'boolean'
-      || typeof candidate.activation.nginxWasActive !== 'boolean'
-      || typeof candidate.activation.nginxWasEnabled !== 'boolean'
-      || typeof candidate.activation.daemonReloadAttempted !== 'boolean'
-      || typeof candidate.activation.dshRestartAttempted !== 'boolean'
-      || typeof candidate.activation.nginxActivationAttempted !== 'boolean'
-    ))
-  ) {
+  )
+  return !invalid
+}
+
+function hasSupportedPaths(candidate: Partial<InstallState>): boolean {
+  const paths = candidate.paths as Partial<ManagedPaths> | undefined
+  const pathValues = paths === undefined ? [] : Object.values(paths)
+  return candidate.request !== undefined
+    && paths !== undefined
+    && pathValues.length === 10
+    && pathValues.every(entry => typeof entry === 'string')
+    && Array.isArray(candidate.createdPaths)
+    && candidate.createdPaths.every(entry => typeof entry === 'string')
+}
+
+function hasSupportedActivation(candidate: Partial<InstallState>): boolean {
+  const activation = candidate.activation
+  return activation === undefined || [
+    activation.dshWasActive,
+    activation.nginxWasActive,
+    activation.nginxWasEnabled,
+    activation.daemonReloadAttempted,
+    activation.dshRestartAttempted,
+    activation.nginxActivationAttempted,
+  ].every(value => typeof value === 'boolean')
+}
+
+function validatedInstallState(candidate: Partial<InstallState>): InstallState {
+  if (!hasSupportedIdentity(candidate) || !hasSupportedPaths(candidate) || !hasSupportedActivation(candidate)) {
     throw new InstallerError('dsh-auth state file has an unsupported format', ExitCode.conflict)
   }
+  return candidate as InstallState
+}
+
+function validatePersistedRequest(state: InstallState): void {
   try {
-    validateSetupRequest({ ...(request as SetupRequest), authorizeNginxInstall: false })
-    if (request.outputDirectory === undefined) validateServiceName(candidate.dshService)
+    validateSetupRequest({ ...state.request, authorizeNginxInstall: false })
+    if (state.request.outputDirectory === undefined) validateServiceName(state.dshService)
   } catch {
     throw new InstallerError('dsh-auth state file contains invalid setup values', ExitCode.conflict)
   }
-  const state = candidate as InstallState
+}
+
+function validateOwnedPaths(state: InstallState): void {
   validateStatePaths(state)
   const ownedPaths = new Set(Object.values(state.paths))
   if (new Set(state.createdPaths).size !== state.createdPaths.length || state.createdPaths.some(entry => !ownedPaths.has(entry))) {
     throw new InstallerError('dsh-auth state file contains unowned paths', ExitCode.conflict)
   }
-  if (state.request.outputDirectory === undefined) {
-    if (!isAbsolute(state.dshHome) || !isAbsolute(state.dshExecutable) || !host.regularFile(state.dshExecutable)) {
-      throw new InstallerError('dsh-auth state file contains an invalid DSH executable', ExitCode.conflict)
-    }
-    if (!['/usr/sbin/nginx', '/usr/bin/nginx', '/sbin/nginx'].includes(state.nginxExecutable)) {
-      throw new InstallerError('dsh-auth state file contains an invalid Nginx executable', ExitCode.conflict)
-    }
+}
+
+function validatePersistedExecutables(host: InstallerHost, state: InstallState): void {
+  if (state.request.outputDirectory !== undefined) return
+  if (!isAbsolute(state.dshHome) || !isAbsolute(state.dshExecutable) || !host.regularFile(state.dshExecutable)) {
+    throw new InstallerError('dsh-auth state file contains an invalid DSH executable', ExitCode.conflict)
   }
+  if (!['/usr/sbin/nginx', '/usr/bin/nginx', '/sbin/nginx'].includes(state.nginxExecutable)) {
+    throw new InstallerError('dsh-auth state file contains an invalid Nginx executable', ExitCode.conflict)
+  }
+}
+
+export function readInstallState(host: InstallerHost, path: string): InstallState | undefined {
+  if (!host.fileExists(path)) return undefined
+  const state = validatedInstallState(parseInstallState(host, path))
+  validatePersistedRequest(state)
+  validateOwnedPaths(state)
+  validatePersistedExecutables(host, state)
   return state
 }
 
@@ -223,16 +253,7 @@ function verifyInstalledState(host: InstallerHost, state: InstallState, request:
   }
   const service = discovery.dshService
   if (!output && service !== undefined) {
-    const owners = new Map<string, readonly [number, number]>([
-      [state.paths.configDirectory, [0, service.gid]],
-      [state.paths.stateFile, [0, 0]],
-      [state.paths.environmentFile, [0, service.gid]],
-      [state.paths.passwordHashFile, [0, service.gid]],
-      [state.paths.sessionSecretFile, [0, service.gid]],
-      [state.paths.sessionDirectory, [service.uid, service.gid]],
-      [state.paths.systemdDropInFile, [0, 0]],
-      [state.paths.nginxConfigFile, [0, 0]],
-    ])
+    const owners = expectedManagedOwners(state.paths, service.uid, service.gid)
     for (const [path, [uid, gid]] of owners) {
       if (!host.fileExists(path)) continue
       const actual = host.stat(path)
@@ -257,27 +278,28 @@ function verifyInstalledState(host: InstallerHost, state: InstallState, request:
   }
 }
 
-/** Build one redacted plan used by dry-run and execution. */
-export function prepareSetup(host: InstallerHost, request: SetupRequest, discovery: HostDiscovery, options: { readonly execute: boolean }): PreparedSetup {
-  const mode = request.outputDirectory === undefined ? 'system' : 'output'
-  const diagnostics = mode === 'system' ? systemDiagnostics(host, request, discovery) : []
-  if (diagnostics.some(entry => entry.severity === 'error')) {
-    return { plan: blocked(diagnostics, mode), request, discovery }
-  }
-  if (options.execute && request.nginxPolicy === 'install' && !discovery.nginx.installed && !request.authorizeNginxInstall) {
-    return {
-      plan: blocked([{
-        code: 'NGINX_INSTALL_NOT_AUTHORIZED',
-        severity: 'error',
-        message: 'Nginx package installation requires explicit execution authorization.',
-        remediation: 'Review `dsh-auth plan`, then add --authorize-nginx-install to the setup command.',
-      }], mode),
-      request,
-      discovery,
-    }
-  }
+type SetupMode = 'system' | 'output'
+
+interface SetupContext {
+  readonly mode: SetupMode
+  readonly paths: ManagedPaths
+  readonly state?: InstallState
+  readonly fingerprint: string
+}
+
+function authorizationDiagnostics(request: SetupRequest, discovery: HostDiscovery, execute: boolean): readonly Diagnostic[] {
+  if (!execute || request.nginxPolicy !== 'install' || discovery.nginx.installed || request.authorizeNginxInstall) return []
+  return [{
+    code: 'NGINX_INSTALL_NOT_AUTHORIZED',
+    severity: 'error',
+    message: 'Nginx package installation requires explicit execution authorization.',
+    remediation: 'Review `dsh-auth plan`, then add --authorize-nginx-install to the setup command.',
+  }]
+}
+
+function resolveSetupContext(host: InstallerHost, request: SetupRequest, discovery: HostDiscovery, mode: SetupMode): SetupContext | undefined {
   const paths = managedPaths(request, discovery)
-  if (paths === undefined) return { plan: blocked([{ code: 'PATH_DISCOVERY_FAILED', severity: 'error', message: 'Managed paths could not be resolved.' }], mode), request, discovery }
+  if (paths === undefined) return undefined
   const fingerprint = requestFingerprint(request)
   const bootstrapPath = bootstrapStatePath(paths)
   if (host.fileExists(paths.stateFile) && host.fileExists(bootstrapPath)) {
@@ -292,77 +314,115 @@ export function prepareSetup(host: InstallerHost, request: SetupRequest, discove
       remediation: 'Run doctor, then uninstall the owned installation before applying different settings.',
     }])
   }
-  if (state?.status === 'installed') {
-    verifyInstalledState(host, state, request, discovery)
-    return {
-      plan: { schemaVersion: 1, operation: 'setup', mode, status: 'unchanged', actions: [{ id: 'verify', kind: 'check', description: 'Verify the existing managed installation.' }], diagnostics: [], fingerprint },
-      request,
-      discovery,
-      state,
-      paths,
-      fingerprint,
-    }
-  }
+  return { mode, paths, ...(state === undefined ? {} : { state }), fingerprint }
+}
 
+function unchangedPreparation(host: InstallerHost, request: SetupRequest, discovery: HostDiscovery, context: SetupContext): PreparedSetup | undefined {
+  if (context.state?.status !== 'installed') return undefined
+  verifyInstalledState(host, context.state, request, discovery)
+  return {
+    plan: { schemaVersion: 1, operation: 'setup', mode: context.mode, status: 'unchanged', actions: [{ id: 'verify', kind: 'check', description: 'Verify the existing managed installation.' }], diagnostics: [], fingerprint: context.fingerprint },
+    request,
+    discovery,
+    state: context.state,
+    paths: context.paths,
+    fingerprint: context.fingerprint,
+  }
+}
+
+function assertNoUnownedFiles(host: InstallerHost, context: SetupContext): void {
+  const paths = context.paths
   const conflicts = [paths.sessionDirectory, paths.environmentFile, paths.passwordHashFile, paths.sessionSecretFile, paths.systemdDropInFile, paths.nginxConfigFile]
-    .filter(path => host.fileExists(path) && state === undefined)
-  if (conflicts.length > 0) {
-    throw new InstallerError('refusing to overwrite files not owned by dsh-auth', ExitCode.conflict, conflicts.map(path => ({
-      code: 'UNOWNED_FILE_CONFLICT', severity: 'error' as const, message: `Existing file is not recorded as dsh-auth-owned: ${path}`,
-    })))
-  }
+    .filter(path => host.fileExists(path) && context.state === undefined)
+  if (conflicts.length === 0) return
+  throw new InstallerError('refusing to overwrite files not owned by dsh-auth', ExitCode.conflict, conflicts.map(path => ({
+    code: 'UNOWNED_FILE_CONFLICT', severity: 'error' as const, message: `Existing file is not recorded as dsh-auth-owned: ${path}`,
+  })))
+}
 
-  const actions: PlanAction[] = []
-  if (!discovery.nginx.installed && request.nginxPolicy === 'install') {
-    for (const [index, command] of (discovery.packageManager?.commands ?? []).entries()) {
-      actions.push({ id: `install-nginx-${String(index + 1)}`, kind: 'install-package', description: `Install Nginx from ${discovery.packageManager?.source ?? 'the system repository'}.`, command })
-    }
+function nginxInstallActions(request: SetupRequest, discovery: HostDiscovery): PlanAction[] {
+  if (discovery.nginx.installed || request.nginxPolicy !== 'install') return []
+  return (discovery.packageManager?.commands ?? []).map((command, index) => ({
+    id: `install-nginx-${String(index + 1)}`,
+    kind: 'install-package',
+    description: `Install Nginx from ${discovery.packageManager?.source ?? 'the system repository'}.`,
+    command,
+  }))
+}
+
+function profileInstallAction(host: InstallerHost, request: SetupRequest, discovery: HostDiscovery, context: SetupContext): PlanAction {
+  const packageState = packageStatus(host, request, discovery)
+  const recoverableOwnedPackage = context.state?.status === 'installing'
+    && context.state.profilePackageInstalledByDshAuth
+    && packageState === 'exact'
+  if (packageState !== 'missing' && !recoverableOwnedPackage) {
+    throw new InstallerError('existing DSH profile already contains dsh-auth outside installer ownership', ExitCode.conflict, [{ code: 'PROFILE_PACKAGE_CONFLICT', severity: 'error', message: 'The profile already contains dsh-auth without a dsh-auth ownership record.', remediation: 'Preserve or remove that package manually before allowing setup to own the installation.' }])
   }
-  if (mode === 'system') {
-    const packageState = packageStatus(host, request, discovery)
-    const recoverableOwnedPackage = state?.status === 'installing' && state.profilePackageInstalledByDshAuth && packageState === 'exact'
-    if (packageState !== 'missing' && !recoverableOwnedPackage) {
-      throw new InstallerError('existing DSH profile already contains dsh-auth outside installer ownership', ExitCode.conflict, [{ code: 'PROFILE_PACKAGE_CONFLICT', severity: 'error', message: 'The profile already contains dsh-auth without a dsh-auth ownership record.', remediation: 'Preserve or remove that package manually before allowing setup to own the installation.' }])
-    }
-    const service = discovery.dshService
-    if (service === undefined) throw new InstallerError('DSH service discovery is missing', ExitCode.prerequisite)
-    const offline = isAbsolute(request.packageSource)
-    actions.push({
-      id: 'install-profile-package',
-      kind: 'install-package',
-      description: `Install the pinned dsh-auth bundle into profile ${request.profile}.`,
-      command: {
-        executable: service.dshExecutable,
-        args: ['plugin', '--profile', request.profile, 'add', ...(offline ? ['--offline', '--config.auto-install-peers=false'] : []), request.packageSource],
-      },
-    })
+  const service = discovery.dshService
+  if (service === undefined) throw new InstallerError('DSH service discovery is missing', ExitCode.prerequisite)
+  const offline = isAbsolute(request.packageSource)
+  return {
+    id: 'install-profile-package',
+    kind: 'install-package',
+    description: `Install the pinned dsh-auth bundle into profile ${request.profile}.`,
+    command: {
+      executable: service.dshExecutable,
+      args: ['plugin', '--profile', request.profile, 'add', ...(offline ? ['--offline', '--config.auto-install-peers=false'] : []), request.packageSource],
+    },
   }
-  actions.push(
+}
+
+function managedFileActions(context: SetupContext): PlanAction[] {
+  const paths = context.paths
+  return [
     { id: 'create-config-directory', kind: 'create-directory', description: 'Create the permission-restricted configuration directory.', target: paths.configDirectory },
     { id: 'write-password-hash', kind: 'write-file', description: 'Hash the password from the selected non-argv input and write only the Argon2id hash.', target: paths.passwordHashFile, sensitive: true },
     { id: 'write-session-secret', kind: 'write-file', description: 'Generate and write a new session-signing secret.', target: paths.sessionSecretFile, sensitive: true },
     { id: 'write-environment', kind: 'write-file', description: 'Write the DSH environment file containing secret-file paths, not secret values.', target: paths.environmentFile },
-    { id: 'write-nginx', kind: 'write-file', description: mode === 'system' ? 'Install the project-owned Nginx include.' : 'Render the Nginx include for an image or offline deployment.', target: paths.nginxConfigFile },
-  )
-  if (mode === 'system') {
-    actions.push(
-      { id: 'write-systemd-drop-in', kind: 'write-file', description: 'Install the project-owned EnvironmentFile drop-in without replacing the DSH unit.', target: paths.systemdDropInFile },
-      commandAction('systemd-daemon-reload', 'Reload systemd unit metadata.', '/usr/bin/systemctl', ['daemon-reload']),
-      commandAction('nginx-test', 'Validate the complete Nginx configuration before activation.', discovery.nginx.executable ?? '/usr/sbin/nginx', ['-t']),
-      commandAction('restart-dsh', 'Restart the exact DSH service to load the managed environment.', '/usr/bin/systemctl', ['restart', discovery.dshService?.name ?? '']),
-      commandAction('reload-nginx', 'Reload nginx.service only after validation succeeds.', '/usr/bin/systemctl', ['reload', 'nginx.service']),
-    )
+    { id: 'write-nginx', kind: 'write-file', description: context.mode === 'system' ? 'Install the project-owned Nginx include.' : 'Render the Nginx include for an image or offline deployment.', target: paths.nginxConfigFile },
+  ]
+}
+
+function activationActions(discovery: HostDiscovery, paths: ManagedPaths): PlanAction[] {
+  return [
+    { id: 'write-systemd-drop-in', kind: 'write-file', description: 'Install the project-owned EnvironmentFile drop-in without replacing the DSH unit.', target: paths.systemdDropInFile },
+    commandAction('systemd-daemon-reload', 'Reload systemd unit metadata.', '/usr/bin/systemctl', ['daemon-reload']),
+    commandAction('nginx-test', 'Validate the complete Nginx configuration before activation.', discovery.nginx.executable ?? '/usr/sbin/nginx', ['-t']),
+    commandAction('restart-dsh', 'Restart the exact DSH service to load the managed environment.', '/usr/bin/systemctl', ['restart', discovery.dshService?.name ?? '']),
+    commandAction('reload-nginx', 'Reload nginx.service only after validation succeeds.', '/usr/bin/systemctl', ['reload', 'nginx.service']),
+  ]
+}
+
+/** Build one redacted plan used by dry-run and execution. */
+export function prepareSetup(host: InstallerHost, request: SetupRequest, discovery: HostDiscovery, options: { readonly execute: boolean }): PreparedSetup {
+  const mode = request.outputDirectory === undefined ? 'system' : 'output'
+  const diagnostics = mode === 'system' ? systemDiagnostics(host, request, discovery) : []
+  if (diagnostics.some(entry => entry.severity === 'error')) {
+    return { plan: blocked(diagnostics, mode), request, discovery }
   }
-  if (state?.status === 'installing') {
+  const authorization = authorizationDiagnostics(request, discovery, options.execute)
+  if (authorization.length > 0) return { plan: blocked(authorization, mode), request, discovery }
+  const context = resolveSetupContext(host, request, discovery, mode)
+  if (context === undefined) return { plan: blocked([{ code: 'PATH_DISCOVERY_FAILED', severity: 'error', message: 'Managed paths could not be resolved.' }], mode), request, discovery }
+  const unchanged = unchangedPreparation(host, request, discovery, context)
+  if (unchanged !== undefined) return unchanged
+  assertNoUnownedFiles(host, context)
+  const actions = [
+    ...nginxInstallActions(request, discovery),
+    ...(mode === 'system' ? [profileInstallAction(host, request, discovery, context)] : []),
+    ...managedFileActions(context),
+    ...(mode === 'system' ? activationActions(discovery, context.paths) : []),
+  ]
+  if (context.state?.status === 'installing') {
     actions.unshift({ id: 'recover-interrupted-install', kind: 'remove-file', description: 'Rollback the recorded interrupted installation before retrying.' })
   }
   return {
-    plan: { schemaVersion: 1, operation: 'setup', mode, status: 'ready', actions, diagnostics: [], fingerprint },
+    plan: { schemaVersion: 1, operation: 'setup', mode, status: 'ready', actions, diagnostics: [], fingerprint: context.fingerprint },
     request,
     discovery,
-    ...(state === undefined ? {} : { state }),
-    paths,
-    fingerprint,
+    ...(context.state === undefined ? {} : { state: context.state }),
+    paths: context.paths,
+    fingerprint: context.fingerprint,
   }
 }
 

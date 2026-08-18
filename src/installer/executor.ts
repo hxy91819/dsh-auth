@@ -5,7 +5,7 @@ import { renderEnvironmentFile, renderSystemdDropIn, serializeInstallState } fro
 import { discoverNginx } from './nginx.js'
 import { InstallerError } from './errors.js'
 import { bootstrapStatePath, initialInstallState, readInstallState, validateStatePaths } from './plan.js'
-import { ExitCode, type CommandSpec, type InstallState, type InstallerHost, type PreparedSetup } from './types.js'
+import { ExitCode, type CommandSpec, type InstallState, type InstallerHost, type ManagedPaths, type PreparedSetup } from './types.js'
 
 /** Secret reader invoked only after planning and confirmation complete. */
 export interface SetupSecrets {
@@ -178,19 +178,44 @@ function rollbackProfilePackage(host: InstallerHost, state: InstallState): void 
   runChecked(host, profileCommand(host, state, args), 'PROFILE_PACKAGE_ROLLBACK_FAILED', dshEnvironment(state))
 }
 
-/** Roll back only paths and the profile package proven owned by a state record. */
-export function rollbackInstallation(host: InstallerHost, state: InstallState, options: { readonly preserveState: boolean }): InstallState {
-  validateStatePaths(state)
-  rollbackProfilePackage(host, state)
-  const statePath = state.paths.stateFile
-  const created = [...state.createdPaths].reverse()
-  for (const path of created) {
-    if (path === statePath && options.preserveState) continue
+function removeCreatedPaths(host: InstallerHost, state: InstallState, preserveState: boolean): void {
+  for (const path of [...state.createdPaths].reverse()) {
+    if (path === state.paths.stateFile && preserveState) continue
     const isDirectory = host.fileExists(path) && host.stat(path).isDirectory
     if (isDirectory) host.removeDirectory(path)
     else host.removeFile(path)
   }
   host.removeFile(bootstrapStatePath(state.paths))
+}
+
+function rollbackServices(host: InstallerHost, state: InstallState): void {
+  if (state.request.outputDirectory !== undefined || state.activation === undefined) return
+  const activation = state.activation
+  const systemctlPath = systemctl(host)
+  if (activation.daemonReloadAttempted) {
+    runChecked(host, { executable: systemctlPath, args: ['daemon-reload'] }, 'ROLLBACK_SYSTEMD_RELOAD_FAILED')
+  }
+  if (activation.nginxActivationAttempted) {
+    const nginx = discoverNginx(host)
+    if (nginx.installed && nginx.executable !== undefined) {
+      runChecked(host, { executable: nginx.executable, args: ['-t'] }, 'ROLLBACK_NGINX_TEST_FAILED')
+    }
+    runChecked(host, { executable: systemctlPath, args: [activation.nginxWasActive ? 'reload' : 'stop', state.nginxService] }, 'ROLLBACK_NGINX_SERVICE_FAILED')
+    if (!activation.nginxWasEnabled) {
+      runChecked(host, { executable: systemctlPath, args: ['disable', state.nginxService] }, 'ROLLBACK_NGINX_DISABLE_FAILED')
+    }
+  }
+  if (activation.dshRestartAttempted) {
+    runChecked(host, { executable: systemctlPath, args: [activation.dshWasActive ? 'restart' : 'stop', state.dshService] }, 'ROLLBACK_DSH_SERVICE_FAILED')
+  }
+}
+
+/** Roll back only paths and the profile package proven owned by a state record. */
+function rollbackInstallation(host: InstallerHost, state: InstallState, options: { readonly preserveState: boolean }): InstallState {
+  validateStatePaths(state)
+  rollbackProfilePackage(host, state)
+  const statePath = state.paths.stateFile
+  removeCreatedPaths(host, state, options.preserveState)
   const cleaned: InstallState = {
     ...state,
     profilePackageInstalledByDshAuth: false,
@@ -200,51 +225,40 @@ export function rollbackInstallation(host: InstallerHost, state: InstallState, o
   if (options.preserveState && host.fileExists(statePath)) {
     host.replaceFile(statePath, serializeInstallState(cleaned), 0o600)
   }
-  if (state.request.outputDirectory === undefined && state.activation !== undefined) {
-    const systemctlPath = systemctl(host)
-    if (state.activation.daemonReloadAttempted) {
-      runChecked(host, { executable: systemctlPath, args: ['daemon-reload'] }, 'ROLLBACK_SYSTEMD_RELOAD_FAILED')
-    }
-    if (state.activation.nginxActivationAttempted) {
-      const nginx = discoverNginx(host)
-      if (nginx.installed && nginx.executable !== undefined) {
-      runChecked(host, { executable: nginx.executable, args: ['-t'] }, 'ROLLBACK_NGINX_TEST_FAILED')
-      }
-      runChecked(host, { executable: systemctlPath, args: [state.activation.nginxWasActive ? 'reload' : 'stop', state.nginxService] }, 'ROLLBACK_NGINX_SERVICE_FAILED')
-      if (!state.activation.nginxWasEnabled) {
-        runChecked(host, { executable: systemctlPath, args: ['disable', state.nginxService] }, 'ROLLBACK_NGINX_DISABLE_FAILED')
-      }
-    }
-    if (state.activation.dshRestartAttempted) {
-      runChecked(host, { executable: systemctlPath, args: [state.activation.dshWasActive ? 'restart' : 'stop', state.dshService] }, 'ROLLBACK_DSH_SERVICE_FAILED')
-    }
-  }
+  rollbackServices(host, state)
   return cleaned
 }
 
-/** Execute a prepared setup with transactional rollback and crash journal updates. */
-export async function executeSetup(host: InstallerHost, prepared: PreparedSetup, secrets: SetupSecrets): Promise<InstallState | undefined> {
-  if (prepared.plan.status === 'blocked') throw new InstallerError('setup prerequisites are not satisfied', ExitCode.prerequisite, prepared.plan.diagnostics)
-  if (prepared.plan.status === 'unchanged') return prepared.state
-  const paths = prepared.paths
-  if (paths === undefined) throw new InstallerError('setup paths are unresolved', ExitCode.execution)
-  const secretMaterial = await prepareSecretMaterial(host, secrets)
+interface ExecutionContext {
+  readonly configUid: number
+  readonly configGid: number
+  readonly serviceGid: number
+  readonly configMode: number
+  readonly configExisted: boolean
+}
 
-  let carriedNginxOwnership = prepared.state?.nginxInstalledByDshAuth ?? false
-  if (prepared.state?.status === 'installing') {
-    const cleaned = rollbackInstallation(host, prepared.state, { preserveState: true })
-    carriedNginxOwnership = cleaned.nginxInstalledByDshAuth
-  }
+function recoverInterruptedSetup(host: InstallerHost, prepared: PreparedSetup): boolean {
+  if (prepared.state?.status !== 'installing') return prepared.state?.nginxInstalledByDshAuth ?? false
+  return rollbackInstallation(host, prepared.state, { preserveState: true }).nginxInstalledByDshAuth
+}
 
-  const configUid = prepared.plan.mode === 'system' ? 0 : (host.effectiveUid ?? 0)
-  const serviceGid = prepared.plan.mode === 'system' ? (prepared.discovery.dshService?.gid ?? 0) : (process.getegid?.() ?? 0)
-  const configGid = prepared.plan.mode === 'system' ? serviceGid : (process.getegid?.() ?? 0)
-  const configMode = prepared.plan.mode === 'system' ? 0o750 : 0o700
+function executionContext(
+  host: InstallerHost,
+  prepared: PreparedSetup,
+  paths: ManagedPaths,
+  nginxInstalledByDshAuth: boolean,
+): { readonly context: ExecutionContext; readonly state: InstallState } {
+  const system = prepared.plan.mode === 'system'
+  const configUid = system ? 0 : (host.effectiveUid ?? 0)
+  const processGid = process.getegid?.() ?? 0
+  const serviceGid = system ? (prepared.discovery.dshService?.gid ?? 0) : processGid
+  const configGid = system ? serviceGid : processGid
+  const configMode = system ? 0o750 : 0o700
   const configExisted = host.fileExists(paths.configDirectory)
-  const systemctlPath = prepared.plan.mode === 'system' ? systemctl(host) : undefined
-  let state: InstallState = {
+  const systemctlPath = system ? systemctl(host) : undefined
+  const state: InstallState = {
     ...initialInstallState(prepared),
-    nginxInstalledByDshAuth: carriedNginxOwnership,
+    nginxInstalledByDshAuth,
     createdPaths: [...(configExisted ? [] : [paths.configDirectory]), paths.stateFile],
     ...(systemctlPath === undefined ? {} : {
       activation: {
@@ -257,63 +271,98 @@ export async function executeSetup(host: InstallerHost, prepared: PreparedSetup,
       },
     }),
   }
+  return { context: { configUid, configGid, serviceGid, configMode, configExisted }, state }
+}
+
+function writeOwnershipJournal(host: InstallerHost, paths: ManagedPaths, context: ExecutionContext, state: InstallState): void {
+  if (!context.configExisted) {
+    const bootstrapPath = bootstrapStatePath(paths)
+    host.writeNewFile(bootstrapPath, serializeInstallState(state), 0o600)
+    host.mkdir(paths.configDirectory, context.configMode)
+    host.chown(paths.configDirectory, context.configUid, context.configGid)
+    host.chmod(paths.configDirectory, context.configMode)
+    host.renameFile(bootstrapPath, paths.stateFile)
+    return
+  }
+  const configStat = host.stat(paths.configDirectory)
+  if (!configStat.isDirectory || configStat.uid !== context.configUid || configStat.gid !== context.configGid || configStat.mode !== context.configMode) {
+    throw new InstallerError('managed configuration directory has unsafe ownership or permissions', ExitCode.permission)
+  }
+  if (host.fileExists(paths.stateFile)) host.replaceFile(paths.stateFile, serializeInstallState(state), 0o600)
+  else host.writeNewFile(paths.stateFile, serializeInstallState(state), 0o600)
+}
+
+function installNginxPackage(host: InstallerHost, prepared: PreparedSetup, paths: ManagedPaths, initial: InstallState): InstallState {
+  if (prepared.discovery.nginx.installed || prepared.request.nginxPolicy !== 'install') return initial
+  let state = initial
+  for (const command of prepared.discovery.packageManager?.commands ?? []) {
+    if (command.args.includes('install') && command.args.includes('nginx') && !state.nginxInstalledByDshAuth) {
+      state = updateState(host, state, { nginxInstalledByDshAuth: true })
+    }
+    runChecked(host, command, 'NGINX_PACKAGE_INSTALL_FAILED')
+  }
+  const nginx = validateInstalledNginx(host, paths.nginxConfigFile)
+  return updateState(host, state, { nginxExecutable: nginx.executable ?? state.nginxExecutable, nginxInstalledByDshAuth: true })
+}
+
+function installProfilePackage(host: InstallerHost, prepared: PreparedSetup, initial: InstallState): InstallState {
+  const packageAction = prepared.plan.actions.find(action => action.id === 'install-profile-package')
+  if (packageAction?.command === undefined) return initial
+  const state = updateState(host, initial, { profilePackageInstalledByDshAuth: true })
+  runChecked(host, profileCommand(host, state, packageAction.command.args), 'PROFILE_PACKAGE_INSTALL_FAILED', dshEnvironment(state))
+  return state
+}
+
+function createManagedDirectories(host: InstallerHost, prepared: PreparedSetup, paths: ManagedPaths, context: ExecutionContext, initial: InstallState): InstallState {
+  let state = initial
+  if (prepared.plan.mode === 'system') {
+    assertSafeRootDirectory(host, dirname(paths.nginxConfigFile))
+    assertSafeRootDirectory(host, dirname(paths.systemdDropInDirectory))
+    state = ensureDirectory(host, state, paths.sessionDirectory, 0o700, prepared.discovery.dshService?.uid ?? 0, context.serviceGid)
+    return ensureDirectory(host, state, paths.systemdDropInDirectory, 0o755, 0, 0)
+  }
+  return ensureDirectory(host, state, paths.sessionDirectory, 0o700, context.configUid, context.configGid)
+}
+
+async function writeManagedConfiguration(host: InstallerHost, prepared: PreparedSetup, paths: ManagedPaths, context: ExecutionContext, material: SecretMaterial, initial: InstallState): Promise<InstallState> {
+  let state = createSecretFiles(host, prepared, initial, material)
+  const system = prepared.plan.mode === 'system'
+  state = writeOwnedFile(host, state, paths.environmentFile, renderEnvironmentFile(prepared.request, paths), system ? 0o640 : 0o600, context.configUid, context.configGid)
+  const { renderNginxConfig } = await import('./nginx.js')
+  state = writeOwnedFile(host, state, paths.nginxConfigFile, renderNginxConfig(prepared.request), 0o644, context.configUid, system ? 0 : context.configGid)
+  if (!system) return state
+  state = writeOwnedFile(host, state, paths.systemdDropInFile, renderSystemdDropIn(paths), 0o644, 0, 0)
+  return activateSystem(host, state, state.nginxInstalledByDshAuth && !prepared.discovery.nginx.installed)
+}
+
+function finishInstallation(host: InstallerHost, state: InstallState): InstallState {
+  const installed: InstallState = {
+    ...state,
+    status: 'installed',
+    ...(state.activation === undefined ? {} : { activation: { ...state.activation, daemonReloadAttempted: false, dshRestartAttempted: false, nginxActivationAttempted: false } }),
+  }
+  host.replaceFile(installed.paths.stateFile, serializeInstallState(installed), 0o600)
+  return installed
+}
+
+/** Execute a prepared setup with transactional rollback and crash journal updates. */
+export async function executeSetup(host: InstallerHost, prepared: PreparedSetup, secrets: SetupSecrets): Promise<InstallState | undefined> {
+  if (prepared.plan.status === 'blocked') throw new InstallerError('setup prerequisites are not satisfied', ExitCode.prerequisite, prepared.plan.diagnostics)
+  if (prepared.plan.status === 'unchanged') return prepared.state
+  const paths = prepared.paths
+  if (paths === undefined) throw new InstallerError('setup paths are unresolved', ExitCode.execution)
+  const secretMaterial = await prepareSecretMaterial(host, secrets)
+  const nginxInstalledByDshAuth = recoverInterruptedSetup(host, prepared)
+  const execution = executionContext(host, prepared, paths, nginxInstalledByDshAuth)
+  let state = execution.state
 
   try {
-    if (!configExisted) {
-      const bootstrapPath = bootstrapStatePath(paths)
-      host.writeNewFile(bootstrapPath, serializeInstallState(state), 0o600)
-      host.mkdir(paths.configDirectory, configMode)
-      host.chown(paths.configDirectory, configUid, configGid)
-      host.chmod(paths.configDirectory, configMode)
-      host.renameFile(bootstrapPath, paths.stateFile)
-    } else {
-      const configStat = host.stat(paths.configDirectory)
-      if (!configStat.isDirectory || configStat.uid !== configUid || configStat.gid !== configGid || configStat.mode !== configMode) {
-        throw new InstallerError('managed configuration directory has unsafe ownership or permissions', ExitCode.permission)
-      }
-      if (host.fileExists(paths.stateFile)) host.replaceFile(paths.stateFile, serializeInstallState(state), 0o600)
-      else host.writeNewFile(paths.stateFile, serializeInstallState(state), 0o600)
-    }
-    if (!prepared.discovery.nginx.installed && prepared.request.nginxPolicy === 'install') {
-      for (const command of prepared.discovery.packageManager?.commands ?? []) {
-        if (command.args.includes('install') && command.args.includes('nginx') && !state.nginxInstalledByDshAuth) {
-          state = updateState(host, state, { nginxInstalledByDshAuth: true })
-        }
-        runChecked(host, command, 'NGINX_PACKAGE_INSTALL_FAILED')
-      }
-      const nginx = validateInstalledNginx(host, paths.nginxConfigFile)
-      state = updateState(host, state, { nginxExecutable: nginx.executable ?? state.nginxExecutable, nginxInstalledByDshAuth: true })
-    }
-
-    const packageAction = prepared.plan.actions.find(action => action.id === 'install-profile-package')
-    if (packageAction?.command !== undefined) {
-      state = updateState(host, state, { profilePackageInstalledByDshAuth: true })
-      runChecked(host, profileCommand(host, state, packageAction.command.args), 'PROFILE_PACKAGE_INSTALL_FAILED', dshEnvironment(state))
-    }
-
-    if (prepared.plan.mode === 'system') {
-      assertSafeRootDirectory(host, dirname(paths.nginxConfigFile))
-      assertSafeRootDirectory(host, dirname(paths.systemdDropInDirectory))
-      state = ensureDirectory(host, state, paths.sessionDirectory, 0o700, prepared.discovery.dshService?.uid ?? 0, prepared.discovery.dshService?.gid ?? 0)
-      state = ensureDirectory(host, state, paths.systemdDropInDirectory, 0o755, 0, 0)
-    } else {
-      state = ensureDirectory(host, state, paths.sessionDirectory, 0o700, configUid, configGid)
-    }
-    state = createSecretFiles(host, prepared, state, secretMaterial)
-    state = writeOwnedFile(host, state, paths.environmentFile, renderEnvironmentFile(prepared.request, paths), prepared.plan.mode === 'system' ? 0o640 : 0o600, configUid, configGid)
-    const { renderNginxConfig } = await import('./nginx.js')
-    state = writeOwnedFile(host, state, paths.nginxConfigFile, renderNginxConfig(prepared.request), 0o644, configUid, prepared.plan.mode === 'system' ? 0 : configGid)
-    if (prepared.plan.mode === 'system') {
-      state = writeOwnedFile(host, state, paths.systemdDropInFile, renderSystemdDropIn(paths), 0o644, 0, 0)
-      state = activateSystem(host, state, state.nginxInstalledByDshAuth && !prepared.discovery.nginx.installed)
-    }
-    state = {
-      ...state,
-      status: 'installed',
-      ...(state.activation === undefined ? {} : { activation: { ...state.activation, daemonReloadAttempted: false, dshRestartAttempted: false, nginxActivationAttempted: false } }),
-    }
-    host.replaceFile(state.paths.stateFile, serializeInstallState(state), 0o600)
-    return state
+    writeOwnershipJournal(host, paths, execution.context, state)
+    state = installNginxPackage(host, prepared, paths, state)
+    state = installProfilePackage(host, prepared, state)
+    state = createManagedDirectories(host, prepared, paths, execution.context, state)
+    state = await writeManagedConfiguration(host, prepared, paths, execution.context, secretMaterial, state)
+    return finishInstallation(host, state)
   } catch (error) {
     try {
       rollbackInstallation(host, readInstallState(host, paths.stateFile) ?? state, { preserveState: true })

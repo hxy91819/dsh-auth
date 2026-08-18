@@ -27,7 +27,7 @@ export function validateServiceName(value: string): string {
 }
 
 /** Validate a DSH profile name used as one path segment. */
-export function validateProfile(value: string): string {
+function validateProfile(value: string): string {
   if (!SAFE_PROFILE.test(value) || value === '.' || value === '..') usage('profile must be a safe 1-64 character name')
   return value
 }
@@ -76,8 +76,7 @@ function validatePackageSource(value: string): string {
   return value
 }
 
-/** Validate and normalize all setup values before discovery or planning. */
-export function validateSetupRequest(input: SetupRequest): SetupRequest {
+function validateIdentity(input: SetupRequest): void {
   if (!SAFE_ID.test(input.userId)) usage('user id must be a 1-128 character stable identifier')
   if (input.username.length === 0 || input.username.length > 128 || /[\p{C}\r\n]/u.test(input.username)) {
     usage('username must be 1-128 characters without control characters')
@@ -86,6 +85,9 @@ export function validateSetupRequest(input: SetupRequest): SetupRequest {
     usage('roles must contain 1-32 safe identifiers')
   }
   if (new Set(input.roles).size !== input.roles.length) usage('roles must not contain duplicates')
+}
+
+function validateDeploymentInputs(input: SetupRequest): void {
   validateProfile(input.profile)
   validateHostPort(input.upstream, 'upstream')
   validateListenAddress(input.listenAddress, input.mode)
@@ -97,20 +99,26 @@ export function validateSetupRequest(input: SetupRequest): SetupRequest {
   if (input.dshExecutable !== undefined) validateAbsolutePath(input.dshExecutable, 'DSH executable')
   if (input.outputDirectory !== undefined) validateAbsolutePath(input.outputDirectory, 'output directory')
   if (input.passwordSource?.kind === 'file') validateAbsolutePath(input.passwordSource.path, 'password file')
+}
 
-  if (input.mode === 'https') {
-    if (input.serverName === undefined || !SAFE_SERVER_NAME.test(input.serverName)) {
-      usage('HTTPS mode requires a valid --server-name')
+function validateTransport(input: SetupRequest): void {
+  if (input.mode !== 'https') {
+    if (input.serverName !== undefined || input.certificate !== undefined || input.certificateKey !== undefined) {
+      usage('plain HTTP mode does not accept TLS server or certificate options')
     }
-    if (input.certificate === undefined || input.certificateKey === undefined) {
-      usage('HTTPS mode requires --certificate and --certificate-key')
-    }
-    validateCredentialPath(input.certificate, 'certificate')
-    validateCredentialPath(input.certificateKey, 'certificate key')
-  } else if (input.serverName !== undefined || input.certificate !== undefined || input.certificateKey !== undefined) {
-    usage('plain HTTP mode does not accept TLS server or certificate options')
+    return
   }
+  if (input.serverName === undefined || !SAFE_SERVER_NAME.test(input.serverName)) {
+    usage('HTTPS mode requires a valid --server-name')
+  }
+  if (input.certificate === undefined || input.certificateKey === undefined) {
+    usage('HTTPS mode requires --certificate and --certificate-key')
+  }
+  validateCredentialPath(input.certificate, 'certificate')
+  validateCredentialPath(input.certificateKey, 'certificate key')
+}
 
+function validateNginxPolicy(input: SetupRequest): void {
   if (input.nginxPolicy === 'skip' && input.outputDirectory === undefined) {
     usage('--nginx skip is allowed only with --output-dir')
   }
@@ -120,5 +128,13 @@ export function validateSetupRequest(input: SetupRequest): SetupRequest {
   if (input.authorizeNginxInstall && input.nginxPolicy !== 'install') {
     usage('--authorize-nginx-install requires --nginx install')
   }
+}
+
+/** Validate and normalize all setup values before discovery or planning. */
+export function validateSetupRequest(input: SetupRequest): SetupRequest {
+  validateIdentity(input)
+  validateDeploymentInputs(input)
+  validateTransport(input)
+  validateNginxPolicy(input)
   return input
 }

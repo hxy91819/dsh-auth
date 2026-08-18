@@ -1,13 +1,13 @@
 import type { IncomingMessage } from 'node:http'
 
 /** Languages rendered by the standalone authentication UI. */
-export const UI_LANGUAGES = ['zh', 'en'] as const
+const UI_LANGUAGES = ['zh', 'en'] as const
 
 /** Appearance preferences rendered by the standalone authentication UI. */
-export const UI_THEMES = ['light', 'dark', 'system'] as const
+const UI_THEMES = ['light', 'dark', 'system'] as const
 
 export type UiLanguage = typeof UI_LANGUAGES[number]
-export type UiTheme = typeof UI_THEMES[number]
+type UiTheme = typeof UI_THEMES[number]
 
 /** Harness-owned settings sections sampled for one authentication page request. */
 export interface HarnessUiSettings {

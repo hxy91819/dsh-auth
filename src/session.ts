@@ -10,7 +10,7 @@ const MAX_SESSION_FILE_BYTES = 1024 * 1024
 const SESSION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u
 
 /** Public single-account identity returned by authenticated endpoints. */
-export interface AuthUser {
+interface AuthUser {
   readonly userId: string
   readonly username: string
   readonly roles: readonly string[]
@@ -50,6 +50,47 @@ function object(value: unknown, label: string): Record<string, unknown> {
 function timestamp(value: unknown, label: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`${label} must be a non-negative integer`)
   return value as number
+}
+
+function readSessionState(path: string): Record<string, unknown> | undefined {
+  let stat
+  try {
+    stat = lstatSync(path)
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return undefined
+    throw new Error(`sessionStoreFile cannot be inspected: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  if (!stat.isFile()) throw new Error('sessionStoreFile must be a regular file, not a symlink or directory')
+  if (process.platform !== 'win32' && (stat.mode & 0o077) !== 0) {
+    throw new Error('sessionStoreFile permissions must not allow group or other access')
+  }
+  if (stat.size === 0 || stat.size > MAX_SESSION_FILE_BYTES) {
+    throw new Error(`sessionStoreFile must contain 1-${String(MAX_SESSION_FILE_BYTES)} bytes`)
+  }
+  let decoded: unknown
+  try {
+    decoded = JSON.parse(readFileSync(path, 'utf8')) as unknown
+  } catch (error) {
+    throw new Error(`sessionStoreFile is not valid JSON: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  return object(decoded, 'sessionStoreFile')
+}
+
+function persistedSession(value: unknown): PersistedSession {
+  const saved = object(value, 'persisted session')
+  if (typeof saved.token !== 'string' || !SESSION_TOKEN_PATTERN.test(saved.token)) {
+    throw new Error('persisted session token is invalid')
+  }
+  const session = {
+    token: saved.token,
+    createdAt: timestamp(saved.createdAt, 'persisted session createdAt'),
+    lastSeenAt: timestamp(saved.lastSeenAt, 'persisted session lastSeenAt'),
+    expiresAt: timestamp(saved.expiresAt, 'persisted session expiresAt'),
+  }
+  if (session.createdAt > session.lastSeenAt || session.lastSeenAt > session.expiresAt) {
+    throw new Error('persisted session timestamps are inconsistent')
+  }
+  return session
 }
 
 /** Signed-cookie session store with revocation, sliding renewal, and optional durable storage. */
@@ -158,28 +199,8 @@ export class SessionStore {
   private load(now: number): void {
     const path = this.config.sessionStoreFile
     if (path === undefined) return
-    let stat
-    try {
-      stat = lstatSync(path)
-    } catch (error) {
-      if (errorCode(error) === 'ENOENT') return
-      throw new Error(`sessionStoreFile cannot be inspected: ${error instanceof Error ? error.message : String(error)}`)
-    }
-    if (!stat.isFile()) throw new Error('sessionStoreFile must be a regular file, not a symlink or directory')
-    if (process.platform !== 'win32' && (stat.mode & 0o077) !== 0) {
-      throw new Error('sessionStoreFile permissions must not allow group or other access')
-    }
-    if (stat.size === 0 || stat.size > MAX_SESSION_FILE_BYTES) {
-      throw new Error(`sessionStoreFile must contain 1-${String(MAX_SESSION_FILE_BYTES)} bytes`)
-    }
-
-    let decoded: unknown
-    try {
-      decoded = JSON.parse(readFileSync(path, 'utf8')) as unknown
-    } catch (error) {
-      throw new Error(`sessionStoreFile is not valid JSON: ${error instanceof Error ? error.message : String(error)}`)
-    }
-    const state = object(decoded, 'sessionStoreFile')
+    const state = readSessionState(path)
+    if (state === undefined) return
     if (state.version !== SESSION_FILE_VERSION) throw new Error('sessionStoreFile has an unsupported version')
     if (typeof state.secretId !== 'string' || typeof state.userId !== 'string' || !Array.isArray(state.sessions)) {
       throw new Error('sessionStoreFile has invalid metadata')
@@ -191,19 +212,7 @@ export class SessionStore {
     }
 
     for (const entry of state.sessions) {
-      const saved = object(entry, 'persisted session')
-      if (typeof saved.token !== 'string' || !SESSION_TOKEN_PATTERN.test(saved.token)) {
-        throw new Error('persisted session token is invalid')
-      }
-      const persisted: PersistedSession = {
-        token: saved.token,
-        createdAt: timestamp(saved.createdAt, 'persisted session createdAt'),
-        lastSeenAt: timestamp(saved.lastSeenAt, 'persisted session lastSeenAt'),
-        expiresAt: timestamp(saved.expiresAt, 'persisted session expiresAt'),
-      }
-      if (persisted.createdAt > persisted.lastSeenAt || persisted.lastSeenAt > persisted.expiresAt) {
-        throw new Error('persisted session timestamps are inconsistent')
-      }
+      const persisted = persistedSession(entry)
       if (this.sessions.has(persisted.token)) throw new Error('sessionStoreFile contains a duplicate session')
       this.sessions.set(persisted.token, { ...persisted, user: this.config.user })
     }

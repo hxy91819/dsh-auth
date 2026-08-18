@@ -13,7 +13,7 @@ const LIMITS = {
 } as const
 
 /** Default Argon2id parameters used by the hash generator. */
-export const DEFAULT_PASSWORD_PARAMETERS = {
+const DEFAULT_PASSWORD_PARAMETERS = {
   memory: 64 * 1024,
   passes: 3,
   parallelism: 1,

@@ -1,0 +1,9 @@
+{
+  "path": ["src"],
+  "format": ["typescript"],
+  "minLines": 5,
+  "minTokens": 120,
+  "threshold": 0,
+  "reporters": ["console", "json"],
+  "output": ".tmp/code-health/production"
+}
