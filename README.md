@@ -10,13 +10,18 @@ Add a secure single-account login to the DeepSeek Harness Web app. `dsh-auth` ke
 
 ### Interactive setup
 
-Start with an existing DSH Web systemd service whose upstream listens only on loopback, then run:
+Install the published CLI, then start from an existing DSH Web systemd service whose upstream listens only on loopback:
 
 ```sh
-sudo npx dsh-auth@latest setup
+sudo npm install -g dsh-auth
+sudo dsh-auth setup
 ```
 
-`@latest` resolves the current stable release when `npx` starts, and the installer pins that same version in the selected DSH profile. For controlled production rollout, replace `latest` with the exact version approved by your supply-chain policy.
+`npm install -g dsh-auth` installs the current stable CLI, and the installer pins that same version in the selected DSH profile. For controlled production rollout, install the exact version approved by your supply-chain policy:
+
+```sh
+sudo npm install -g dsh-auth@X.Y.Z
+```
 
 The interactive installer asks for the exact DSH service, account name, HTTPS hostname, and certificate paths; shows a secret-free plan; reads and confirms the password without echo; and changes the system only after you type the exact confirmation. It installs the pinned bundle into the selected DSH profile, writes permission-restricted file-backed credentials and a systemd `EnvironmentFile` drop-in, renders the Nginx include, runs `nginx -t`, restarts only the named DSH service, then reloads Nginx. It never stores the plaintext password.
 
@@ -25,7 +30,7 @@ If Nginx is missing, the installer detects the operating system first. On the ve
 Normal deployment requires Nginx 1.24 or newer with `ngx_http_auth_request_module`, systemd, Node.js 24.7 or newer, DSH Web 0.1.0-rc.6, and an existing TLS certificate and key. The installer cannot and does not guess a domain or certificate.
 
 ```text
-$ sudo npx dsh-auth@latest setup
+$ sudo dsh-auth setup
 Existing DSH Web systemd unit: dsh-web.service
 Stable user id [admin]:
 Login username [admin]: operator
@@ -46,15 +51,23 @@ Rerunning the same command is idempotent. An existing managed installation with 
 Use `plan` before setup to inspect the same typed plan without reading a password or changing the filesystem:
 
 ```sh
-sudo npx dsh-auth@latest plan
+sudo dsh-auth plan
 ```
 
 ### CLI setup (non-interactive)
 
 Non-interactive mode requires stable flags and an explicit Nginx policy. Mount the plaintext password as a temporary `0600` secret file supplied by the platform; `dsh-auth` reads it once to create an Argon2id hash and does not copy the plaintext.
 
+Print the command list, setup options, and which non-interactive flags are required:
+
 ```sh
-sudo npx dsh-auth@latest setup \
+dsh-auth --help
+```
+
+`dsh-auth setup --help` prints the same text. The example below is a complete HTTPS system install. Several flags in it are optional pins; the table after it marks what automation must supply.
+
+```sh
+sudo dsh-auth setup \
   --non-interactive \
   --json \
   --nginx install \
@@ -74,6 +87,33 @@ sudo npx dsh-auth@latest setup \
   --certificate /etc/letsencrypt/live/harness.example.com/fullchain.pem \
   --certificate-key /etc/letsencrypt/live/harness.example.com/privkey.pem
 ```
+
+| Flag | Required | Default | Description |
+|---|---|---|---|
+| `--help` | no | | Print usage and exit. Accepted as `dsh-auth --help` or `dsh-auth setup --help`. |
+| `--non-interactive` | yes | | Disable prompts. Missing required flags fail with exit code 2. |
+| `--nginx` | yes | | `require`, `install`, or `skip`. |
+| `--mode` | yes | | `https` or `http`. |
+| `--user-id` | yes | | Stable account id written into configuration. |
+| `--username` | yes | | Login name. |
+| `--listen-address` | yes | | Edge bind address. |
+| `--dsh-service` | system setup | | Exact existing DSH Web systemd unit. Omit only with `--output-dir`. |
+| `--password-file` or `--password-stdin` | first-time `setup` | | Password source. Not used by `plan`. Unchanged reruns skip it. |
+| `--server-name` | `--mode https` | | Public HTTPS hostname. |
+| `--certificate` | `--mode https` | | Absolute TLS certificate path. |
+| `--certificate-key` | `--mode https` | | Absolute TLS private-key path. |
+| `--authorize-nginx-install` | `--nginx install` | | Authorize the supported OS package commands. |
+| `--json` | no | | Emit one machine-readable JSON document. |
+| `--dry-run` | no | | Alias for `plan`. |
+| `--dsh-home` | no | discovered | Harness home when the unit does not infer it. |
+| `--dsh-bin` | no | discovered | DSH executable when the unit does not infer it. |
+| `--profile` | no | `web` | DSH profile name. |
+| `--roles` | no | `admin` | Comma-separated role ids. |
+| `--upstream` | no | `127.0.0.1:3080` | Loopback DSH listener. |
+| `--package` | no | `dsh-auth@<this version>` | Pinned registry spec or absolute `.tgz`. |
+| `--http-port` | no | `80` (`8080` for HTTP) | HTTP or HTTPS-redirect port. |
+| `--https-port` | no | `443` | HTTPS listen port. |
+| `--output-dir` | with `--nginx skip` | | Offline or container render directory. |
 
 Use `--nginx require` when the image or provisioning layer already installs Nginx; missing or incompatible Nginx then returns exit code 3 and a JSON diagnostic. `--nginx install` never installs anything without `--authorize-nginx-install`. `--nginx skip` is accepted only with `--output-dir`, where no service or system Nginx action occurs.
 
@@ -96,7 +136,7 @@ After sign-in, users enter the real Harness Web app with its normal sessions, to
 For an installation created by `setup`, run the interactive reset:
 
 ```sh
-sudo npx dsh-auth@latest reset-password
+sudo dsh-auth reset-password
 ```
 
 After exact confirmation, the command reads and confirms the new password without echo. It atomically replaces the managed Argon2id hash, rotates the session secret, revokes all existing sessions, and restarts the recorded DSH service only when it is active. A failed restart restores both previous credential files.
@@ -104,7 +144,7 @@ After exact confirmation, the command reads and confirms the new password withou
 Automation must provide the password through stdin or a temporary `0600` file and explicitly authorize the operation:
 
 ```sh
-sudo npx dsh-auth@latest reset-password \
+sudo dsh-auth reset-password \
   --non-interactive \
   --json \
   --authorize-password-reset \
@@ -118,7 +158,7 @@ The command never accepts a password value in argv and does not print the passwo
 Plain HTTP remains authenticated but exposes credentials and sessions to network interception. It is accepted only with an explicit `--mode http` and a literal loopback, RFC1918, or ULA listen address:
 
 ```sh
-sudo npx dsh-auth@latest setup \
+sudo dsh-auth setup \
   --nginx require \
   --mode http \
   --listen-address 10.0.0.20 \
@@ -132,15 +172,15 @@ Do not use this mode on an untrusted network. HTTPS is the production default.
 `doctor` checks the ownership record, file permissions, the exact DSH service, root-executable safety, Nginx version and module support, `nginx -t`, and service state:
 
 ```sh
-sudo npx dsh-auth@latest doctor
-sudo npx dsh-auth@latest doctor --json
+sudo dsh-auth doctor
+sudo dsh-auth doctor --json
 ```
 
 `uninstall --dry-run` lists only files and profile changes proven by the ownership record. Interactive uninstall requires typing `uninstall`; automation requires the exact `--authorize-uninstall` flag. Nginx is always retained as a shared system package, even when setup originally installed it.
 
 ```sh
-sudo npx dsh-auth@latest uninstall --dry-run
-sudo npx dsh-auth@latest uninstall
+sudo dsh-auth uninstall --dry-run
+sudo dsh-auth uninstall
 ```
 
 ## Exit codes

@@ -8,6 +8,18 @@ const OUTPUT_ARGS = [
 ] as const
 
 describe('installer CLI', () => {
+  it('prints help for --help and lists required non-interactive setup flags', async () => {
+    const io = new FakeCliIo(false)
+
+    expect(await runCli(['--help'], io, new FakeInstallerHost())).toBe(0)
+
+    const text = io.outputs.join('')
+    expect(text).toContain('dsh-auth --help')
+    expect(text).toContain('--non-interactive                 required in automation')
+    expect(text).toContain('Non-interactive setup requires --non-interactive, --nginx, --mode, --user-id')
+    expect(text).toContain('Remaining flags have defaults')
+  })
+
   it('emits a secret-free JSON plan without reading stdin or writing files', async () => {
     const host = new FakeInstallerHost()
     host.addDirectory('/export')
