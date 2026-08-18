@@ -1,15 +1,15 @@
 ---
 story: STORY-01
 intent_version: 1
-refreshed: 待领取
-code_baseline: 待领取
+refreshed: 2026-08-18
+code_baseline: 5bb2c219b8422c35735e4fb73036710ae61b04e8
 owns: [AUTH_STATE]
 verifies: []
 ---
 
 # STORY-01 建立统一管理员认证状态执行卡
 
-- 状态：可领取
+- 状态：进行中
 - 对应：[STORY-01 建立统一管理员认证状态](../stories/Story-01-建立统一管理员认证状态.md)
 
 ## 目标与完成信号

@@ -3,9 +3,9 @@ kind: story
 id: STORY-01
 epic: EPIC-ONE-TIME-TOKEN-LOGIN
 title: 建立统一管理员认证状态
-status: todo
+status: in_progress
 gate: READY
-owner: 待领取
+owner: Codex
 depends_on: []
 blocker: 无
 updated: 2026-08-18

@@ -1,9 +1,11 @@
 import { once } from 'node:events'
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import type { IncomingMessage } from 'node:http'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CSRF_COOKIE, SESSION_COOKIE } from '../src/cookies.js'
+import { SessionStore } from '../src/session.js'
 import type { TestCredentials } from './helpers.js'
 import {
   cookiePair,
@@ -39,7 +41,68 @@ async function login(baseUrl: string, credentials: TestCredentials): Promise<{ r
   return { cookie: cookiePair(accepted.headers, SESSION_COOKIE), field }
 }
 
+describe('unified administrator authentication state', () => {
+  it('uses fixed administrator identity and updates existing token sessions after one atomic initialization', async () => {
+    const credentials = await testCredentials()
+    const root = mkdtempSync(join(tmpdir(), 'dsh-auth-state-initialize-'))
+    roots.push(root)
+    const authStateFile = join(root, 'auth-state.json')
+    const config = {
+      ...testConfig(credentials, { sessionStoreFile: authStateFile }),
+      initialAdministrator: undefined,
+    }
+    const store = new SessionStore(config)
+    const current = store.create(Date.now(), 'login-token')
+    const stale = store.create(Date.now() + 1, 'login-token')
+    expect(current.session.user).toEqual({ userId: 'admin', username: 'admin', roles: ['admin'] })
+
+    expect(store.initializeAdministrator(current.session.token, 'Configured Admin', credentials.hash, Date.now() + 2))
+      .toBe('initialized')
+    expect(store.initializeAdministrator(current.session.token, 'Attacker', credentials.hash, Date.now() + 3))
+      .toBe('already-configured')
+    expect(store.passwordCredentials()?.username).toBe('Configured Admin')
+
+    const request = (value: string): IncomingMessage => ({
+      headers: { cookie: `${SESSION_COOKIE}=${value}` },
+    }) as IncomingMessage
+    expect(store.authenticate(request(current.cookieValue), Date.now() + 4)?.session.user).toEqual({
+      userId: 'admin', username: 'Configured Admin', roles: ['admin'],
+    })
+    expect(store.authenticate(request(stale.cookieValue), Date.now() + 4)).toBeUndefined()
+
+    const restarted = new SessionStore(config)
+    expect(restarted.authenticate(request(current.cookieValue), Date.now() + 5)?.session.user.username)
+      .toBe('Configured Admin')
+    const saved = JSON.parse(readFileSync(authStateFile, 'utf8')) as {
+      schemaVersion: number
+      administrator: { id: string; username: string }
+      sessions: { authenticationMethod: string }[]
+    }
+    expect(saved).toMatchObject({
+      schemaVersion: 2,
+      administrator: { id: 'admin', username: 'Configured Admin' },
+      sessions: [{ authenticationMethod: 'login-token' }],
+    })
+  }, 30_000)
+
+  it('rolls memory back when an authentication state write fails', async () => {
+    const credentials = await testCredentials()
+    const root = mkdtempSync(join(tmpdir(), 'dsh-auth-state-write-failure-'))
+    roots.push(root)
+    const stateDirectory = join(root, 'missing')
+    const authStateFile = join(stateDirectory, 'auth-state.json')
+    const store = new SessionStore(testConfig(credentials, { sessionStoreFile: authStateFile }))
+    expect(() => store.create(Date.now())).toThrow(/cannot be updated/u)
+
+    mkdirSync(stateDirectory)
+    store.create(Date.now() + 1)
+    const saved = JSON.parse(readFileSync(authStateFile, 'utf8')) as { sessions: unknown[] }
+    expect(saved.sessions).toHaveLength(1)
+  }, 30_000)
+})
+
 describe('persistent renewable sessions', () => {
+
   it('survives an application restart, renews after activity, and persists logout revocation', async () => {
     const credentials = await testCredentials()
     const root = mkdtempSync(join(tmpdir(), 'dsh-auth-session-'))
@@ -104,10 +167,47 @@ describe('persistent renewable sessions', () => {
     await expect(startTestServer(testConfig(credentials, { sessionStoreFile }))).rejects.toThrow(/not valid JSON/u)
     expect(readFileSync(sessionStoreFile, 'utf8')).toBe('{invalid\n')
 
+    const legacyStateFile = join(root, 'legacy.json')
+    writeFileSync(legacyStateFile, '{"version":1,"sessions":[]}\n', { mode: 0o600 })
+    await expect(startTestServer(testConfig(credentials, {
+      sessionStoreFile: legacyStateFile,
+    }))).rejects.toThrow(/unsupported schemaVersion/u)
+
+    const linkedStateFile = join(root, 'state-link.json')
+    symlinkSync(legacyStateFile, linkedStateFile)
+    await expect(startTestServer(testConfig(credentials, {
+      sessionStoreFile: linkedStateFile,
+    }))).rejects.toThrow(/regular file/u)
+
+    const duplicateStateFile = join(root, 'duplicate.json')
+    const duplicateSession = {
+      token: 'a'.repeat(43),
+      authenticationMethod: 'password',
+      createdAt: 1,
+      lastSeenAt: 1,
+      expiresAt: 2,
+    }
+    writeFileSync(duplicateStateFile, `${JSON.stringify({
+      schemaVersion: 2,
+      secretId: 'b'.repeat(43),
+      administrator: {
+        id: 'admin', username: 'test-account', passwordHash: credentials.hash, configuredAt: 1,
+      },
+      sessions: [duplicateSession, duplicateSession],
+    })}\n`, { mode: 0o600 })
+    await expect(startTestServer(testConfig(credentials, {
+      sessionStoreFile: duplicateStateFile,
+    }))).rejects.toThrow(/duplicate session/u)
+
     if (process.platform !== 'win32') {
       const exposedStoreFile = join(root, 'exposed.json')
       writeFileSync(exposedStoreFile, '{}\n', { mode: 0o600 })
       chmodSync(exposedStoreFile, 0o644)
+      await expect(startTestServer(testConfig(credentials, {
+        sessionStoreFile: exposedStoreFile,
+      }))).rejects.toThrow(/permissions/u)
+
+      chmodSync(exposedStoreFile, 0o400)
       await expect(startTestServer(testConfig(credentials, {
         sessionStoreFile: exposedStoreFile,
       }))).rejects.toThrow(/permissions/u)
@@ -124,11 +224,14 @@ describe('persistent renewable sessions', () => {
     initial.server.close()
     await once(initial.server, 'close')
 
+    const replacement = await testCredentials()
     const rotated = await startTestServer(testConfig({
-      ...credentials,
+      ...replacement,
       secret: `${credentials.secret}-rotated-secret-material`,
     }, { sessionStoreFile }))
     expect((await fetch(`${rotated.baseUrl}/auth/verify`, { headers: { cookie: loggedIn.cookie } })).status).toBe(401)
+    const originalLogin = await login(rotated.baseUrl, credentials)
+    expect((await fetch(`${rotated.baseUrl}/auth/verify`, { headers: { cookie: originalLogin.cookie } })).status).toBe(204)
     rotated.server.close()
     await once(rotated.server, 'close')
   }, 30_000)
@@ -154,4 +257,5 @@ describe('persistent renewable sessions', () => {
     restarted.server.close()
     await once(restarted.server, 'close')
   }, 30_000)
+
 })

@@ -2,7 +2,7 @@
 kind: epic
 id: EPIC-ONE-TIME-TOKEN-LOGIN
 title: 一次性令牌登录与企业版 v2
-status: todo
+status: in_progress
 owner: dsh-auth 产品与工程团队
 updated: 2026-08-18
 coverage: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPTION, ADMIN_ONBOARDING, RELEASE_ACCEPTANCE]

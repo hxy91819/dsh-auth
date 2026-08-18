@@ -29,7 +29,7 @@ export async function testCredentials(): Promise<TestCredentials> {
 /** Resolve a complete test configuration. */
 export function testConfig(credentials: TestCredentials, overrides: ConfigInput = {}): ResolvedConfig {
   return resolveConfig({
-    userId: 'test-user',
+    userId: 'admin',
     username: 'test-account',
     roles: ['admin'],
     passwordHash: credentials.hash,

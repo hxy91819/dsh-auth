@@ -30,14 +30,9 @@ export interface ConfigInput {
 /** Fully validated runtime configuration. */
 export interface ResolvedConfig {
   readonly basePath: string
-  readonly user: {
-    readonly userId: string
-    readonly username: string
-    readonly roles: readonly string[]
-  }
-  readonly passwordHash: string
+  readonly initialAdministrator: { readonly username: string; readonly passwordHash: string } | undefined
   readonly sessionSecret: Buffer
-  readonly sessionStoreFile: string | undefined
+  readonly authStateFile: string | undefined
   readonly secureCookies: boolean
   readonly sessionTtlSeconds: number
   readonly idleTtlSeconds: number
@@ -177,7 +172,7 @@ export function resolveConfig(value: unknown): ResolvedConfig {
     throw new Error('userId must be a 1-128 character stable identifier')
   }
   if (/\p{C}/u.test(username)) throw new Error('username must not contain control characters')
-  const roles = stringList(input, 'roles', ['admin'])
+  stringList(input, 'roles', ['admin'])
   const passwordHash = exclusiveMaterial(input, 'passwordHash', 'passwordHashFile')
   parsePasswordHash(passwordHash)
   const secretText = exclusiveMaterial(input, 'sessionSecret', 'sessionSecretFile')
@@ -199,10 +194,9 @@ export function resolveConfig(value: unknown): ResolvedConfig {
   const trustedProxyAddresses = proxyAddressList(input)
   return {
     basePath: validateBasePath(input.basePath),
-    user: { userId, username, roles },
-    passwordHash,
+    initialAdministrator: { username, passwordHash },
     sessionSecret,
-    sessionStoreFile: optionalAbsolutePath(input, 'sessionStoreFile'),
+    authStateFile: optionalAbsolutePath(input, 'sessionStoreFile'),
     secureCookies: boolean(input, 'secureCookies', true),
     sessionTtlSeconds,
     idleTtlSeconds,

@@ -18,7 +18,7 @@ describe('configuration', () => {
     expect(() => resolveConfig({ userId: 'u', username: 'name' })).toThrow(/passwordHash/u)
   })
 
-  it('reads bounded absolute secret files and preserves stable account fields', async () => {
+  it('reads bounded absolute secret files and resolves administrator bootstrap credentials', async () => {
     const credentials = await testCredentials()
     const root = mkdtempSync(join(tmpdir(), 'dsh-auth-config-'))
     roots.push(root)
@@ -34,8 +34,7 @@ describe('configuration', () => {
       passwordHashFile: hashFile,
       sessionSecretFile: secretFile,
     })
-    expect(config.user).toEqual({ userId: 'stable-id', username: 'display-name', roles: ['admin', 'operator'] })
-    expect(config.passwordHash).toBe(credentials.hash)
+    expect(config.initialAdministrator).toEqual({ username: 'display-name', passwordHash: credentials.hash })
     expect(config.sessionSecret.length).toBeGreaterThanOrEqual(32)
     expect(config.secureCookies).toBe(true)
     expect(config.sessionTtlSeconds).toBe(72 * 60 * 60)

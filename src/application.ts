@@ -281,11 +281,12 @@ export class AuthApplication {
     const submitted = form.get('password') ?? ''
     const passwordBytes = Buffer.byteLength(submitted, 'utf8')
     const password = passwordBytes <= this.config.maxPasswordBytes ? submitted : ''
+    const credentials = this.sessions.passwordCredentials()
     const [passwordMatches, usernameMatches] = await Promise.all([
-      verifyPassword(password, this.config.passwordHash),
-      Promise.resolve(constantTimeTextEqual(username, this.config.user.username, this.config.sessionSecret)),
+      credentials === undefined ? Promise.resolve(false) : verifyPassword(password, credentials.passwordHash),
+      Promise.resolve(constantTimeTextEqual(username, credentials?.username ?? 'admin', this.config.sessionSecret)),
     ])
-    if (!passwordMatches || !usernameMatches || passwordBytes > this.config.maxPasswordBytes) {
+    if (credentials === undefined || !passwordMatches || !usernameMatches || passwordBytes > this.config.maxPasswordBytes) {
       this.renderLogin(res, 401, formReturnTo, preferences, 'invalidCredentials')
       return
     }

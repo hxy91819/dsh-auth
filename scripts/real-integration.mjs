@@ -478,7 +478,7 @@ async function main() {
   assert(!spaHtml.includes('browser-bootstrap.js'), 'HTTPS SPA included the HTTP compatibility script')
   const sessionView = await request(httpsPort, '/auth/session', { headers: { cookie: session.pair } })
   const sessionJson = JSON.parse(sessionView.body.toString('utf8'))
-  assert(sessionView.status === 200 && sessionJson.user.userId === 'integration-user', 'session identity was unavailable')
+  assert(sessionView.status === 200 && sessionJson.user.userId === 'admin', 'session identity was unavailable')
   const assetPath = /<script[^>]+src="([^"]+\.js)"/u.exec(spaHtml)?.[1]
   assert(assetPath !== undefined, 'SPA entry asset was not discoverable')
   assert((await request(httpsPort, assetPath, { headers: { cookie: session.pair } })).status === 200, 'SPA asset was unavailable')
@@ -516,7 +516,7 @@ async function main() {
   const afterRestartSession = await request(httpsPort, '/auth/session', { headers: { cookie: session.pair } })
   const afterRestartIdentity = JSON.parse(afterRestartSession.body.toString('utf8'))
   assert(
-    afterRestartSession.status === 200 && afterRestartIdentity.user?.userId === 'integration-user',
+    afterRestartSession.status === 200 && afterRestartIdentity.user?.userId === 'admin',
     'persisted session identity did not survive a DSH restart',
   )
   const afterRestartSpa = await request(httpsPort, '/', { headers: { cookie: session.pair } })

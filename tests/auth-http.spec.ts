@@ -65,6 +65,30 @@ async function submitLogin(
 }
 
 describe('observable authentication flow', () => {
+  it('keeps password login unavailable while administrator credentials are unset', async () => {
+    const unconfigured = await startTestServer({
+      ...testConfig(credentials),
+      initialAdministrator: undefined,
+    })
+    try {
+      const page = await fetch(`${unconfigured.baseUrl}/auth/login`)
+      const html = await page.text()
+      const denied = await fetch(`${unconfigured.baseUrl}/auth/login`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: { ...proxyHeaders(), cookie: cookiePair(page.headers, CSRF_COOKIE) },
+        body: new URLSearchParams({
+          csrf: hiddenValue(html, 'csrf'), returnTo: '/', username: 'test-account', password: credentials.password,
+        }),
+      })
+      expect(denied.status).toBe(401)
+      expect(denied.headers.getSetCookie().some(value => value.startsWith(`${SESSION_COOKIE}=`))).toBe(false)
+    } finally {
+      unconfigured.server.close()
+      await once(unconfigured.server, 'close')
+    }
+  }, 30_000)
+
   it('uses a generic failure, issues hardened cookies, exposes identity, and revokes on logout', async () => {
     const first = await loginPage('/workspace?tab=recent')
     expect(first.html).toContain('Sign in to DeepSeek Harness')
@@ -92,7 +116,7 @@ describe('observable authentication flow', () => {
     expect(session.status).toBe(200)
     await expect(session.json()).resolves.toMatchObject({
       authenticated: true,
-      user: { userId: 'test-user', username: 'test-account', roles: ['admin'] },
+      user: { userId: 'admin', username: 'test-account', roles: ['admin'] },
     })
     const verified = await fetch(`${running.baseUrl}/auth/verify`, { headers: { cookie: sessionCookie } })
     expect(verified.status).toBe(204)
