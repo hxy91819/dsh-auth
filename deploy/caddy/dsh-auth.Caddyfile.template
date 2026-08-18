@@ -18,7 +18,7 @@ https://{{PUBLIC_HOST}}:{{HTTPS_PORT}}, https://:{{HTTPS_PORT}} {
 		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
-		Referrer-Policy "same-origin"
+		?Referrer-Policy "same-origin"
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 	}
 

@@ -1,4 +1,5 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
+import { chmodSync, chownSync, closeSync, constants, existsSync, fsyncSync, lstatSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** Versioned bearer prefix that separates this token format from future revisions. */
@@ -64,6 +65,67 @@ export interface LoginTokenStoreOptions {
   readonly directory: string
   readonly now?: () => number
   readonly random?: () => Buffer
+}
+
+/** Real-filesystem host used by the running plugin process, independent of the installer CLI. */
+export function createNodeTokenHost(): TokenStoreHost {
+  return {
+    listDirectory(path) {
+      return readdirSync(path)
+    },
+    fileExists(path) {
+      return existsSync(path)
+    },
+    stat(path) {
+      const value = lstatSync(path)
+      return { uid: value.uid, gid: value.gid, mode: value.mode & 0o7777, size: value.size, isDirectory: value.isDirectory() }
+    },
+    readFile(path) {
+      return readFileSync(path, 'utf8')
+    },
+    writeNewFile(path, content, mode) {
+      const descriptor = openSync(path, 'wx', mode)
+      try {
+        writeFileSync(descriptor, content)
+      } finally {
+        closeSync(descriptor)
+      }
+    },
+    renameFile(from, to) {
+      renameSync(from, to)
+    },
+    chmod(path, mode) {
+      chmodSync(path, mode)
+    },
+    chown(path, uid, gid) {
+      chownSync(path, uid, gid)
+    },
+    removeFile(path) {
+      try {
+        unlinkSync(path)
+      } catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error
+      }
+    },
+    randomBytes(size) {
+      return randomBytes(size)
+    },
+    fsyncFile(path) {
+      syncDescriptor(path, constants.O_RDONLY)
+    },
+    fsyncDirectory(path) {
+      syncDescriptor(path, constants.O_RDONLY | constants.O_DIRECTORY)
+    },
+  }
+}
+
+function syncDescriptor(path: string, flags: number): void {
+  const descriptor = openSync(path, flags)
+  try {
+    fsyncSync(descriptor)
+  } finally {
+    closeSync(descriptor)
+  }
 }
 
 interface LoginTokenMetadata {

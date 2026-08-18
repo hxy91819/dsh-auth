@@ -3,11 +3,11 @@ kind: story
 id: STORY-05
 epic: EPIC-ONE-TIME-TOKEN-LOGIN
 title: 交付管理员首次初始化
-status: blocked
+status: todo
 gate: COMPONENT
 owner: 待领取
 depends_on: [STORY-04]
-blocker: STORY-04 未完成
+blocker: 无
 updated: 2026-08-18
 intent_version: 1
 ---

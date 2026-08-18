@@ -2,15 +2,17 @@ import { TLSSocket } from 'node:tls'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { constantTimeTextEqual, CookieSigner } from './crypto.js'
 import { authCookie, cookieNames, parseCookies } from './cookies.js'
-import { accountPage, loginPage } from './html.js'
+import { accountPage, loginPage, tokenBridgePage, tokenFailurePage, tokenRateLimitedPage, type TokenFailureMessages } from './html.js'
 import type { AuthMessage } from './html.js'
 import { BROWSER_BOOTSTRAP_FILE, browserBootstrapSource } from './browser-bootstrap.js'
 import { LoginLimiter } from './limiter.js'
+import { LoginTokenStore, createNodeTokenHost } from './login-token-store.js'
 import { ADMIN_PASSWORD_MAX_BYTES, verifyPassword } from './password.js'
 import { resolveUiPreferences } from './preferences.js'
 import type { HarnessUiSettings, UiPreferences } from './preferences.js'
 import { SessionStore } from './session.js'
 import type { SessionAuthentication } from './session.js'
+import { TOKEN_BOOTSTRAP_FILE, tokenBootstrapSource } from './token-bootstrap.js'
 import type { ResolvedConfig } from './config.js'
 
 const MAX_FORM_BYTES = 20 * 1024
@@ -21,6 +23,11 @@ const HTML_SECURITY_HEADERS = {
   'referrer-policy': 'same-origin',
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',
+} as const
+const TOKEN_PAGE_SECURITY_HEADERS = {
+  ...HTML_SECURITY_HEADERS,
+  'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+  'referrer-policy': 'no-referrer',
 } as const
 
 function headerValue(req: IncomingMessage, name: string): string | undefined {
@@ -116,6 +123,11 @@ function writeHtml(res: ServerResponse, status: number, body: string, headers: R
   res.end(body)
 }
 
+function writeTokenHtml(res: ServerResponse, status: number, body: string, headers: Record<string, string | string[]> = {}): void {
+  res.writeHead(status, { ...TOKEN_PAGE_SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8', ...headers })
+  res.end(body)
+}
+
 function redirect(res: ServerResponse, location: string, headers: Record<string, string | string[]> = {}): void {
   res.writeHead(303, { ...HTML_SECURITY_HEADERS, location, ...headers })
   res.end()
@@ -183,6 +195,8 @@ export class AuthApplication {
   private readonly sessions: SessionStore
   private readonly csrfSigner: CookieSigner
   private readonly limiter: LoginLimiter
+  private readonly tokenLimiter: LoginLimiter
+  private readonly tokenStore: LoginTokenStore | undefined
   private readonly cookieNames: { readonly session: string; readonly csrf: string }
 
   constructor(
@@ -198,6 +212,18 @@ export class AuthApplication {
       config.loginMaxAttempts,
       config.loginBlockSeconds * 1000,
     )
+    this.tokenLimiter = new LoginLimiter(
+      config.loginTokenWindowSeconds * 1000,
+      config.loginTokenMaxAttempts,
+      config.loginTokenBlockSeconds * 1000,
+    )
+    if (config.loginTokenEnabled && config.loginTokenDirectory !== undefined) {
+      this.tokenStore = new LoginTokenStore({
+        host: createNodeTokenHost(),
+        directory: config.loginTokenDirectory,
+        now: () => this.now(),
+      })
+    }
   }
 
   /** Handle one request under the configured auth prefix. */
@@ -211,6 +237,14 @@ export class AuthApplication {
       }
       if (path === `${this.config.basePath}/login`) {
         await this.login(req, res, url)
+        return
+      }
+      if (path === `${this.config.basePath}/${TOKEN_BOOTSTRAP_FILE}`) {
+        this.tokenBootstrap(req, res)
+        return
+      }
+      if (path === `${this.config.basePath}/token`) {
+        await this.token(req, res)
         return
       }
       if (path === `${this.config.basePath}/${BROWSER_BOOTSTRAP_FILE}`) {
@@ -423,6 +457,98 @@ export class AuthApplication {
       ...this.renewalHeaders(authenticated),
     })
     res.end()
+  }
+
+  private tokenBootstrap(req: IncomingMessage, res: ServerResponse): void {
+    if (!this.config.loginTokenEnabled) {
+      write(res, 404, 'not found')
+      return
+    }
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      write(res, 405, 'method not allowed', { allow: 'GET, HEAD', 'cache-control': 'no-store' })
+      return
+    }
+    res.writeHead(200, {
+      'cache-control': 'no-store, max-age=0',
+      'content-type': 'text/javascript; charset=utf-8',
+      'cross-origin-resource-policy': 'same-origin',
+      'referrer-policy': 'no-referrer',
+      'x-content-type-options': 'nosniff',
+    })
+    res.end(req.method === 'HEAD' ? undefined : tokenBootstrapSource())
+  }
+
+  private async token(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!this.config.loginTokenEnabled || this.tokenStore === undefined) {
+      write(res, 404, 'not found')
+      return
+    }
+    const preferences = resolveUiPreferences(req, this.readHarnessUiSettings())
+    const failures: TokenFailureMessages = {
+      ...(this.config.loginTokenFailureMessageZh === undefined ? {} : { zh: this.config.loginTokenFailureMessageZh }),
+      ...(this.config.loginTokenFailureMessageEn === undefined ? {} : { en: this.config.loginTokenFailureMessageEn }),
+    }
+    if (req.method === 'GET' || req.method === 'HEAD') {
+      const csrf = this.issueCsrf()
+      writeTokenHtml(res, 200, tokenBridgePage(this.config.basePath, csrf.token, preferences, failures), {
+        'set-cookie': this.cookie(this.cookieNames.csrf, csrf.value, 10 * 60),
+      })
+      return
+    }
+    if (req.method !== 'POST') {
+      write(res, 405, 'method not allowed', { allow: 'GET, HEAD, POST', 'cache-control': 'no-store' })
+      return
+    }
+    const form = await readForm(req)
+    const limiterKey = clientAddress(req, this.config)
+    const retryAfter = this.tokenLimiter.consume(limiterKey, this.now())
+    if (retryAfter !== undefined) {
+      writeTokenHtml(res, 429, tokenRateLimitedPage(preferences), { 'retry-after': String(retryAfter) })
+      return
+    }
+    if (!hasSameOrigin(req, this.config)) throw new HttpError(403, 'cross-origin request denied')
+    if (!this.validCsrf(req, form.get('csrf'))) throw new HttpError(403, 'invalid CSRF token')
+    const submitted = form.get('token')
+    if (submitted === null || submitted.length === 0 || submitted.length > 256
+      || form.getAll('csrf').length !== 1 || form.getAll('token').length !== 1 || form.size !== 2) {
+      this.renderTokenFailure(res, 401, preferences)
+      return
+    }
+    let claim: ReturnType<LoginTokenStore['claim']>
+    try {
+      claim = this.tokenStore.claim(submitted)
+    } catch {
+      // A damaged managed file is a denial, never an internal-detail probe.
+      claim = { status: 'invalid' }
+    }
+    if (claim.status !== 'claimed') {
+      this.renderTokenFailure(res, 401, preferences)
+      return
+    }
+    try {
+      const created = this.sessions.create(this.now(), 'login-token')
+      this.tokenStore.releaseClaim(claim)
+      this.tokenLimiter.reset(limiterKey)
+      const target = this.sessions.passwordCredentials() !== undefined
+        ? '/'
+        : `${this.config.basePath}/admin/setup?returnTo=%2F`
+      redirect(res, target, {
+        'set-cookie': [
+          this.cookie(this.cookieNames.session, created.cookieValue, this.config.sessionTtlSeconds),
+          this.cookie(this.cookieNames.csrf, '', 0),
+        ],
+      })
+    } catch {
+      // The claim is never restored; the user must request a fresh token.
+      this.renderTokenFailure(res, 401, preferences)
+    }
+  }
+
+  private renderTokenFailure(res: ServerResponse, status: number, preferences: UiPreferences): void {
+    writeTokenHtml(res, status, tokenFailurePage(preferences, {
+      ...(this.config.loginTokenFailureMessageZh === undefined ? {} : { zh: this.config.loginTokenFailureMessageZh }),
+      ...(this.config.loginTokenFailureMessageEn === undefined ? {} : { en: this.config.loginTokenFailureMessageEn }),
+    }))
   }
 
   private renderLogin(

@@ -1,15 +1,15 @@
 ---
 story: STORY-04
 intent_version: 1
-refreshed: 待领取
-code_baseline: 待领取
+refreshed: 2026-08-18
+code_baseline: f5d8bf8aa5a364cf1c6a2971d1e40314b42bfaf9
 owns: [TOKEN_REDEMPTION]
 verifies: [AUTH_STATE, TOKEN_ISSUANCE]
 ---
 
 # STORY-04 交付一次性令牌兑换执行卡
 
-- 状态：阻塞，依赖 STORY-03
+- 状态：done（2026-08-18，opencode，feature/story-04-token-redemption）
 - 对应：[STORY-04 交付一次性令牌兑换](../stories/Story-04-交付一次性令牌兑换.md)
 
 ## 目标与完成信号
@@ -88,3 +88,13 @@ git diff --check
 ## 交接
 
 交付 fragment 桥接、HTTP 兑换、Caddy 接线、限流、失败页、测试、起止提交和干净状态。给 STORY-05 固定 token 成功后的 session authenticationMethod、管理员 configured 判断、`/auth/admin/setup?returnTo=/` 跳转和 CSRF 页面能力。
+
+交付记录（2026-08-18）：
+
+- 起止：`f5d8bf8`（领取基线）→ 本卡提交（feature/story-04-token-redemption）。
+- 命令与退出码：`corepack pnpm run test` 0（132/132，含 login-token-http 12 项、token 桥接 3 项）；`corepack pnpm run check` 0（仅基线已有 6 条函数长度 warning 与 publint 警告）；`corepack pnpm run check:caddy` 0（新增 tokenRoutes 公开代理断言）；`git diff --check` 0。
+- 路由契约：GET/HEAD `/auth/token` 桥接页（no-store、CSP `script-src 'self'`、`Referrer-Policy: no-referrer`、匿名 CSRF cookie）；GET/HEAD `/auth/token-bootstrap.js` 同源脚本；POST 兑换 405/415/413/403/429/401/303 语义齐全；disabled 时两路由全方法 404。
+- 统一失败：missing/malformed/unknown/expired/used/corrupt 会话失败全部同一 401 no-store HTML；自定义 zh/en 文案经 html 转义；限流 429 带 retry-after 且与密码 limiter 互不污染。
+- 边缘改动：两份 Caddy 模板 `Referrer-Policy` 由固定值改为 `?` 缺省填充，auth 上游（含 token 页 no-referrer）不再被覆盖；`scripts/check-caddy.mjs` 增加 token 桥接/脚本/POST 直通断言。fragment 不离开浏览器，边缘访问日志天然无 token；查询串 token 被忽略且不回显。
+- 数据副作用：测试仅 mkdtemp 目录与内存配置；无真实 systemd、端口或浏览器改动。
+- 给 STORY-05 的输入：兑换成功调用 `SessionStore.create(now,'login-token')`；管理员 configured 判定用 `SessionStore.passwordCredentials()`；未配置重定向 `/auth/admin/setup?returnTo=%2F`；桥接/失败页已提供 CSRF 页面能力（`issueCsrf`+cookie）；会话 Cookie 与密码登录完全一致。

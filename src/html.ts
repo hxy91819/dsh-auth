@@ -23,6 +23,10 @@ interface UiCopy {
   readonly roles: string
   readonly returnToHarness: string
   readonly signOut: string
+  readonly tokenTitle: string
+  readonly tokenLede: string
+  readonly tokenNoscript: string
+  readonly tokenFailure: string
 }
 
 const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
@@ -39,6 +43,10 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     roles: '角色',
     returnToHarness: '返回 Harness',
     signOut: '退出登录',
+    tokenTitle: '一次性登录',
+    tokenLede: '正在完成一次性登录…',
+    tokenNoscript: '此登录链接需要启用 JavaScript。请回到云控制台，在允许 JavaScript 的浏览器中重新打开该链接。',
+    tokenFailure: '登录链接无效、已过期或已被使用。请回到云控制台重新获取链接。',
   },
   en: {
     signInTitle: 'Sign in to DeepSeek Harness',
@@ -53,6 +61,10 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     roles: 'Roles',
     returnToHarness: 'Return to Harness',
     signOut: 'Sign out',
+    tokenTitle: 'One-time sign-in',
+    tokenLede: 'Completing one-time sign-in…',
+    tokenNoscript: 'This sign-in link requires JavaScript. Return to your cloud console and reopen the link in a browser with JavaScript enabled.',
+    tokenFailure: 'The sign-in link is invalid, expired, or already used. Request a new link from your cloud console.',
   },
 }
 
@@ -229,6 +241,7 @@ function document(
   title: string,
   content: string,
   preferences: UiPreferences,
+  extraHead = '',
 ): string {
   const languageTag = preferences.language === 'zh' ? 'zh-CN' : 'en'
   return `<!doctype html>
@@ -239,7 +252,7 @@ function document(
   <meta name="color-scheme" content="dark light">
   <title>${escapeHtml(title)} · DeepSeek Harness</title>
   <style>${STYLE}</style>
-</head>
+${extraHead}</head>
 <body data-theme="${preferences.theme}">
   <main class="panel" data-screen-label="Authentication">
     <header class="panel-header"><div class="brand">DeepSeek Harness</div></header>
@@ -300,5 +313,51 @@ export function accountPage(
       <input type="hidden" name="csrf" value="${escapeHtml(csrfToken)}">
       <button type="submit">${escapeHtml(copy.signOut)}</button>
     </form>
+  </section>`, preferences)
+}
+
+/** Failure copy for the one-time token flow, honoring per-language operator overrides. */
+export interface TokenFailureMessages {
+  readonly zh?: string
+  readonly en?: string
+}
+
+function tokenFailureMessage(preferences: UiPreferences, messages: TokenFailureMessages): string {
+  return (preferences.language === 'zh' ? messages.zh : messages.en) ?? COPY[preferences.language].tokenFailure
+}
+
+/** Render the fragment bridge page; it never contains or consumes a token. */
+export function tokenBridgePage(
+  basePath: string,
+  csrfToken: string,
+  preferences: UiPreferences,
+  failures: TokenFailureMessages,
+): string {
+  const copy = COPY[preferences.language]
+  return document(copy.tokenTitle, `<section class="content">
+    <h1>${escapeHtml(copy.tokenTitle)}</h1>
+    <p class="lede">${escapeHtml(copy.tokenLede)}</p>
+    <noscript><p class="notice" role="alert">${escapeHtml(copy.tokenNoscript)}</p></noscript>
+    <p class="notice" role="alert" id="dsh-auth-token-error" hidden>${escapeHtml(tokenFailureMessage(preferences, failures))}</p>
+  </section>`, preferences, `  <meta name="dsh-auth-csrf" content="${escapeHtml(csrfToken)}">
+  <script src="${escapeHtml(basePath)}/token-bootstrap.js" defer></script>
+`)
+}
+
+/** Render the unified token failure page used for every redemption denial. */
+export function tokenFailurePage(preferences: UiPreferences, failures: TokenFailureMessages): string {
+  const copy = COPY[preferences.language]
+  return document(copy.tokenTitle, `<section class="content">
+    <h1>${escapeHtml(copy.tokenTitle)}</h1>
+    <p class="notice" role="alert">${escapeHtml(tokenFailureMessage(preferences, failures))}</p>
+  </section>`, preferences)
+}
+
+/** Render the token flow rate-limit page without revealing token state. */
+export function tokenRateLimitedPage(preferences: UiPreferences): string {
+  const copy = COPY[preferences.language]
+  return document(copy.tokenTitle, `<section class="content">
+    <h1>${escapeHtml(copy.tokenTitle)}</h1>
+    <p class="notice" role="alert">${escapeHtml(copy.rateLimited)}</p>
   </section>`, preferences)
 }

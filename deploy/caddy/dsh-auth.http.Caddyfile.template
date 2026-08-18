@@ -9,7 +9,7 @@ http://{{PUBLIC_HOST}}:{{HTTP_PORT}}, http://:{{HTTP_PORT}} {
 	header {
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
-		Referrer-Policy "same-origin"
+		?Referrer-Policy "same-origin"
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 	}
 
