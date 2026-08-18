@@ -113,6 +113,8 @@ sudo dsh-auth setup \
 | `--admin-bootstrap` | when not prompting | | `password` or `login-token`. |
 | `--admin-username` | password setup | | Initial administrator login name. |
 | `--login-token` | when not prompting | | `enabled` or `disabled`. Token initialization requires `enabled`. |
+| `--login-token-error-message-zh` | no | built-in Chinese copy | Optional 1–500 character Chinese token-failure page text. Requires `--login-token enabled`. |
+| `--login-token-error-message-en` | no | built-in English copy | Optional 1–500 character English token-failure page text. Requires `--login-token enabled`. |
 | `--listen-address` | HTTP | `0.0.0.0` for HTTPS | Literal IP bind address. HTTP still requires an explicit private or loopback address. |
 | `--dsh-service` | system setup | | Exact existing DSH Web systemd unit. Omit only with `--output-dir`. |
 | `--password-file` or `--password-stdin` | ready password `setup` | | Password source. Not used by `plan` or token initialization. Unchanged reruns skip it. |
@@ -177,6 +179,17 @@ dsh-auth issue-login-token \
   --json \
   --auth-state-file /export/dsh-auth/state/auth-state.json \
   --public-origin https://harness.example.com
+```
+
+Setup can replace the built-in failure page text. Configure Chinese and English independently; an omitted language keeps its built-in copy. Each value is 1–500 Unicode characters of plain text. Control characters are rejected, and HTML is shown as text rather than markup. The installer refuses these flags when `--login-token` is `disabled`.
+
+Malformed, expired, already-used, and unknown tokens all return the same HTTP 401 page with that text. The page does not identify which of those cases occurred.
+
+```sh
+sudo dsh-auth setup \
+  --login-token enabled \
+  --login-token-error-message-zh '登录链接不可用，请向管理员重新申请。' \
+  --login-token-error-message-en 'This sign-in link is unavailable. Request a new one from your administrator.'
 ```
 
 ## Reset the password
