@@ -223,6 +223,9 @@ describe('observable authentication flow', () => {
 
     const page = await loginPage('//example.invalid/path')
     expect(hiddenValue(page.html, 'returnTo')).toBe('/')
+    const scripted = await loginPage('javascript:alert(1)')
+    expect(hiddenValue(scripted.html, 'returnTo')).toBe('/')
+    expect(scripted.html).not.toContain('javascript:')
     const noOrigin = await fetch(`${running.baseUrl}/auth/login`, {
       method: 'POST',
       headers: { cookie: page.csrfCookie },

@@ -42,7 +42,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^src/installer/' },
       to: {
-        path: '^src/(?:application|browser-bootstrap|cli|client|config|cookies|crypto|html|index|limiter|preferences|session)[.](?:ts|tsx)$',
+        path: '^src/(?:admin-password|application|browser-bootstrap|cli|client|config|cookies|crypto|html|http|index|limiter|preferences|session)[.](?:ts|tsx)$',
       },
     },
     {

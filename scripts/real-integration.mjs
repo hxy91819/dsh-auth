@@ -788,6 +788,29 @@ async function main() {
       logoutView?.label === 'Sign out' && logoutView.aria === 'Sign out' && logoutView.wide === true,
       'Harness sidebar logout action did not follow the active locale or wide layout',
     )
+    await browser.evaluate(`(() => {
+      const buttons = Array.from(document.querySelectorAll('button'))
+      const settings = buttons.find(button => button.textContent?.trim() === 'Settings')
+      settings?.click()
+      return settings !== undefined
+    })()`)
+    await waitForBrowser(
+      browser.evaluate,
+      'document.querySelector(".dsh-auth-password") !== null',
+      'Settings password-reset row',
+    )
+    const passwordView = await browser.evaluate(`(() => {
+      const row = document.querySelector('.dsh-auth-password-row')
+      const button = document.querySelector('.dsh-auth-password')
+      return row === null || button === null ? null : {
+        title: row.querySelector('.dsh-auth-password-title')?.textContent?.trim(),
+        action: button.textContent?.trim(),
+      }
+    })()`)
+    assert(
+      passwordView?.title === 'Reset password' && passwordView.action === 'Reset',
+      'Settings password-reset row did not follow the active locale',
+    )
     await browser.evaluate('document.querySelector(".dsh-auth-logout")?.click()')
     await waitForBrowser(browser.evaluate, 'location.pathname === "/auth/login"', 'browser logout redirect')
   } finally {
@@ -838,6 +861,7 @@ async function main() {
     sessionRenewal: `Set-Cookie via ${edgeRuntime === 'caddy' ? 'forward_auth' : 'auth_request'}`,
     sessionPersistence: 'survived DSH restart',
     browserSidebarSignOut: 'Sign out -> /auth/login',
+    browserSettingsPasswordReset: 'Settings -> Reset password',
     logoutRevocation: 401,
     tamperedCookie: 401,
     dshBind: '127.0.0.1',

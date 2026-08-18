@@ -156,9 +156,11 @@ Unauthenticated visitors see a responsive login page styled to match DeepSeek Ha
   <img src="https://raw.githubusercontent.com/hxy91819/dsh-auth/main/docs/images/login.png" alt="dsh-auth login page for DeepSeek Harness" width="720">
 </p>
 
-After sign-in, users enter the real Harness Web app with its normal sessions, tools, model selection, and workspace navigation. The authentication plugin adds a native sign-out action to the sidebar:
+After sign-in, users enter the real Harness Web app with its normal sessions, tools, model selection, and workspace navigation. The authentication plugin adds a native sign-out action to the sidebar and a password-reset row in Settings → General:
 
 ![Authenticated DeepSeek Harness Web app with the dsh-auth sign-out action](https://raw.githubusercontent.com/hxy91819/dsh-auth/main/docs/images/authenticated-harness.png)
+
+![Settings General row for resetting the administrator password](https://raw.githubusercontent.com/hxy91819/dsh-auth/main/docs/images/settings-reset-password.png)
 
 ## Issue a one-time login link
 
@@ -194,7 +196,11 @@ sudo dsh-auth setup \
 
 ## Reset the password
 
-For an installation created by `setup`, run the interactive reset:
+Signed-in administrators can open **Settings → General → Reset password**, enter the current password, and set a new one. That updates the stored hash and signs out other browser sessions; it does not rotate the session secret.
+
+![Administrator password-reset form](https://raw.githubusercontent.com/hxy91819/dsh-auth/main/docs/images/reset-password.png)
+
+If the current password is unavailable, operators with root on an installation created by `setup` can run the interactive reset:
 
 ```sh
 sudo dsh-auth reset-password
