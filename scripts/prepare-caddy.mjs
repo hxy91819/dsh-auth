@@ -1,6 +1,6 @@
 /**
  * Prepare an official fixed-version Caddy binary for isolated tests only.
- * Production setup will use verified npm platform packages instead of download.
+ * Production setup copies the Caddy binary bundled in the published tarball.
  */
 import { prepareCaddyRelease, currentCaddyPlatform } from './caddy-release.mjs'
 

@@ -7,7 +7,7 @@ status: in_progress
 gate: RELEASE
 owner: Cursor
 depends_on: [STORY-05]
-blocker: 无
+blocker: 主包 0.1.15 尚未发布自包含 Caddy
 updated: 2026-08-18
 intent_version: 2
 ---
@@ -26,7 +26,7 @@ intent_version: 2
 
 - 用锁定和 npm latest Harness、真实浏览器和 Caddy 验证完整控制台旅程。
 - 用失败注入覆盖并发、重启、文件权限、回滚和不可重放性。
-- 复验 x64/ARM64 平台包、automatic/manual TLS、systemd 和离线安装。
+- 复验主包内置 x64/ARM64 Caddy、automatic/manual TLS、systemd 和离线安装。
 - 更新公共安装、云平台接入、重装、doctor 和故障排查说明。
 - 检查发布包和 Git 元数据不含令牌、凭据或私有信息。
 

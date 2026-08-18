@@ -3,18 +3,19 @@
  * Input is one absolute or cwd-relative .tgz path. Success prints one summary;
  * validation or subprocess failures exit nonzero without printing credentials.
  */
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { writeFakeCaddyPlatformPackage } from './fake-caddy-platform-package.mjs'
 
 const HELP = `Usage:
   node scripts/pack-smoke.mjs PATH.tgz
 
 Description:
   Install a local dsh-auth tarball with npm --offline, execute its published
-  CLI, and verify secret-safe output-mode files and permissions.
+  CLI, and verify secret-safe output-mode files and permissions. The tarball
+  must already contain bundled Caddy; this script never installs a second
+  package or downloads a binary.
 
 Arguments:
   PATH.tgz  Required absolute or cwd-relative npm tarball path.
@@ -23,9 +24,18 @@ Output:
   Prints one success summary. Validation and subprocess failures exit nonzero.
 
 Examples:
-  node scripts/pack-smoke.mjs packed/dsh-auth-0.1.14.tgz
-  node scripts/pack-smoke.mjs /tmp/artifacts/dsh-auth-0.1.14.tgz
+  node scripts/pack-smoke.mjs packed/dsh-auth-0.1.15.tgz
+  node scripts/pack-smoke.mjs /tmp/artifacts/dsh-auth-0.1.15.tgz
 `
+
+const BUNDLED_CADDY_FILES = Object.freeze([
+  'manifest.json',
+  'manifest.sha256',
+  'LICENSE',
+  'THIRD_PARTY.md',
+  'linux-x64/caddy',
+  'linux-arm64/caddy',
+])
 
 const input = process.argv[2]
 if (input === '--help' || input === '-h') {
@@ -49,12 +59,13 @@ function run(command, args, options = {}) {
 
 try {
   run('npm', ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', tarball])
+  const vendor = join(root, 'node_modules', 'dsh-auth', 'vendor', 'caddy')
+  for (const file of BUNDLED_CADDY_FILES) {
+    if (!existsSync(join(vendor, file))) throw new Error(`packed tarball is missing bundled Caddy ${file}`)
+  }
   const bin = join(root, 'node_modules', '.bin', 'dsh-auth')
   const help = run(bin, ['--help'])
   if (!help.stdout.includes('dsh-auth setup') || !help.stdout.includes('dsh-auth reset-password')) throw new Error('packed bin help is missing a public command')
-
-  const platform = process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64'
-  writeFakeCaddyPlatformPackage(join(root, 'node_modules', `dsh-auth-caddy-${platform}`), platform)
 
   const password = 'pack-smoke-password-not-for-output'
   const output = join(root, 'rendered')

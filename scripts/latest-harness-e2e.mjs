@@ -28,7 +28,7 @@ Outputs:
 
 Examples:
   corepack pnpm run test:e2e:latest-dsh
-  node scripts/latest-harness-e2e.mjs release/dsh-auth-0.1.14.tgz
+  node scripts/latest-harness-e2e.mjs release/dsh-auth-0.1.15.tgz
 `
 
 const args = process.argv.slice(2).filter(argument => argument !== '--')

@@ -8,7 +8,6 @@ import { spawn, spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
-import { writeFakeCaddyPlatformPackage } from './fake-caddy-platform-package.mjs'
 
 const HELP = `Usage:
   node scripts/installer-e2e.mjs PATH.tgz
@@ -25,8 +24,8 @@ Output:
   or subprocess failures exit nonzero. Temporary files are always removed.
 
 Examples:
-  node scripts/installer-e2e.mjs packed/dsh-auth-0.1.14.tgz
-  node scripts/installer-e2e.mjs /tmp/artifacts/dsh-auth-0.1.14.tgz
+  node scripts/installer-e2e.mjs packed/dsh-auth-0.1.15.tgz
+  node scripts/installer-e2e.mjs /tmp/artifacts/dsh-auth-0.1.15.tgz
 `
 
 const input = process.argv[2]
@@ -125,8 +124,6 @@ function runInteractive(bin, output, password) {
 try {
   if (!isAbsolute(scriptExecutable)) throw new Error('PTY driver path must be absolute')
   run('npm', ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', tarball])
-  const platform = process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64'
-  writeFakeCaddyPlatformPackage(join(root, 'node_modules', `dsh-auth-caddy-${platform}`), platform)
   const bin = join(root, 'node_modules', '.bin', 'dsh-auth')
 
   const nonInteractivePassword = randomBytes(24).toString('base64url')

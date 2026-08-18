@@ -19,7 +19,7 @@ const OUTPUT_ARGS = [
 function outputHost(): FakeInstallerHost {
   const host = new FakeInstallerHost()
   host.addDirectory('/export')
-  host.installCaddyPackage()
+  host.installBundledCaddy()
   return host
 }
 
@@ -294,7 +294,7 @@ const TOKEN_URL = /^http:\/\/10\.0\.0\.20:8080\/auth\/token#token=dsh_otl_v1_[A-
 function tokenSystemHost(): FakeInstallerHost {
   const host = new FakeInstallerHost()
   host.withSystemdService()
-  host.installCaddyPackage()
+  host.installBundledCaddy()
   return host
 }
 

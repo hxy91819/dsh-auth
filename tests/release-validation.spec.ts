@@ -108,14 +108,23 @@ describe('release validation', () => {
     expect(() => validateGitHubReleaseMetadata({ ...release, assets: [{ name: identity.filename, size: 0, state: 'new' }] }, identity.tag, 'Release notes')).toThrow(/incomplete/u)
   })
 
-  it('keeps compiled lib files publishable while git still ignores the build tree', () => {
+  it('keeps compiled lib files and bundled Caddy publishable while git still ignores them', () => {
     const gitignore = readFileSync('.gitignore', 'utf8')
     const npmignore = readFileSync('.npmignore', 'utf8')
     const manifest: unknown = JSON.parse(readFileSync('package.json', 'utf8'))
     const files = manifest !== null && typeof manifest === 'object' && 'files' in manifest ? manifest.files : undefined
     expect(gitignore.split('\n')).toContain('lib/')
-    expect(npmignore.split('\n').some(line => line === 'lib/' || line === 'lib')).toBe(false)
+    expect(gitignore.split('\n')).toContain('vendor/caddy/')
+    expect(npmignore.split('\n').some(line => line === 'lib/' || line === 'lib' || line === 'vendor/caddy/' || line === 'vendor/caddy')).toBe(false)
     expect(files).toEqual(expect.arrayContaining(['lib/**/*.js', 'lib/**/*.d.ts']))
+    expect(files).toEqual(expect.arrayContaining([
+      'vendor/caddy/manifest.json',
+      'vendor/caddy/manifest.sha256',
+      'vendor/caddy/LICENSE',
+      'vendor/caddy/THIRD_PARTY.md',
+      'vendor/caddy/linux-x64/caddy',
+      'vendor/caddy/linux-arm64/caddy',
+    ]))
   })
 
   it('requires safe published files and the complete pack dry-run report', () => {

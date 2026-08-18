@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import type { CommandResult, CommandSpec, InstallerHost } from '../src/installer/types.js'
-import { CADDY_PACKAGE_VERSION, CADDY_VERSION } from '../src/installer/caddy.js'
+import { CADDY_VERSION } from '../src/installer/caddy.js'
 
 interface FakeEntry {
   content: Buffer
@@ -28,7 +28,7 @@ export class FakeInstallerHost implements InstallerHost {
   private randomCounter = 0
 
   constructor() {
-    for (const path of ['/', '/etc', '/etc/systemd', '/etc/systemd/system', '/usr', '/usr/bin', '/usr/sbin', '/usr/lib', '/opt', '/opt/dsh', '/opt/dsh/bin', '/root', '/root/.dsh', '/var', '/var/lib', '/usr/lib/node_modules']) {
+    for (const path of ['/', '/etc', '/etc/systemd', '/etc/systemd/system', '/usr', '/usr/bin', '/usr/sbin', '/usr/lib', '/opt', '/opt/dsh', '/opt/dsh/bin', '/root', '/root/.dsh', '/var', '/var/lib', '/usr/lib/node_modules', '/usr/lib/node_modules/dsh-auth']) {
       this.addDirectory(path, 0o755)
     }
     for (const path of ['/usr/bin/systemctl', '/usr/bin/id', '/usr/bin/getent', '/opt/dsh/bin/dsh']) this.addFile(path, '', 0o755)
@@ -45,27 +45,34 @@ export class FakeInstallerHost implements InstallerHost {
     this.entries.set(path, { content: Buffer.isBuffer(content) ? Buffer.from(content) : Buffer.from(content), mode, uid, gid, directory: false })
   }
 
-  installCaddyPackage(platform = 'linux-x64'): void {
-    const name = `dsh-auth-caddy-${platform}`
-    const directory = `/usr/lib/node_modules/${name}`
-    const binary = Buffer.from(`fake-caddy-${platform}`)
-    const binarySha256 = createHash('sha256').update(binary).digest('hex')
+  installBundledCaddy(): void {
+    const directory = '/usr/lib/node_modules/dsh-auth/vendor/caddy'
+    const license = 'Caddy license placeholder\n'
+    const platforms: Record<string, { executable: string; binarySha256: string; upstreamArchive: string }> = {}
+    for (const platform of ['linux-x64', 'linux-arm64'] as const) {
+      const binary = Buffer.from(`fake-caddy-${platform}`)
+      const binarySha256 = createHash('sha256').update(binary).digest('hex')
+      this.addDirectory(join(directory, platform))
+      this.addFile(join(directory, platform, 'caddy'), binary, 0o755)
+      platforms[platform] = {
+        executable: `${platform}/caddy`,
+        binarySha256,
+        upstreamArchive: `caddy_${CADDY_VERSION}_${platform.replace('linux-', 'linux_')}.tar.gz`,
+      }
+    }
     const manifest = `${JSON.stringify({
       schemaVersion: 1,
       caddyVersion: CADDY_VERSION,
       packageRevision: 'dsh.1',
-      platform,
-      executable: 'caddy',
-      upstreamArchive: `caddy_${CADDY_VERSION}_${platform.replace('linux-', 'linux_')}.tar.gz`,
-      binarySha256,
+      licenseSha256: createHash('sha256').update(license).digest('hex'),
+      platforms,
     })}\n`
+    this.addDirectory(join('/usr/lib/node_modules/dsh-auth', 'vendor'))
     this.addDirectory(directory)
-    this.addFile(join(directory, 'package.json'), `${JSON.stringify({ name, version: CADDY_PACKAGE_VERSION })}\n`, 0o644)
+    this.addFile(join(directory, 'LICENSE'), license, 0o644)
+    this.addFile(join(directory, 'THIRD_PARTY.md'), 'Third-party notices\n', 0o644)
     this.addFile(join(directory, 'manifest.json'), manifest, 0o644)
     this.addFile(join(directory, 'manifest.sha256'), `${createHash('sha256').update(manifest).digest('hex')}\n`, 0o644)
-    this.addFile(join(directory, 'LICENSE'), 'Caddy license placeholder\n', 0o644)
-    this.addFile(join(directory, 'THIRD_PARTY.md'), 'Third-party notices\n', 0o644)
-    this.addFile(join(directory, 'caddy'), binary, 0o755)
     const prior = this.commandHandler
     this.commandHandler = (command) => {
       if (command.args[0] === 'version' && command.executable.endsWith('/caddy')) {
@@ -218,10 +225,8 @@ export class FakeInstallerHost implements InstallerHost {
     return Buffer.alloc(size, value)
   }
 
-  resolveModulePackage(name: string): string {
-    const directory = `/usr/lib/node_modules/${name}`
-    if (!this.regularFile(join(directory, 'package.json'))) throw new Error(`MODULE_NOT_FOUND: ${name}`)
-    return directory
+  resolveBundledCaddyRoot(): string {
+    return '/usr/lib/node_modules/dsh-auth/vendor/caddy'
   }
 
   portBusy(address: string, port: number): boolean {

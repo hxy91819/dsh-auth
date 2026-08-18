@@ -7,7 +7,7 @@ function request(mode: 'http' | 'https', tls?: 'automatic' | 'manual'): SetupReq
   return {
     mode,
     profile: 'web',
-    packageSource: 'dsh-auth@0.1.14',
+    packageSource: 'dsh-auth@0.1.15',
     adminBootstrap: 'password',
     adminUsername: 'admin',
     loginTokenEnabled: false,
@@ -77,39 +77,46 @@ describe('Caddy installer contract', () => {
     expect(rendered).not.toContain('/etc/ssl/dsh-auth/key.pem')
   })
 
-  it('resolves the frozen linux-x64 platform package without downloading', () => {
+  it('resolves the bundled linux-x64 Caddy binary without downloading', () => {
     const host = new FakeInstallerHost()
-    host.installCaddyPackage('linux-x64')
+    host.installBundledCaddy()
     const pkg = resolveCaddyPackage(host)
-    expect(pkg.name).toBe('dsh-auth-caddy-linux-x64')
+    expect(pkg.name).toBe('linux-x64')
+    expect(pkg.executable).toBe('/usr/lib/node_modules/dsh-auth/vendor/caddy/linux-x64/caddy')
     expect(pkg.binarySha256).toMatch(/^[a-f0-9]{64}$/u)
     expect(CADDY_VERSION).toBe('2.11.4')
     expect(CADDY_PACKAGE_VERSION).toBe('2.11.4-dsh.1')
   })
 
-  it('resolves the frozen linux-arm64 platform package', () => {
+  it('resolves the bundled linux-arm64 Caddy binary', () => {
     const host = new FakeInstallerHost()
     host.arch = 'arm64'
-    host.installCaddyPackage('linux-arm64')
-    expect(resolveCaddyPackage(host).name).toBe('dsh-auth-caddy-linux-arm64')
+    host.installBundledCaddy()
+    expect(resolveCaddyPackage(host).name).toBe('linux-arm64')
+    expect(resolveCaddyPackage(host).executable).toBe('/usr/lib/node_modules/dsh-auth/vendor/caddy/linux-arm64/caddy')
   })
 
-  it('fails closed when the platform package is missing, unsupported, or tampered', () => {
+  it('fails closed when bundled Caddy is missing, unsupported, or tampered', () => {
     const missing = new FakeInstallerHost()
-    expect(() => resolveCaddyPackage(missing)).toThrow(/not installed/u)
+    expect(() => resolveCaddyPackage(missing)).toThrow(/missing from this dsh-auth install/u)
 
     const unsupported = new FakeInstallerHost()
     unsupported.arch = 'ppc64'
     expect(() => resolveCaddyPackage(unsupported)).toThrow(/Unsupported architecture/u)
 
     const tampered = new FakeInstallerHost()
-    tampered.installCaddyPackage('linux-x64')
-    tampered.addFile('/usr/lib/node_modules/dsh-auth-caddy-linux-x64/caddy', Buffer.from('mutated-caddy'), 0o755)
+    tampered.installBundledCaddy()
+    tampered.addFile('/usr/lib/node_modules/dsh-auth/vendor/caddy/linux-x64/caddy', Buffer.from('mutated-caddy'), 0o755)
     expect(() => resolveCaddyPackage(tampered)).toThrow(/checksum/u)
 
     const unlicensed = new FakeInstallerHost()
-    unlicensed.installCaddyPackage('linux-x64')
-    unlicensed.removeFile('/usr/lib/node_modules/dsh-auth-caddy-linux-x64/LICENSE')
+    unlicensed.installBundledCaddy()
+    unlicensed.removeFile('/usr/lib/node_modules/dsh-auth/vendor/caddy/LICENSE')
     expect(() => resolveCaddyPackage(unlicensed)).toThrow(/LICENSE/u)
+
+    const wrongArchBinary = new FakeInstallerHost()
+    wrongArchBinary.installBundledCaddy()
+    wrongArchBinary.removeFile('/usr/lib/node_modules/dsh-auth/vendor/caddy/linux-x64/caddy')
+    expect(() => resolveCaddyPackage(wrongArchBinary)).toThrow(/missing or does not match/u)
   })
 })

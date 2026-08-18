@@ -12,23 +12,22 @@ Version 2 is a breaking upgrade. Previous installer flags, Nginx-managed install
 
 ### Interactive setup
 
-Install the published CLI and the matching Caddy platform package, then start from an existing DSH Web systemd service whose upstream listens only on loopback:
+Install the published CLI, then start from an existing DSH Web systemd service whose upstream listens only on loopback:
 
 ```sh
 sudo npm install -g dsh-auth
-sudo npm install -g dsh-auth-caddy-linux-x64@2.11.4-dsh.1   # or dsh-auth-caddy-linux-arm64@2.11.4-dsh.1
 sudo dsh-auth setup
 ```
 
 `npm install -g dsh-auth` installs the current stable CLI, and the installer pins that same version in the selected DSH profile. For controlled production rollout, install the exact version approved by your supply-chain policy:
 
 ```sh
-sudo npm install -g dsh-auth@0.1.14
+sudo npm install -g dsh-auth@0.1.15
 ```
 
-The interactive installer asks for the exact DSH service, administrator initialization method, HTTPS hostname, and TLS mode; shows a secret-free plan; and changes the system only after you type the exact confirmation. It installs the pinned bundle into the selected DSH profile, copies a checksum-verified Caddy binary, writes permission-restricted authentication state, and enables an independent `dsh-auth-caddy.service`. It never stores a plaintext password and never downloads Caddy at setup time.
+The interactive installer asks for the exact DSH service, administrator initialization method, HTTPS hostname, and TLS mode; shows a secret-free plan; and changes the system only after you type the exact confirmation. It installs the pinned bundle into the selected DSH profile, copies a checksum-verified Caddy binary bundled in the same package, writes permission-restricted authentication state, and enables an independent `dsh-auth-caddy.service`. It never stores a plaintext password and never downloads Caddy at setup time.
 
-Normal deployment requires Linux x64 or ARM64, systemd, Node.js 24.7 or newer, DSH Web 0.1.0-rc.7, and the matching `dsh-auth-caddy-*@2.11.4-dsh.1` optional package. Automatic TLS is the HTTPS default. Manual TLS requires an existing certificate and key.
+Normal deployment requires Linux x64 or ARM64, systemd, Node.js 24.7 or newer, and DSH Web 0.1.0-rc.7. Automatic TLS is the HTTPS default. Manual TLS requires an existing certificate and key.
 
 ```text
 $ sudo dsh-auth setup
@@ -279,7 +278,7 @@ dsh-auth setup \
   --certificate-key /run/tls/privkey.pem
 ```
 
-The output directory contains `dsh-auth.env`, file-backed credentials, authentication state, a login-token directory, and a Caddyfile. Copy or mount them into fixed image paths and explicitly wire the environment file and Caddy config. Place the matching platform Caddy package in the image; setup never downloads the binary. [`deploy/docker/Dockerfile.install`](deploy/docker/Dockerfile.install) shows the offline profile layer.
+The output directory contains `dsh-auth.env`, file-backed credentials, authentication state, a login-token directory, and a Caddyfile. Copy or mount them into fixed image paths and explicitly wire the environment file and Caddy config. The same tarball already contains linux-x64 and linux-arm64 Caddy binaries; setup copies the current architecture after checksum verification and never downloads a binary. [`deploy/docker/Dockerfile.install`](deploy/docker/Dockerfile.install) shows the offline profile layer.
 
 ## Security behavior and limits
 

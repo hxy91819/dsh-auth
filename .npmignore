@@ -1,4 +1,4 @@
-# npm uses this file instead of .gitignore. Keep published lib/ visible.
+# npm uses this file instead of .gitignore. Keep published lib/ and vendor/caddy visible.
 # Directory or worktree symlink; a trailing slash would not ignore the symlink.
 node_modules
 coverage/

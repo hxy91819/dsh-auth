@@ -18,6 +18,7 @@ password-hash
 session-secret
 dsh-auth-sessions.json
 secrets/
+vendor/caddy/
 pnpm-debug.log*
 npm-debug.log*
 .DS_Store

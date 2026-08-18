@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -13,6 +14,7 @@ import { isAbsolute, join, resolve } from 'node:path'
 
 const checkout = resolve(import.meta.dirname, '..')
 const manifestPath = join(checkout, 'deploy/caddy/release-manifest.json')
+const archiveCache = join(checkout, '.tmp/caddy-archives')
 
 export function caddyReleaseManifest() {
   return JSON.parse(readFileSync(manifestPath, 'utf8'))
@@ -52,6 +54,21 @@ function platformEntry(manifest, platform) {
   return entry
 }
 
+async function loadOfficialArchive(entry, url) {
+  const cached = join(archiveCache, entry.archive)
+  if (existsSync(cached)) {
+    const cachedBytes = readFileSync(cached)
+    if (digest('sha512', cachedBytes) === entry.archiveSha512) return cachedBytes
+  }
+  const response = await fetch(url, { redirect: 'follow' })
+  if (!response.ok) throw new Error(`Caddy archive download failed with status ${String(response.status)}`)
+  const bytes = Buffer.from(await response.arrayBuffer())
+  if (digest('sha512', bytes) !== entry.archiveSha512) throw new Error('Caddy archive SHA-512 mismatch')
+  mkdirSync(archiveCache, { recursive: true, mode: 0o700 })
+  writeFileSync(cached, bytes, { mode: 0o600 })
+  return bytes
+}
+
 export function currentCaddyPlatform() {
   if (process.platform !== 'linux') throw new Error(`unsupported Caddy test operating system: ${process.platform}`)
   if (process.arch === 'x64') return 'linux-x64'
@@ -66,10 +83,7 @@ export async function prepareCaddyRelease(outputDirectory, platform = currentCad
   const url = `${manifest.releaseBaseUrl}/${entry.archive}`
   const archive = join(outputDirectory, entry.archive)
   try {
-    const response = await fetch(url, { redirect: 'follow' })
-    if (!response.ok) throw new Error(`Caddy archive download failed with status ${String(response.status)}`)
-    const bytes = Buffer.from(await response.arrayBuffer())
-    if (digest('sha512', bytes) !== entry.archiveSha512) throw new Error('Caddy archive SHA-512 mismatch')
+    const bytes = await loadOfficialArchive(entry, url)
     writeFileSync(archive, bytes, { flag: 'wx', mode: 0o600 })
     checked('tar', ['-xzf', archive, '-C', outputDirectory, 'caddy', 'LICENSE'])
 

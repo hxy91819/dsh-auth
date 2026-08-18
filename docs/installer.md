@@ -1,6 +1,6 @@
 # Installer architecture
 
-Read this document before changing `setup`, `plan`, `doctor`, `reset-password`, `uninstall`, Caddy platform-package verification, systemd integration, managed paths, JSON output, or installer exit codes.
+Read this document before changing `setup`, `plan`, `doctor`, `reset-password`, `uninstall`, bundled Caddy verification, systemd integration, managed paths, JSON output, or installer exit codes.
 
 ## Public surface
 
@@ -56,7 +56,7 @@ System setup owns only these exact paths:
 | `/etc/dsh-auth/session-secret` | `0640` | random signing secret, root/service-group readable |
 | `/etc/dsh-auth/Caddyfile` | `0644` | project-owned Caddy config with Admin API off |
 | `/usr/lib/dsh-auth` | `0755` | directory that holds the verified Caddy binary |
-| `/usr/lib/dsh-auth/caddy` | `0755` | checksum-verified Caddy `v2.11.4` from the platform package |
+| `/usr/lib/dsh-auth/caddy` | `0755` | checksum-verified Caddy `v2.11.4` copied from the bundled vendor tree |
 | `/etc/systemd/system/dsh-auth-caddy.service` | `0644` | independent DynamicUser edge unit |
 | `/var/lib/dsh-auth-caddy` | systemd | automatic TLS and Caddy runtime state |
 | `/var/lib/dsh-auth` | `0700` | service-owned authentication state root |
@@ -79,14 +79,9 @@ The state parser validates mode, root ownership under `/etc`, schema v2 fields, 
 - Non-interactive password reset requires `--authorize-password-reset`; both setup and reset reject inline password arguments and keep secrets out of JSON and diagnostics.
 - Caddy activation always follows a successful `caddy validate`. Port conflicts fail closed without stopping or taking over the occupying service.
 
-## Caddy platform packages
+## Bundled Caddy
 
-Caddy is the only public listener. The installer never downloads a binary and never probes, reloads, or reuses a system Caddy or Nginx. It resolves one exact optional platform package from `process.platform` and `process.arch`:
-
-- `dsh-auth-caddy-linux-x64@2.11.4-dsh.1`
-- `dsh-auth-caddy-linux-arm64@2.11.4-dsh.1`
-
-Each package must contain the unmodified official Caddy binary, `package.json` with that name and version, `manifest.json` plus `manifest.sha256`, `LICENSE`, and `THIRD_PARTY.md`. Setup verifies package version, manifest checksum, binary SHA-256, and license files, then copies the binary to the managed path. Missing packages, unsupported platforms, version drift, checksum mismatch, or missing licenses are prerequisite failures.
+Caddy is the only public listener. The installer never downloads a binary and never probes, reloads, or reuses a system Caddy or Nginx. The published `dsh-auth` tarball already contains unmodified official Caddy `v2.11.4` binaries for `linux-x64` and `linux-arm64` under `vendor/caddy/`, plus `manifest.json`, `manifest.sha256`, `LICENSE`, and `THIRD_PARTY.md`. Setup selects the current architecture from `process.platform` and `process.arch`, verifies the combined manifest checksum, selected binary SHA-256, and license files, then copies that binary to the managed path. Missing vendor files, unsupported platforms, revision drift, checksum mismatch, or missing licenses are prerequisite failures. Reinstall `dsh-auth` from the official tarball when bundled Caddy is incomplete; do not add a second npm package.
 
 ## Change map
 
@@ -96,7 +91,7 @@ Each package must contain the unmodified official Caddy binary, `package.json` w
 - Argument and root-path validation: `src/installer/validation.ts`.
 - One-time login token store shared by the CLI issuer and redemption: `src/login-token-store.ts`, `tests/login-token-store.spec.ts`.
 - Systemd and container issue-input resolution: `src/installer/issue-login-token.ts`, `tests/installer-cli.spec.ts`.
-- Caddy rendering, platform-package verification, TLS, and ports: `src/installer/caddy.ts`, `tests/caddy-installer.spec.ts`, `scripts/check-caddy.mjs`.
+- Caddy rendering, bundled-binary verification, TLS, and ports: `src/installer/caddy.ts`, `tests/caddy-installer.spec.ts`, `scripts/check-caddy.mjs`.
 - OS, systemd, and DSH service discovery: `src/installer/discovery.ts`.
 - Fingerprints, plans, conflicts, state parsing: `src/installer/config-files.ts`, `src/installer/plan.ts`.
 - Setup transaction and rollback: `src/installer/executor.ts`.

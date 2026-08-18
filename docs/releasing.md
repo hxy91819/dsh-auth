@@ -10,7 +10,7 @@ A tag alone does not publish. Creating and pushing the tag selects the immutable
 gh workflow run release.yml --ref main -f tag=vX.Y.Z
 ```
 
-Replace `vX.Y.Z` with the exact stable tag, for example `v0.1.14`. The workflow has no tag, branch-push, or pull-request publication trigger by design.
+Replace `vX.Y.Z` with the exact stable tag, for example `v0.1.15`. The workflow has no tag, branch-push, or pull-request publication trigger by design.
 
 The workflow is [`release.yml`](../.github/workflows/release.yml). It has no `push` or `pull_request` trigger, never changes `package.json`, `CHANGELOG.md`, Git refs, or tags, and never uses a long-lived npm credential. Preflight has only `contents: read`; the npm publish job adds only `id-token: write` and is protected by the `npm-release` environment; a final independent job receives `contents: write` only to create and verify the GitHub Release. Release automation supports only the exact npm 12 version pinned in the workflow, and release builds deliberately do not use the setup-node package cache.
 
@@ -72,4 +72,4 @@ In the GitHub UI, open **Actions → Release → Run workflow**, keep **Use work
 
 Before rerunning a failed release, check whether the **Publish the exact tarball** step succeeded. If it did not and `dsh-auth@X.Y.Z` is still absent from the official registry, the same immutable tag may be dispatched again after fixing the workflow or external configuration. If publication succeeded, do not retry it as a new publication and do not move the tag; npm versions are immutable. Confirm the published version and `latest` directly, then fix forward with a new version if package contents are wrong. Failures after npm publication or GitHub Release creation are diagnostic because neither publication is rolled back automatically. A failed final GitHub Release job can be rerun without republishing npm when the publish job already succeeded.
 
-Preflight runs `check`, `check:nginx`, the npm pack dry-run and tarball file-list check, offline packed-bin smoke, the real PTY interactive and non-interactive installer E2E, tracked-file privacy checks, and gitleaks. It uses disposable files and does not touch a deployed Harness, port 3080, or host Nginx configuration.
+Preflight runs `check`, `check:caddy`, the npm pack dry-run and tarball file-list check, offline packed-bin smoke, the real PTY interactive and non-interactive installer E2E, tracked-file privacy checks, and gitleaks. `npm pack` vendors both official Caddy binaries into the same tarball through `prepack`; setup never downloads Caddy. It uses disposable files and does not touch a deployed Harness, port 3080, or host Caddy configuration.

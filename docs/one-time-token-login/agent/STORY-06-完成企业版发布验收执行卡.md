@@ -31,7 +31,7 @@ verifies: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPT
 
 扩展真实 E2E 使用一次性 profile、秘密、进程和端口，在锁定与 latest Harness 上覆盖 password/login-token 两种 setup、systemd 签发、fragment 浏览器兑换、Later、首次设置、后续密码、续期、logout、重启和重放。容器/离线证据使用 output 产物、显式 auth-state/public-origin 和同形 JSON；不影响已有服务。
 
-验证 x64/ARM64 平台包完整性、automatic/local ACME、manual TLS、Caddy access log、应用输出、计划、JSON errors、状态目录、打包产物和 Git metadata。只使用生成的测试 token/密码；证据中保存哈希或 redacted 结构，不保存 bearer secret。公开文档说明签发成功输出、平台包、TLS、权限、doctor、重置、卸载重装和常见错误。
+验证主包内置 x64/ARM64 Caddy、automatic/local ACME、manual TLS、Caddy access log、应用输出、计划、JSON errors、状态目录、打包产物和 Git metadata。只使用生成的测试 token/密码；证据中保存哈希或 redacted 结构，不保存 bearer secret。公开文档说明签发成功输出、自包含 Caddy、TLS、权限、doctor、重置、卸载重装和常见错误。
 
 ## 权威输入
 
@@ -47,7 +47,7 @@ verifies: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPT
 领取记录（2026-08-18）：
 
 - STORY-01 至 05 done，COMPONENT 6/6。线性候选：`43ed0ca`（STORY-05）合入 `main` 后加 `4b26ad2`（VISION 文档）。验收基线 `4b26ad2621c0e8696cb3257a6fa73acb968731f9`。
-- npm latest `@deepseek-ai/dsh` = `0.1.0-rc.7`，与锁定 Harness 一致；Caddy 仍为 `v2.11.4`。平台包 `dsh-auth-caddy-linux-x64/arm64@2.11.4-dsh.1` 尚未出现在 npm。
+- npm latest `@deepseek-ai/dsh` = `0.1.0-rc.7`，与锁定 Harness 一致；Caddy 仍为 `v2.11.4`。用户已确认主包自包含双架构 Caddy，不再发布独立 `dsh-auth-caddy-linux-*` 包。下一正式修复版为 `dsh-auth@0.1.15`。
 - 工作树 `/data/code/dsh-auth-story-06`，分支 `feature/story-06-release-acceptance`。主仓 `main` 与 `origin/main` 同步于基线；STORY-05 worktree 只读保留。
 - 前置：Node `v24.15.0`、pnpm `10.14.0`、OpenSSL `3.0.12`、`ss`、systemd 255、Chrome `/usr/bin/google-chrome`。Caddy 二进制不在 PATH，E2E 使用校验后的测试预备器。
 
@@ -67,7 +67,7 @@ verifies: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPT
 
 ### 4. 验证平台分发、容器与运维恢复
 
-验证 x64/ARM64 缺包/篡改、automatic/manual TLS、端口冲突、output 模式签发/兑换，以及 doctor、reset-password、uninstall、v1 拒绝、写入/服务失败回滚。完成条件：安装不下载二进制，systemd 与容器 JSON 和安全语义一致。
+验证 x64/ARM64 内置 Caddy 缺文件/篡改、automatic/manual TLS、端口冲突、output 模式签发/兑换，以及 doctor、reset-password、uninstall、v1 拒绝、写入/服务失败回滚。完成条件：安装不下载二进制、不依赖第二包，systemd 与容器 JSON 和安全语义一致。
 
 ### 5. 更新公开文档
 
@@ -88,7 +88,7 @@ npm pack --dry-run
 git diff --check
 ```
 
-另保存 Caddy 平台包/TLS、容器 smoke、v1 重装、doctor/reset/uninstall、秘密扫描和 Git metadata 检查。交接报告必须给出 SEC 26/26、FUN 13/13、COMPONENT 6/6、RELEASE 1/1；任何跳过项保持未通过。
+另保存自包含 Caddy/TLS、容器 smoke、v1 重装、doctor/reset/uninstall、秘密扫描和 Git metadata 检查。交接报告必须给出 SEC 26/26、FUN 13/13、COMPONENT 6/6、RELEASE 1/1；任何跳过项保持未通过。
 
 ## 停止条件
 
@@ -104,8 +104,8 @@ git diff --check
 - 验收发现 `lib/` 被 `.gitignore` 排除后，`npm pack` 只打出 15 个文件、没有 CLI。已增加 `.npmignore`（不忽略 `lib/`）和回归测试；修复后 tarball 77 files，`pack-smoke` 与 `installer-e2e` 退出 0。
 - Chrome fragment 兑换在 `replaceState` 后发送 `Origin: null`。token POST 在有效 CSRF 且 `Sec-Fetch-Site` 为 same-origin/none/缺省时接受；密码登录与 logout 仍用精确同源。
 - 锁定/latest Harness、password/login-token、Caddy manual+internal E2E 均退出 0。gitleaks 与 privacy 通过。Git 作者仅为批准公开身份与 Dependabot。
-- 本地 `pack:caddy` 已生成 x64/arm64 可校验布局。跨架构不再执行对方二进制，只核 SHA。npm 上仍无 `dsh-auth-caddy-linux-*@2.11.4-dsh.1`。
-- 未做会改写主机 `/etc` 的 live systemd setup。SEC-26 / FUN-12 阻塞；FUN-10 live 重装为部分。RELEASE 保持 0/1。
+- 本地 packer 写入主包 `vendor/caddy` 双架构布局；`npm pack` 产出 82 files / 32.9 MB，含 x64+ARM64 Caddy。`pack-smoke` 与 `installer-e2e` 对 `dsh-auth-0.1.15.tgz` 离线通过，不注入第二包。独立平台包方案已撤销。未发布、不弃用 `0.1.14`，除非用户明确授权。
+- 未做会改写主机 `/etc` 的 live systemd setup。SEC-26 / FUN-12 待主包 tarball 自包含验证后关闭；FUN-10 live 重装为部分。RELEASE 保持 0/1。不发布、不弃用 `0.1.14`，除非用户明确授权。
 
 ## 交接
 

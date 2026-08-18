@@ -1,12 +1,9 @@
 import { randomBytes } from 'node:crypto'
 import { closeSync, constants, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync, chmodSync, chownSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import type { CommandResult, CommandSpec, InstallerHost } from './types.js'
-
-const requirePackage = createRequire(fileURLToPath(import.meta.url))
 
 function snapshotStat(path: string): ReturnType<InstallerHost['stat']> {
   const value = lstatSync(path)
@@ -140,8 +137,8 @@ export class NodeInstallerHost implements InstallerHost {
     return randomBytes(size)
   }
 
-  resolveModulePackage(name: string): string {
-    return dirname(requirePackage.resolve(`${name}/package.json`))
+  resolveBundledCaddyRoot(): string {
+    return join(fileURLToPath(new URL('../..', import.meta.url)), 'vendor/caddy')
   }
 
   portBusy(address: string, port: number): boolean {

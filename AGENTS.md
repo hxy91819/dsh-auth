@@ -16,7 +16,7 @@
 - Integrate through Harness WebServer, Settings, index-tap, client-module, locale, and sidebar-slot extension points. Extend those seams instead of forking Harness, rewriting its assets, probing the DOM, or using Nginx `sub_filter`.
 - `cordis.patch.yml` is the normal bundle layer. `cordis.overlay.yml` is only for deployments that resolve the package outside `dsh.profile.bundles`; one deployment uses one of them.
 - `src/` is the source of truth. `lib/` is the published build output. Deployment templates live under `deploy/`; observable behavior belongs in `tests/`.
-- Read `docs/installer.md` before changing setup/plan/doctor/uninstall, Caddy platform packages, systemd integration, managed paths, JSON/exit-code behavior, or installer release checks.
+- Read `docs/installer.md` before changing setup/plan/doctor/uninstall, bundled Caddy verification, systemd integration, managed paths, JSON/exit-code behavior, or installer release checks.
 
 ## Security invariants
 

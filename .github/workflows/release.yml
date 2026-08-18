@@ -60,11 +60,11 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: node scripts/release-validation.mjs source --tag "$RELEASE_TAG"
 
-      - name: Install Nginx and PTY support
+      - name: Install PTY support
         run: sudo apt-get update
 
-      - name: Install Nginx and PTY support packages
-        run: sudo apt-get install --yes nginx util-linux
+      - name: Install PTY support packages
+        run: sudo apt-get install --yes util-linux
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -72,8 +72,8 @@ jobs:
       - name: Run repository checks
         run: pnpm run check
 
-      - name: Run Nginx configuration checks
-        run: pnpm run check:nginx
+      - name: Run Caddy configuration checks
+        run: pnpm run check:caddy
 
       - name: Run tracked-file privacy gate
         run: node scripts/release-validation.mjs privacy
@@ -123,7 +123,7 @@ jobs:
           TARBALL="release/dsh-auth-${RELEASE_VERSION}.tgz"
           node scripts/installer-e2e.mjs "$TARBALL"
 
-      - name: Run packed authentication E2E through DSH, Nginx, and Chrome
+      - name: Run packed authentication E2E through DSH, Caddy, and Chrome
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |

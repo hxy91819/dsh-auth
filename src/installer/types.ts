@@ -198,6 +198,6 @@ export interface InstallerHost {
   removeFile(path: string): void
   removeDirectory(path: string): void
   randomBytes(size: number): Buffer
-  resolveModulePackage(name: string): string
+  resolveBundledCaddyRoot(): string
   portBusy(address: string, port: number): boolean
 }

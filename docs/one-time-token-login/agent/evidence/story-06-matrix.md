@@ -26,8 +26,8 @@
 | `DSH_E2E_BOOTSTRAP=password corepack pnpm run test:e2e` | 0 |
 | `corepack pnpm run test:e2e:latest-dsh` | 0 |
 | `corepack pnpm run test:e2e:caddy` | 0（manual + internal） |
-| `npm pack` + `pack-smoke` + `installer-e2e` | 0（77 files，含 `lib/cli.js`） |
-| `corepack pnpm run pack:caddy -- --output /tmp/dsh-auth-story-06-caddy` | 0（本地 x64/arm64 布局与 SHA-256） |
+| `npm pack` + `pack-smoke` + `installer-e2e` | 0（82 files，含 `lib/cli.js` 与双架构 `vendor/caddy`） |
+| `corepack pnpm run pack:caddy -- --clean` | 主包 vendor 布局；跨架构只核 SHA |
 | `node scripts/release-validation.mjs privacy` | 0 |
 | `gitleaks detect --source . --no-git` | 0 |
 | `git log` 作者扫描 | 仅批准公开身份与 Dependabot |
@@ -60,8 +60,8 @@
 | SEC-22 | `check:caddy`、真实 E2E 公网边界 | 已验证 |
 | SEC-23 | `tests/auth-http.spec.ts`、真实 E2E Cookie | 已验证 |
 | SEC-24 | 真实 E2E 重启；`tests/login-token-store.spec.ts` | 已验证 |
-| SEC-25 | `npm pack` 77 files、gitleaks、privacy、Git authors | 已验证 |
-| SEC-26 | `tests/caddy-installer.spec.ts`；本地 `pack:caddy` 校验 x64/arm64；**npm 平台包未发布** | 阻塞 |
+| SEC-25 | `npm pack` 82 files（含双架构 Caddy）、gitleaks、privacy、Git authors | 已验证 |
+| SEC-26 | `tests/caddy-installer.spec.ts`；`dsh-auth-0.1.15.tgz` 含 vendor/caddy；pack-smoke 离线 setup 通过；未 npm 发布 | 进行中 |
 | FUN-01 | installer-system/cli；真实 E2E password 旅程 | 已验证 |
 | FUN-02 | `tests/installer-cli.spec.ts` login-token setup；真实 E2E token 旅程 | 已验证 |
 | FUN-03 | `tests/login-token-http.spec.ts`、`tests/installer-cli.spec.ts` | 已验证 |
@@ -73,10 +73,10 @@
 | FUN-09 | `tests/login-token-http.spec.ts` | 已验证 |
 | FUN-10 | `tests/installer-cli.spec.ts` v1 拒绝；未做会改写主机 `/etc` 的 live systemd 重装 | 部分 |
 | FUN-11 | `test:e2e:latest-dsh` 退出 0，Harness `0.1.0-rc.7` | 已验证 |
-| FUN-12 | 本地平台包布局与 SHA-256 通过；**安装器仍无法从 npm 解析官方包** | 阻塞 |
+| FUN-12 | 本地 `dsh-auth-0.1.15.tgz` 离线 pack-smoke/installer-e2e 通过，不需要第二包；未 npm 发布 | 进行中 |
 | FUN-13 | `test:e2e:caddy` manual + internal，HTTP/2 200 | 已验证 |
 
 ## 发布阻塞
 
-1. `dsh-auth-caddy-linux-x64@2.11.4-dsh.1` 与 `dsh-auth-caddy-linux-arm64@2.11.4-dsh.1` 尚未出现在 npm。本地 packer 已能从官方 Caddy 归档生成可校验布局，但生产 setup 只复制已安装包、不下载。
+1. `dsh-auth@0.1.14` 仍要求不存在的独立 Caddy 平台包。用户已确认改为主包自包含双架构 Caddy，向前发布 `0.1.15`；未授权前不 npm/GitHub 发布、不弃用 `0.1.14`。
 2. 未在本机执行会写入 `/etc/dsh-auth` 并启停真实单元的 systemd setup；`docs/installer.md` 要求用可丢弃 output-dir，不碰已部署公网端口。FUN-10 live 重装因此保持部分。

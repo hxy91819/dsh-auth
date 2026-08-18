@@ -56,8 +56,14 @@ export const REQUIRED_PACKAGE_FILES = Object.freeze([
   'lib/index.js',
   'lib/cli.js',
   'cordis.patch.yml',
-  'deploy/nginx/dsh-auth.conf.template',
+  'deploy/caddy/dsh-auth.Caddyfile.template',
   'docs/installer.md',
+  'vendor/caddy/manifest.json',
+  'vendor/caddy/manifest.sha256',
+  'vendor/caddy/LICENSE',
+  'vendor/caddy/THIRD_PARTY.md',
+  'vendor/caddy/linux-x64/caddy',
+  'vendor/caddy/linux-arm64/caddy',
 ])
 
 /** @typedef {{tag: string, version: string, commit: string, filename: string, sha256: string}} ReleaseManifest */

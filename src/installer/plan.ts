@@ -391,7 +391,7 @@ function managedFileActions(request: SetupRequest, context: SetupContext): PlanA
     : [{ id: 'write-auth-state', kind: 'write-file' as const, description: 'Write an unset v2 authentication state for token initialization.', target: paths.authStateFile }]
   return [
     { id: 'create-config-directory', kind: 'create-directory', description: 'Create the permission-restricted configuration directory.', target: paths.configDirectory },
-    { id: 'install-caddy-binary', kind: 'write-file', description: 'Copy the checksum-verified Caddy binary from the platform package.', target: paths.caddyBinary },
+    { id: 'install-caddy-binary', kind: 'write-file', description: 'Copy the checksum-verified Caddy binary bundled in this dsh-auth package.', target: paths.caddyBinary },
     { id: 'write-session-secret', kind: 'write-file', description: 'Generate and write a new session-signing secret.', target: paths.sessionSecretFile, sensitive: true },
     ...passwordAction,
     { id: 'write-environment', kind: 'write-file', description: 'Write the DSH environment file containing secret-file paths, not secret values.', target: paths.environmentFile },

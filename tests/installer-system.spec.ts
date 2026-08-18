@@ -14,7 +14,7 @@ const SYSTEM_ARGS = [
 function readyHost(): FakeInstallerHost {
   const host = new FakeInstallerHost()
   host.withSystemdService()
-  host.installCaddyPackage()
+  host.installBundledCaddy()
   return host
 }
 
@@ -178,7 +178,7 @@ describe('system installer transactions', () => {
     expect(host.readFile('/root/.dsh/profiles/web/package.json')).not.toContain('dsh-auth"')
   }, 30_000)
 
-  it('fails closed before mutations when the Caddy platform package is missing', async () => {
+  it('fails closed before mutations when bundled Caddy is missing', async () => {
     const host = new FakeInstallerHost()
     host.withSystemdService()
     const io = new FakeCliIo(false)

@@ -1,6 +1,6 @@
 {
   "name": "dsh-auth",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "description": "Caddy-fronted single-account authentication bundle for DeepSeek Harness",
   "type": "module",
   "main": "./lib/index.js",
@@ -36,12 +36,20 @@
     "lib/**/*.d.ts",
     "cordis.patch.yml",
     "cordis.overlay.yml",
-    "deploy/",
+    "deploy/caddy/",
+    "deploy/docker/",
+    "deploy/dsh-auth.env.example",
     "docs/installer.md",
     "CHANGELOG.md",
     "README.md",
     "SECURITY.md",
-    "LICENSE"
+    "LICENSE",
+    "vendor/caddy/manifest.json",
+    "vendor/caddy/manifest.sha256",
+    "vendor/caddy/LICENSE",
+    "vendor/caddy/THIRD_PARTY.md",
+    "vendor/caddy/linux-x64/caddy",
+    "vendor/caddy/linux-arm64/caddy"
   ],
   "dsh": {
     "client": {
@@ -122,7 +130,8 @@
     "pack:caddy": "node scripts/pack-caddy-platform.mjs",
     "benchmark:edge": "node scripts/edge-benchmark.mjs",
     "check": "pnpm run check:code-health && pnpm run check:functional",
-    "prepack": "tsc --build --clean tsconfig.build.json && pnpm run build"
+    "prepack": "tsc --build --clean tsconfig.build.json && pnpm run build && node scripts/pack-caddy-platform.mjs --clean",
+    "postpack": "rm -rf vendor/caddy"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

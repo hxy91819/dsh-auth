@@ -125,71 +125,71 @@ WantedBy=multi-user.target
 `
 }
 
-function caddyPackageName(platform: NodeJS.Platform, arch: string): string {
-  if (platform !== 'linux') prerequisite('Caddy platform packages are published for Linux only.', 'CADDY_UNSUPPORTED_PLATFORM', 'Use a Linux x64 or ARM64 host, or --output-dir on a matching image.')
-  if (arch === 'x64') return 'dsh-auth-caddy-linux-x64'
-  if (arch === 'arm64') return 'dsh-auth-caddy-linux-arm64'
-  prerequisite(`Unsupported architecture ${arch}.`, 'CADDY_UNSUPPORTED_ARCH', 'Install on linux-x64 or linux-arm64.')
+function caddyPlatform(platform: NodeJS.Platform, arch: string): 'linux-x64' | 'linux-arm64' {
+  if (platform !== 'linux') prerequisite('Bundled Caddy is published for Linux only.', 'CADDY_UNSUPPORTED_PLATFORM', 'Use a Linux x64 or ARM64 host, or --output-dir on a matching image.')
+  if (arch === 'x64') return 'linux-x64'
+  if (arch === 'arm64') return 'linux-arm64'
+  prerequisite(`Unsupported architecture ${arch}.`, 'CADDY_UNSUPPORTED_ARCH', 'Install dsh-auth on linux-x64 or linux-arm64.')
 }
 
 function readManifest(host: InstallerHost, directory: string): Record<string, unknown> {
   const path = join(directory, 'manifest.json')
-  if (!host.regularFile(path)) prerequisite('Caddy platform package is missing manifest.json.', 'CADDY_PACKAGE_INVALID', 'Reinstall the matching dsh-auth-caddy platform package.')
+  if (!host.regularFile(path)) prerequisite('Bundled Caddy is missing manifest.json.', 'CADDY_PACKAGE_INVALID', 'Reinstall dsh-auth. Setup never downloads Caddy.')
   const checksumFile = join(directory, 'manifest.sha256')
   const bytes = host.readFileBytes(path)
   if (!host.regularFile(checksumFile) || host.readFile(checksumFile).trim() !== digest(bytes)) {
-    prerequisite('Caddy platform package manifest checksum does not match.', 'CADDY_MANIFEST_CHECKSUM', 'Reinstall the matching dsh-auth-caddy platform package; setup never downloads Caddy.')
+    prerequisite('Bundled Caddy manifest checksum does not match.', 'CADDY_MANIFEST_CHECKSUM', 'Reinstall dsh-auth. Setup never downloads Caddy.')
   }
   let parsed: unknown
   try {
     parsed = JSON.parse(bytes.toString('utf8'))
   } catch {
-    prerequisite('Caddy platform package manifest is not JSON.', 'CADDY_PACKAGE_INVALID', 'Reinstall the matching dsh-auth-caddy platform package.')
+    prerequisite('Bundled Caddy manifest is not JSON.', 'CADDY_PACKAGE_INVALID', 'Reinstall dsh-auth.')
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    prerequisite('Caddy platform package manifest is invalid.', 'CADDY_PACKAGE_INVALID', 'Reinstall the matching dsh-auth-caddy platform package.')
+    prerequisite('Bundled Caddy manifest is invalid.', 'CADDY_PACKAGE_INVALID', 'Reinstall dsh-auth.')
   }
   return parsed as Record<string, unknown>
 }
 
-/** Resolve and verify the exact local platform package. Never downloads a binary. */
+/** Resolve and verify the Caddy binary bundled in this dsh-auth package. Never downloads. */
 export function resolveCaddyPackage(host: InstallerHost): CaddyPackage {
-  const name = caddyPackageName(host.platform, host.arch)
-  let directory: string
-  try {
-    directory = host.resolveModulePackage(name)
-  } catch {
+  const directory = host.resolveBundledCaddyRoot()
+  const selected = caddyPlatform(host.platform, host.arch)
+  if (!host.regularFile(join(directory, 'manifest.json'))) {
     prerequisite(
-      `Caddy platform package ${name}@${CADDY_PACKAGE_VERSION} is not installed.`,
+      'Bundled Caddy is missing from this dsh-auth install.',
       'CADDY_PACKAGE_MISSING',
-      `Install optional dependency ${name}@${CADDY_PACKAGE_VERSION}. Setup never downloads Caddy from the network.`,
+      'Reinstall dsh-auth from the official tarball. Setup never downloads Caddy from the network.',
     )
   }
-  const packageJsonPath = join(directory, 'package.json')
-  if (!host.regularFile(packageJsonPath)) {
-    prerequisite('Caddy platform package is incomplete.', 'CADDY_PACKAGE_INVALID', 'Reinstall the matching dsh-auth-caddy platform package.')
-  }
-  let pkg: { readonly name?: unknown; readonly version?: unknown }
-  try {
-    pkg = JSON.parse(host.readFile(packageJsonPath)) as { readonly name?: unknown; readonly version?: unknown }
-  } catch {
-    prerequisite('Caddy platform package.json is invalid.', 'CADDY_PACKAGE_INVALID', 'Reinstall the matching dsh-auth-caddy platform package.')
-  }
-  if (pkg.name !== name || pkg.version !== CADDY_PACKAGE_VERSION) {
-    prerequisite('Caddy platform package version does not match the frozen edge runtime.', 'CADDY_PACKAGE_VERSION', `Use ${name}@${CADDY_PACKAGE_VERSION}.`)
-  }
   const manifest = readManifest(host, directory)
-  if (manifest.caddyVersion !== CADDY_VERSION || manifest.executable !== 'caddy' || typeof manifest.binarySha256 !== 'string' || !sha256Hex(manifest.binarySha256)) {
-    prerequisite('Caddy platform package manifest fields are invalid.', 'CADDY_PACKAGE_INVALID', 'Reinstall the matching dsh-auth-caddy platform package.')
+  if (manifest.caddyVersion !== CADDY_VERSION || manifest.packageRevision !== 'dsh.1') {
+    prerequisite('Bundled Caddy revision does not match the frozen edge runtime.', 'CADDY_PACKAGE_VERSION', `Use dsh-auth with Caddy ${CADDY_VERSION} (dsh.1).`)
   }
   if (!host.regularFile(join(directory, 'LICENSE')) || !host.regularFile(join(directory, 'THIRD_PARTY.md'))) {
-    prerequisite('Caddy platform package is missing LICENSE or third-party notices.', 'CADDY_LICENSE_MISSING', 'Reinstall the complete platform package.')
+    prerequisite('Bundled Caddy is missing LICENSE or third-party notices.', 'CADDY_LICENSE_MISSING', 'Reinstall dsh-auth.')
   }
-  const executable = join(directory, 'caddy')
-  if (!host.regularFile(executable) || digest(host.readFileBytes(executable)) !== manifest.binarySha256) {
-    prerequisite('Caddy binary is missing or does not match the platform package checksum.', 'CADDY_BINARY_CHECKSUM', 'Reinstall the matching dsh-auth-caddy platform package; setup never downloads Caddy.')
+  if (typeof manifest.licenseSha256 !== 'string' || !sha256Hex(manifest.licenseSha256) || digest(host.readFileBytes(join(directory, 'LICENSE'))) !== manifest.licenseSha256) {
+    prerequisite('Bundled Caddy LICENSE does not match the manifest checksum.', 'CADDY_LICENSE_MISSING', 'Reinstall dsh-auth.')
   }
-  return { name, directory, executable, binarySha256: manifest.binarySha256 }
+  const platforms = manifest.platforms
+  if (platforms === null || typeof platforms !== 'object' || Array.isArray(platforms)) {
+    prerequisite('Bundled Caddy manifest platforms are invalid.', 'CADDY_PACKAGE_INVALID', 'Reinstall dsh-auth.')
+  }
+  const entry = (platforms as Record<string, unknown>)[selected]
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+    prerequisite('Bundled Caddy is missing the current architecture.', 'CADDY_PACKAGE_INVALID', 'Reinstall the complete dsh-auth tarball that includes linux-x64 and linux-arm64 binaries.')
+  }
+  const platformEntry = entry as Record<string, unknown>
+  if (platformEntry.executable !== `${selected}/caddy` || typeof platformEntry.binarySha256 !== 'string' || !sha256Hex(platformEntry.binarySha256)) {
+    prerequisite('Bundled Caddy manifest fields are invalid.', 'CADDY_PACKAGE_INVALID', 'Reinstall dsh-auth.')
+  }
+  const executable = join(directory, selected, 'caddy')
+  if (!host.regularFile(executable) || digest(host.readFileBytes(executable)) !== platformEntry.binarySha256) {
+    prerequisite('Bundled Caddy binary is missing or does not match the checksum.', 'CADDY_BINARY_CHECKSUM', 'Reinstall dsh-auth. Setup never downloads Caddy.')
+  }
+  return { name: selected, directory, executable, binarySha256: platformEntry.binarySha256 }
 }
 
 function publicPorts(request: SetupRequest): readonly { readonly address: string; readonly port: number }[] {

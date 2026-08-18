@@ -30,7 +30,7 @@ Outputs:
 
 Examples:
   node scripts/caddy-e2e.mjs
-  node scripts/caddy-e2e.mjs --caddy /opt/dsh-auth/caddy packed/dsh-auth-0.1.14.tgz
+  node scripts/caddy-e2e.mjs --caddy /opt/dsh-auth/caddy packed/dsh-auth-0.1.15.tgz
 `
 
 function parseArguments() {
