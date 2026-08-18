@@ -1,4 +1,5 @@
-node_modules/
+# Directory or worktree symlink; a trailing slash would not ignore the symlink.
+node_modules
 lib/
 coverage/
 .tmp/
