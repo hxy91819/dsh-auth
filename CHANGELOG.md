@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.1.15
+
+Changes since [v0.1.14](https://github.com/hxy91819/dsh-auth/compare/v0.1.14...v0.1.15).
+
+### Changes
+
+- docs: record live systemd acceptance for bundled Caddy 0.1.15 (`7381c4a`). Thanks masonxhuang.
+- merge: incorporate main Caddy self-contained docs contract (`d499c2a`). Thanks masonxhuang.
+- fix: start DynamicUser Caddy without a root-owned state directory (`4f5c39d`). Thanks masonxhuang.
+- feat: ship official Caddy binaries inside the dsh-auth tarball (`92e5234`). Thanks masonxhuang.
+
+### Contributors
+
+Thanks masonxhuang for this release.
+
 ## v0.1.14
 
 Changes since [v0.1.13](https://github.com/hxy91819/dsh-auth/compare/v0.1.13...v0.1.14).
