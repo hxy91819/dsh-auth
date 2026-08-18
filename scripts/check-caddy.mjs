@@ -193,7 +193,7 @@ function mockUpstream() {
         response.end()
         return
       }
-      response.writeHead(200, { 'content-type': 'text/html', 'referrer-policy': 'no-referrer' })
+      response.writeHead(200, { 'content-type': 'text/html', 'referrer-policy': 'same-origin' })
       response.end('bridge page')
       return
     }
@@ -224,7 +224,7 @@ async function verifyProtocol(caddy, root, ports, certificate, key) {
     if ((await request(ports.https, '/api/example')).status !== 401) throw new Error('Caddy did not preserve API 401')
     if ((await request(ports.https, '/auth/verify')).status !== 404) throw new Error('public verify was exposed')
     const bridge = await request(ports.https, '/auth/token')
-    if (bridge.status !== 200 || bridge.headers['referrer-policy'] !== 'no-referrer') throw new Error('token bridge page was not proxied untouched')
+    if (bridge.status !== 200 || bridge.headers['referrer-policy'] !== 'same-origin') throw new Error('token bridge page was not proxied untouched')
     const bridgeScript = await request(ports.https, '/auth/token-bootstrap.js')
     if (bridgeScript.status !== 200 || bridgeScript.body !== 'bridge') throw new Error('token bridge script was not proxied untouched')
     const redemption = await request(ports.https, '/auth/token', {

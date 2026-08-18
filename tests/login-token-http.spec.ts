@@ -1,9 +1,12 @@
+import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer, type IncomingMessage, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { once } from 'node:events'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { Server } from 'node:http'
 import { authStateSecretId, createAuthStateDocument } from '../src/auth-state.js'
 import { CSRF_COOKIE, SESSION_COOKIE } from '../src/cookies.js'
 import { LoginTokenStore, createNodeTokenHost } from '../src/login-token-store.js'
@@ -30,6 +33,7 @@ async function tokenHarness(
     readonly configured?: boolean
     readonly config?: Record<string, unknown>
     readonly clock?: () => number
+    readonly inspect?: (req: IncomingMessage) => void
   } = {},
 ): Promise<TokenHarness> {
   const root = mkdtempSync(join(tmpdir(), 'dsh-auth-token-http-'))
@@ -51,7 +55,7 @@ async function tokenHarness(
     loginTokenDirectory: directory,
     ...options.config,
   })
-  const server = await startTestServer(config, options.clock)
+  const server = await startTestServer(config, options.clock, undefined, options.inspect)
   servers.push(server.server)
   return {
     baseUrl: server.baseUrl,
@@ -73,17 +77,25 @@ async function bridgePage(baseUrl: string): Promise<{ readonly cookie: string; r
   return { cookie: cookiePair(page.headers, CSRF_COOKIE), csrf: csrfMeta(await page.text()) }
 }
 
-async function redeem(baseUrl: string, token: string, overrides: { readonly cookie?: string; readonly csrf?: string; readonly origin?: string } = {}): Promise<Response> {
+async function redeem(baseUrl: string, token: string, overrides: {
+  readonly cookie?: string
+  readonly csrf?: string
+  readonly origin?: string | false
+  readonly fetchSite?: string
+} = {}): Promise<Response> {
   const { cookie, csrf } = await bridgePage(baseUrl)
+  const headers: Record<string, string> = {
+    ...proxyHeaders(),
+    'content-type': 'application/x-www-form-urlencoded',
+    cookie: overrides.cookie ?? cookie,
+  }
+  if (overrides.origin === false) delete headers.origin
+  else if (overrides.origin !== undefined) headers.origin = overrides.origin
+  if (overrides.fetchSite !== undefined) headers['sec-fetch-site'] = overrides.fetchSite
   return await fetch(`${baseUrl}/auth/token`, {
     method: 'POST',
     redirect: 'manual',
-    headers: {
-      ...proxyHeaders(),
-      ...(overrides.origin === undefined ? {} : { origin: overrides.origin }),
-      'content-type': 'application/x-www-form-urlencoded',
-      cookie: overrides.cookie ?? cookie,
-    },
+    headers,
     body: new URLSearchParams({ csrf: overrides.csrf ?? csrf, token }).toString(),
   })
 }
@@ -98,7 +110,7 @@ describe('token bridge page', () => {
       const page = await fetch(`${harness.baseUrl}/auth/token`, { method, headers: proxyHeaders() })
       expect(page.status).toBe(200)
       expect(page.headers.get('cache-control')).toBe('no-store, max-age=0')
-      expect(page.headers.get('referrer-policy')).toBe('no-referrer')
+      expect(page.headers.get('referrer-policy')).toBe('same-origin')
       expect(page.headers.get('content-security-policy')).toContain("script-src 'self'")
       expect(page.headers.get('content-security-policy')).toContain("form-action 'self'")
       expect(page.headers.get('content-security-policy')).toContain("frame-ancestors 'none'")
@@ -248,11 +260,17 @@ describe('token redemption', () => {
     expect((await redeem(harness.baseUrl, issued.token)).status).toBe(303)
   })
 
-  it('accepts Chrome Origin null after replaceState when CSRF is valid', async () => {
+  it('rejects missing, null, and cross-origin token posts while CSRF remains valid', async () => {
     const credentials = await testCredentials()
     const harness = await tokenHarness(credentials, { configured: false })
     const issued = harness.store.issue({ ttlSeconds: 300 })
-    expect((await redeem(harness.baseUrl, issued.token, { origin: 'null' })).status).toBe(303)
+
+    expect((await redeem(harness.baseUrl, issued.token, { origin: 'https://evil.example' })).status).toBe(403)
+    expect((await redeem(harness.baseUrl, issued.token, { origin: 'null' })).status).toBe(403)
+    expect((await redeem(harness.baseUrl, issued.token, { origin: 'null', fetchSite: 'same-origin' })).status).toBe(403)
+    expect((await redeem(harness.baseUrl, issued.token, { origin: false })).status).toBe(403)
+    expect(readdirSync(harness.directory)).toHaveLength(1)
+    expect((await redeem(harness.baseUrl, issued.token)).status).toBe(303)
   })
 
   it('rate-limits independently from the password limiter', async () => {
@@ -338,3 +356,87 @@ describe('token redemption', () => {
     expect(readdirSync(harness.directory)).toEqual([])
   })
 })
+
+describe('token Chrome origin', () => {
+  it('redeems a fragment URL from Chrome with a real same-origin header', async () => {
+    const chrome = chromeExecutable()
+    if (chrome === undefined) return
+    const credentials = await testCredentials()
+    const posted: { origin?: string, fetchSite?: string } = {}
+    const harness = await tokenHarness(credentials, {
+      configured: false,
+      config: { secureCookies: false, trustedProxyAddresses: ['192.0.2.1'] },
+      inspect(req) {
+        if (req.method === 'POST' && req.url?.startsWith('/auth/token') === true) {
+          const origin = singleHeader(req.headers.origin)
+          const fetchSite = singleHeader(req.headers['sec-fetch-site'])
+          if (origin !== undefined) posted.origin = origin
+          if (fetchSite !== undefined) posted.fetchSite = fetchSite
+        }
+      },
+    })
+    const issued = harness.store.issue({ ttlSeconds: 300 })
+    const browser = await openChrome(chrome, `${harness.baseUrl}/auth/token#token=${issued.token}`)
+    try {
+      const deadline = Date.now() + 12_000
+      while (posted.origin === undefined && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 50))
+      }
+      expect(posted.origin).toBe(new URL(harness.baseUrl).origin)
+      expect(posted.origin).not.toBe('null')
+      expect(posted.fetchSite).toBe('same-origin')
+      expect(readdirSync(harness.directory)).toHaveLength(0)
+    } finally {
+      browser.kill('SIGKILL')
+    }
+  }, 20_000)
+})
+
+function singleHeader(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value
+}
+
+function chromeExecutable(): string | undefined {
+  for (const candidate of ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser']) {
+    if (existsSync(candidate)) return candidate
+  }
+  return undefined
+}
+
+async function allocatePort(): Promise<number> {
+  const server = createServer()
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const address = server.address() as AddressInfo
+  server.close()
+  await once(server, 'close')
+  return address.port
+}
+
+async function openChrome(chrome: string, targetUrl: string): Promise<ReturnType<typeof spawn>> {
+  const debugPort = await allocatePort()
+  const profile = mkdtempSync(join(tmpdir(), 'dsh-auth-chrome-origin-'))
+  roots.push(profile)
+  const child = spawn(chrome, [
+    '--headless=new', '--no-sandbox', '--disable-gpu',
+    `--user-data-dir=${profile}`,
+    `--remote-debugging-port=${String(debugPort)}`,
+    'about:blank',
+  ], { stdio: ['ignore', 'pipe', 'pipe'] })
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    try {
+      if ((await fetch(`http://127.0.0.1:${String(debugPort)}/json/version`)).ok) break
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+  }
+  const targetResponse = await fetch(`http://127.0.0.1:${String(debugPort)}/json/new?${encodeURIComponent(targetUrl)}`, {
+    method: 'PUT',
+  })
+  if (!targetResponse.ok) {
+    child.kill('SIGKILL')
+    throw new Error(`Chrome target creation failed with status ${String(targetResponse.status)}`)
+  }
+  return child
+}

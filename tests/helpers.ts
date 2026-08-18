@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
-import type { Server } from 'node:http'
+import type { IncomingMessage, Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { once } from 'node:events'
 import { tmpdir } from 'node:os'
@@ -63,9 +63,11 @@ export async function startTestServer(
   config: ResolvedConfig,
   now?: () => number,
   readHarnessUiSettings?: () => HarnessUiSettings,
+  inspect?: (req: IncomingMessage) => void,
 ): Promise<TestServer> {
   const application = new AuthApplication(config, now, readHarnessUiSettings)
   const server = createServer((req, res) => {
+    inspect?.(req)
     application.handle(req, res).catch((error: unknown) => {
       res.writeHead(500)
       res.end(error instanceof Error ? error.message : String(error))

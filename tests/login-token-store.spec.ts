@@ -1,8 +1,11 @@
+import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import * as ts from 'typescript'
 import { NodeInstallerHost } from '../src/installer/host.js'
 import { LoginTokenError, LoginTokenStore, type TokenStoreHost } from '../src/login-token-store.js'
 
@@ -47,7 +50,7 @@ class FaultyTokenHost extends NodeInstallerHost {
   }
 
   override writeNewFile(path: string, content: string | Buffer, mode: number): void {
-    if (this.failing === 'writeNewFile' && this.remaining > 0) {
+    if (this.failing === 'writeNewFile' && this.remaining > 0 && !path.endsWith('.dsh_otl_v1_issue.lock')) {
       this.remaining -= 1
       throw new Error('synthetic token write failure')
     }
@@ -211,4 +214,52 @@ describe('login token store', () => {
     expect(readdirSync(directory).sort()).toEqual([digestOf(first.token), digestOf(second.token)].sort())
     expect(readFileSync(join(directory, digestOf(first.token)), 'utf8')).toContain('"expiresAt":60000')
   })
+
+  it('keeps at most 32 valid tokens when 96 processes issue concurrently', async () => {
+    const directory = tokenDirectory()
+    const compiled = compileIssueWorker(directory)
+    const results = await Promise.all(Array.from({ length: 96 }, () => issueInChild(compiled.worker, directory)))
+    const names = readdirSync(directory)
+    expect(results.filter(result => result === 'ok')).toHaveLength(32)
+    expect(results.filter(result => result === 'capacity')).toHaveLength(64)
+    expect(names).toHaveLength(32)
+    expect(names.every(name => /^[0-9a-f]{64}$/u.test(name))).toBe(true)
+  }, 30_000)
 })
+
+function compileIssueWorker(directory: string): { readonly worker: string } {
+  const root = dirname(fileURLToPath(import.meta.url))
+  const source = readFileSync(join(root, '../src/login-token-store.ts'), 'utf8')
+  const emitted = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+    fileName: 'login-token-store.ts',
+  }).outputText
+  const storePath = join(directory, '..', 'login-token-store.mjs')
+  const workerPath = join(directory, '..', 'issue-worker.mjs')
+  writeFileSync(storePath, emitted)
+  writeFileSync(workerPath, `import { LoginTokenError, LoginTokenStore, createNodeTokenHost } from ${JSON.stringify(pathToFileURL(storePath).href)}
+try {
+  new LoginTokenStore({ host: createNodeTokenHost(), directory: process.argv[2] }).issue({ ttlSeconds: 60 })
+  process.stdout.write('ok\\n')
+} catch (error) {
+  if (error instanceof LoginTokenError) process.stdout.write(\`\${error.kind}\\n\`)
+  else throw error
+}
+`)
+  return { worker: workerPath }
+}
+
+function issueInChild(worker: string, directory: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [worker, directory], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', chunk => { stdout += String(chunk) })
+    child.stderr.on('data', chunk => { stderr += String(chunk) })
+    child.once('error', reject)
+    child.once('close', code => {
+      if (code !== 0) reject(new Error(`issue worker exited ${String(code)}: ${stderr}`))
+      else resolve(stdout.trim())
+    })
+  })
+}
