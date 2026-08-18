@@ -1,6 +1,6 @@
 # Installer architecture
 
-Read this document before changing `setup`, `plan`, `doctor`, `reset-password`, `uninstall`, Caddy platform-package verification, systemd integration, managed paths, JSON output, or installer exit codes.
+Read this document before changing `setup`, `plan`, `doctor`, `reset-password`, `uninstall`, bundled Caddy verification, systemd integration, managed paths, JSON output, or installer exit codes.
 
 ## Public surface
 
@@ -56,7 +56,7 @@ System setup owns only these exact paths:
 | `/etc/dsh-auth/session-secret` | `0640` | random signing secret, root/service-group readable |
 | `/etc/dsh-auth/Caddyfile` | `0644` | project-owned Caddy config with Admin API off |
 | `/usr/lib/dsh-auth` | `0755` | directory that holds the verified Caddy binary |
-| `/usr/lib/dsh-auth/caddy` | `0755` | checksum-verified Caddy `v2.11.4` from the platform package |
+| `/usr/lib/dsh-auth/caddy` | `0755` | checksum-verified Caddy `v2.11.4` selected from the self-contained main package |
 | `/etc/systemd/system/dsh-auth-caddy.service` | `0644` | independent DynamicUser edge unit |
 | `/var/lib/dsh-auth-caddy` | systemd | automatic TLS and Caddy runtime state |
 | `/var/lib/dsh-auth` | `0700` | service-owned authentication state root |
@@ -79,14 +79,13 @@ The state parser validates mode, root ownership under `/etc`, schema v2 fields, 
 - Non-interactive password reset requires `--authorize-password-reset`; both setup and reset reject inline password arguments and keep secrets out of JSON and diagnostics.
 - Caddy activation always follows a successful `caddy validate`. Port conflicts fail closed without stopping or taking over the occupying service.
 
-## Caddy platform packages
+## Bundled Caddy runtime
 
-Caddy is the only public listener. The installer never downloads a binary and never probes, reloads, or reuses a system Caddy or Nginx. It resolves one exact optional platform package from `process.platform` and `process.arch`:
+Caddy is the only public listener. `dsh-auth` is the only npm package and GitHub Release artifact. Its main tarball contains both supported official Caddy binaries under `vendor/caddy/`, plus `manifest.json`, `manifest.sha256`, `LICENSE`, and `THIRD_PARTY.md`. The installer never downloads a binary and never probes, reloads, or reuses a system Caddy or Nginx.
 
-- `dsh-auth-caddy-linux-x64@2.11.4-dsh.1`
-- `dsh-auth-caddy-linux-arm64@2.11.4-dsh.1`
+Setup accepts Linux x64 and ARM64 only. It selects the current architecture from the installed main package, verifies the package version, manifest checksum, selected binary SHA-256, and license files, then copies that binary to the managed path. Release validation checks both architectures even though setup executes only the current one. A missing architecture, unsupported platform, wrong architecture, version drift, checksum mismatch, or missing license is a prerequisite failure before any host mutation.
 
-Each package must contain the unmodified official Caddy binary, `package.json` with that name and version, `manifest.json` plus `manifest.sha256`, `LICENSE`, and `THIRD_PARTY.md`. Setup verifies package version, manifest checksum, binary SHA-256, and license files, then copies the binary to the managed path. Missing packages, unsupported platforms, version drift, checksum mismatch, or missing licenses are prerequisite failures.
+Release preflight may download the two fixed official archives into isolated staging. Setup, preinstall, postinstall, container rendering, and offline installation must not access the network. Copying the single npm tarball to an isolated host must be sufficient to install the plugin and its Caddy runtime.
 
 ## Change map
 
@@ -96,7 +95,7 @@ Each package must contain the unmodified official Caddy binary, `package.json` w
 - Argument and root-path validation: `src/installer/validation.ts`.
 - One-time login token store shared by the CLI issuer and redemption: `src/login-token-store.ts`, `tests/login-token-store.spec.ts`.
 - Systemd and container issue-input resolution: `src/installer/issue-login-token.ts`, `tests/installer-cli.spec.ts`.
-- Caddy rendering, platform-package verification, TLS, and ports: `src/installer/caddy.ts`, `tests/caddy-installer.spec.ts`, `scripts/check-caddy.mjs`.
+- Caddy rendering, bundled-runtime verification, TLS, and ports: `src/installer/caddy.ts`, `tests/caddy-installer.spec.ts`, `scripts/check-caddy.mjs`.
 - OS, systemd, and DSH service discovery: `src/installer/discovery.ts`.
 - Fingerprints, plans, conflicts, state parsing: `src/installer/config-files.ts`, `src/installer/plan.ts`.
 - Setup transaction and rollback: `src/installer/executor.ts`.

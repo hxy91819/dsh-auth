@@ -8,27 +8,28 @@ Add a secure administrator login to the DeepSeek Harness Web app. `dsh-auth` kee
 
 Version 2 is a breaking upgrade. Previous installer flags, Nginx-managed installations, and old sessions are not migrated. Uninstall the previous installation, then run `setup` again.
 
+> **Release status:** `dsh-auth@0.1.14` does not contain the required Caddy runtime and does not satisfy the self-contained installation contract. Do not use it for a new deployment. The next release is blocked until one `dsh-auth` tarball contains both supported Caddy architectures and passes offline installation acceptance.
+
 ## Quick start
 
 ### Interactive setup
 
-Install the published CLI and the matching Caddy platform package, then start from an existing DSH Web systemd service whose upstream listens only on loopback:
+Once the release status above is cleared, install the single published package, then start from an existing DSH Web systemd service whose upstream listens only on loopback:
 
 ```sh
 sudo npm install -g dsh-auth
-sudo npm install -g dsh-auth-caddy-linux-x64@2.11.4-dsh.1   # or dsh-auth-caddy-linux-arm64@2.11.4-dsh.1
 sudo dsh-auth setup
 ```
 
-`npm install -g dsh-auth` installs the current stable CLI, and the installer pins that same version in the selected DSH profile. For controlled production rollout, install the exact version approved by your supply-chain policy:
+`npm install -g dsh-auth` installs the current stable CLI, and the installer pins that same version in the selected DSH profile. For controlled production rollout, install the exact self-contained version approved by your supply-chain policy:
 
 ```sh
-sudo npm install -g dsh-auth@0.1.14
+sudo npm install -g dsh-auth@X.Y.Z
 ```
 
-The interactive installer asks for the exact DSH service, administrator initialization method, HTTPS hostname, and TLS mode; shows a secret-free plan; and changes the system only after you type the exact confirmation. It installs the pinned bundle into the selected DSH profile, copies a checksum-verified Caddy binary, writes permission-restricted authentication state, and enables an independent `dsh-auth-caddy.service`. It never stores a plaintext password and never downloads Caddy at setup time.
+The interactive installer asks for the exact DSH service, administrator initialization method, HTTPS hostname, and TLS mode; shows a secret-free plan; and changes the system only after you type the exact confirmation. The one `dsh-auth` package carries the official Linux x64 and ARM64 Caddy binaries. Setup selects and verifies the current architecture locally, installs the pinned bundle into the selected DSH profile, writes permission-restricted authentication state, and enables an independent `dsh-auth-caddy.service`. It never stores a plaintext password and never downloads Caddy at setup time.
 
-Normal deployment requires Linux x64 or ARM64, systemd, Node.js 24.7 or newer, DSH Web 0.1.0-rc.7, and the matching `dsh-auth-caddy-*@2.11.4-dsh.1` optional package. Automatic TLS is the HTTPS default. Manual TLS requires an existing certificate and key.
+Normal deployment requires Linux x64 or ARM64, systemd, Node.js 24.7 or newer, and DSH Web 0.1.0-rc.7. There is no separate Caddy package or setup-time download. Automatic TLS is the HTTPS default. Manual TLS requires an existing certificate and key.
 
 ```text
 $ sudo dsh-auth setup
@@ -279,7 +280,7 @@ dsh-auth setup \
   --certificate-key /run/tls/privkey.pem
 ```
 
-The output directory contains `dsh-auth.env`, file-backed credentials, authentication state, a login-token directory, and a Caddyfile. Copy or mount them into fixed image paths and explicitly wire the environment file and Caddy config. Place the matching platform Caddy package in the image; setup never downloads the binary. [`deploy/docker/Dockerfile.install`](deploy/docker/Dockerfile.install) shows the offline profile layer.
+The output directory contains `dsh-auth.env`, file-backed credentials, authentication state, a login-token directory, and a Caddyfile. Copy or mount them into fixed image paths and explicitly wire the environment file and Caddy config. The same `dsh-auth` tarball already carries both supported Caddy binaries, so the image needs no second npm artifact and setup never downloads one. [`deploy/docker/Dockerfile.install`](deploy/docker/Dockerfile.install) shows the offline profile layer.
 
 ## Security behavior and limits
 
@@ -308,4 +309,4 @@ Replace `X.Y.Z` with the version in `package.json`.
 
 Contributors should read [`AGENTS.md`](AGENTS.md). Installer architecture and maintenance checks are in [`docs/installer.md`](docs/installer.md).
 
-Stable npm and GitHub releases are dispatched from the [Release workflow](.github/workflows/release.yml); maintainers should update the [changelog](CHANGELOG.md) and follow [`docs/releasing.md`](docs/releasing.md) first.
+Stable npm and GitHub releases are dispatched from the [Release workflow](.github/workflows/release.yml). npm and GitHub must expose the same single self-contained tarball; maintainers should update the [changelog](CHANGELOG.md) and follow [`docs/releasing.md`](docs/releasing.md) first.

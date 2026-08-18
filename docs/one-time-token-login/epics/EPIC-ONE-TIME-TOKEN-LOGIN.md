@@ -22,7 +22,7 @@ coverage: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPT
 | --- | --- |
 | READY：可以开工 | 最新 Harness 已固定并验证；已提交代码基线、v2 接口、安全边界和执行卡一致 |
 | COMPONENT：各部分完成 | 认证状态、Caddy、安装器、令牌签发、令牌兑换和管理员初始化六个结果各自通过行为与质量检查 |
-| RELEASE：可以发布 | 最新 Harness、Caddy、全量检查、真实 E2E、打包、秘密扫描、重装和回退说明全部通过 |
+| RELEASE：可以发布 | 一个可独立安装的主包同时包含两种架构 Caddy，并在最新 Harness 上通过真实 E2E、离线安装、秘密扫描、重装和回退验收 |
 
 ## Story 地图
 
@@ -30,11 +30,11 @@ coverage: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPT
 | --- | --- | --- | --- |
 | [STORY-01 建立统一管理员认证状态](../stories/Story-01-建立统一管理员认证状态.md) | 固定管理员身份、凭据和会话使用同一持久状态 | READY | 无 |
 | [STORY-01.1 验证并冻结内置 Caddy](../stories/Story-01.1-验证并冻结内置Caddy.md) | 标准 Caddy 满足认证边界、实时连接和性能门槛 | COMPONENT | STORY-01 |
-| [STORY-02 建立企业版 v2 安装契约](../stories/Story-02-建立企业版v2安装契约.md) | setup、Caddy、受管路径和运维命令使用 v2 契约 | COMPONENT | STORY-01.1 |
+| [STORY-02 建立企业版 v2 安装契约](../stories/Story-02-建立企业版v2安装契约.md) | setup、受管 Caddy、路径和运维命令使用 v2 契约 | COMPONENT | STORY-01.1 |
 | [STORY-03 交付一次性令牌签发](../stories/Story-03-交付一次性令牌签发.md) | systemd 与容器可安全签发短期登录链接 | COMPONENT | STORY-02 |
 | [STORY-04 交付一次性令牌兑换](../stories/Story-04-交付一次性令牌兑换.md) | 浏览器安全、原子地换取正常管理员会话 | COMPONENT | STORY-03 |
 | [STORY-05 交付管理员首次初始化](../stories/Story-05-交付管理员首次初始化.md) | 用户可设置管理员凭据或选择 Later | COMPONENT | STORY-04 |
-| [STORY-06 完成企业版发布验收](../stories/Story-06-完成企业版发布验收.md) | 安全、部署、E2E、打包和公开文档满足发布条件 | RELEASE | STORY-05 |
+| [STORY-06 完成企业版发布验收](../stories/Story-06-完成企业版发布验收.md) | 一个自包含主包和一个 Release 满足安装、安全与发布条件 | RELEASE | STORY-05 |
 
 ## 项目边界
 
@@ -42,6 +42,7 @@ coverage: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPT
 - 密码初始化和令牌初始化是显式二选一；令牌能力启用后长期保留。
 - 令牌会话与密码会话共用现有 72 小时滚动策略和安全 Cookie。
 - Caddy 由项目固定版本、独占配置和独立服务管理，不探测或复用主机已有 Caddy/Nginx。
+- `dsh-auth` 主包是唯一安装和发布单元，同时携带 Linux x64/ARM64 Caddy；不发布独立平台包，也不在 setup 时下载。
 - 不实现浏览器内修改既有密码、云厂商用户映射、审计后台或旧版自动迁移。
 - 自定义失败文案只支持纯文本，不支持 HTML、品牌组件或外部链接。
 - 根 README 仍只面向公共安装和运维，不承载本项目动态状态。

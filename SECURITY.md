@@ -46,7 +46,7 @@ All authenticated application content shares one browser origin. An XSS vulnerab
 
 A production deployment is within the supported boundary only while all of these conditions hold:
 
-- Caddy is the sole externally reachable listener and uses the project-owned `v2.11.4` binary from the matching platform package.
+- Caddy is the sole externally reachable listener and uses the checksum-verified `v2.11.4` binary selected from the self-contained `dsh-auth` package.
 - Harness listens on the exact configured loopback upstream and is not reachable through any bypass path.
 - HTTPS is used with a valid certificate and key, TLS 1.2 or newer, and the configured public hostname. TLS must not be silently downgraded between the browser and Caddy.
 - Production cookies remain `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, host-only, and `__Host-` prefixed.
@@ -95,7 +95,7 @@ The session secret protects cookie and CSRF signatures and must be generated ran
 
 System `setup`, `reset-password`, and `uninstall` run with root authority. The installer validates paths, service names, profile names, Caddy inputs, ownership records, root-executed binaries, and writable path components before mutation. Commands use fixed executables and argv arrays rather than shell interpolation.
 
-Review `dsh-auth plan` before authorizing setup. Caddy is installed only from the exact optional platform package already present on the host. Setup never downloads a binary and never probes, reloads, or reuses a user Caddy or Nginx service.
+Review `dsh-auth plan` before authorizing setup. The single `dsh-auth` artifact carries both supported official Caddy binaries; setup selects and verifies the current architecture before mutation. Setup never downloads a binary and never probes, reloads, or reuses a user Caddy or Nginx service.
 
 The installer owns only paths recorded in its validated state. Existing files or packages that it cannot prove ownership of are conflicts. Do not edit managed files in place or fabricate an ownership record. Use `--output-dir` when building images or generating artifacts without granting service-manager or host-filesystem authority.
 
