@@ -74,6 +74,9 @@ describe('system installer transactions', () => {
     expect(host.stat('/etc/dsh-auth/Caddyfile').mode).toBe(0o644)
     expect(host.stat('/usr/lib/dsh-auth/caddy').mode).toBe(0o755)
     expect(host.stat('/etc/systemd/system/dsh-auth-caddy.service').mode).toBe(0o644)
+    expect(host.fileExists('/var/lib/dsh-auth-caddy')).toBe(false)
+    const installed = JSON.parse(host.readFile('/etc/dsh-auth/install-state.json')) as { readonly createdPaths: readonly string[] }
+    expect(installed.createdPaths).not.toContain('/var/lib/dsh-auth-caddy')
     expect(host.readFile('/etc/dsh-auth/dsh-auth.env')).not.toContain(PASSWORD)
     expect(host.readFile('/etc/dsh-auth/dsh-auth.env')).toContain('DSH_AUTH_STATE_FILE=')
     expect(host.readFile('/etc/dsh-auth/Caddyfile')).toContain('admin off')
@@ -87,6 +90,32 @@ describe('system installer transactions', () => {
     const doctorIo = new FakeCliIo(false)
     await expect(runCli(['doctor', '--json'], doctorIo, host)).resolves.toBe(0)
     expect(JSON.parse(doctorIo.outputs.join(''))).toMatchObject({ schemaVersion: 2, command: 'doctor', status: 'healthy', exitCode: 0 })
+  }, 30_000)
+
+  it('validates system manual TLS against source certificates before enable', async () => {
+    const host = readyHost()
+    host.addDirectory('/etc/ssl')
+    host.addFile('/etc/ssl/dsh-auth/cert.pem', 'placeholder-cert\n', 0o644)
+    host.addFile('/etc/ssl/dsh-auth/key.pem', 'placeholder-key\n', 0o600)
+    const io = new FakeCliIo(false, [], [], PASSWORD)
+    const args = [
+      '--json', '--non-interactive', '--mode', 'https', '--tls', 'manual',
+      '--server-name', 'auth.example.test',
+      '--certificate', '/etc/ssl/dsh-auth/cert.pem',
+      '--certificate-key', '/etc/ssl/dsh-auth/key.pem',
+      '--dsh-service', 'dsh-web.service', '--admin-bootstrap', 'password', '--admin-username', 'admin',
+      '--login-token', 'disabled',
+    ] as const
+
+    await expect(runCli(['setup', ...args, '--password-stdin'], io, host)).resolves.toBe(0)
+
+    expect(host.readFile('/etc/dsh-auth/Caddyfile')).toContain('/run/credentials/dsh-auth-caddy.service/dsh-auth-cert')
+    expect(host.readFile('/etc/dsh-auth/Caddyfile')).not.toContain('/etc/ssl/dsh-auth/key.pem')
+    expect(host.fileExists('/etc/dsh-auth/Caddyfile.validate')).toBe(false)
+    expect(host.commands).toContainEqual({
+      executable: '/usr/lib/dsh-auth/caddy',
+      args: ['validate', '--config', '/etc/dsh-auth/Caddyfile.validate'],
+    })
   }, 30_000)
 
   it('rolls back new files when Caddy validate rejects the candidate configuration', async () => {

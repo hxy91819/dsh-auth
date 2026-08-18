@@ -98,6 +98,7 @@ export function renderCaddyUnit(request: SetupRequest, paths: ManagedPaths): str
   const credentials = request.tls === 'manual' && request.certificate !== undefined && request.certificateKey !== undefined
     ? `LoadCredential=${CREDENTIAL_CERT}:${request.certificate}\nLoadCredential=${CREDENTIAL_KEY}:${request.certificateKey}\n`
     : ''
+  // DynamicUser cannot search 0750 /etc/dsh-auth, so bind the 0644 Caddyfile into RuntimeDirectory.
   return `[Unit]
 Description=dsh-auth Caddy public edge
 After=network-online.target
@@ -114,10 +115,11 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 StateDirectory=dsh-auth-caddy
-ReadWritePaths=${paths.caddyStateDirectory}
-${credentials}ExecStartPre=${paths.caddyBinary} validate --config ${paths.caddyfile}
-ExecStart=${paths.caddyBinary} run --config ${paths.caddyfile} --adapter caddyfile
-ExecReload=${paths.caddyBinary} reload --config ${paths.caddyfile} --adapter caddyfile
+RuntimeDirectory=dsh-auth-caddy
+BindReadOnlyPaths=${paths.caddyfile}:/run/dsh-auth-caddy/Caddyfile
+${credentials}ExecStartPre=${paths.caddyBinary} validate --config /run/dsh-auth-caddy/Caddyfile
+ExecStart=${paths.caddyBinary} run --config /run/dsh-auth-caddy/Caddyfile --adapter caddyfile
+ExecReload=${paths.caddyBinary} reload --config /run/dsh-auth-caddy/Caddyfile --adapter caddyfile
 Restart=on-failure
 
 [Install]

@@ -66,7 +66,9 @@ describe('Caddy installer contract', () => {
     expect(automatic).toContain('DynamicUser=yes')
     expect(automatic).toContain('NoNewPrivileges=yes')
     expect(automatic).toContain('CAP_NET_BIND_SERVICE')
-    expect(automatic).toContain('validate --config /etc/dsh-auth/Caddyfile')
+    expect(automatic).toContain('validate --config /run/dsh-auth-caddy/Caddyfile')
+    expect(automatic).toContain('BindReadOnlyPaths=/etc/dsh-auth/Caddyfile:/run/dsh-auth-caddy/Caddyfile')
+    expect(automatic).toContain('RuntimeDirectory=dsh-auth-caddy')
     expect(automatic).not.toContain('LoadCredential=')
 
     const manual = renderCaddyUnit(request('https', 'manual'), paths())

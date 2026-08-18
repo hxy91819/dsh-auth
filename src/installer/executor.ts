@@ -124,12 +124,30 @@ function serviceIsEnabled(host: InstallerHost, systemctlPath: string, service: s
   return host.run({ executable: systemctlPath, args: ['is-enabled', '--quiet', service] }).status === 0
 }
 
+function caddyValidationConfig(host: InstallerHost, state: InstallState): { readonly path: string; readonly temporary: boolean } {
+  if (state.request.tls !== 'manual' || state.request.certificate === undefined || state.request.certificateKey === undefined) {
+    return { path: state.paths.caddyfile, temporary: false }
+  }
+  // DynamicUser units load certs through systemd credentials. Those paths do not exist until
+  // enable, so setup validates the same Caddyfile rendered against the source certificate files.
+  const path = join(state.paths.configDirectory, 'Caddyfile.validate')
+  if (host.fileExists(path)) host.removeFile(path)
+  host.writeNewFile(path, renderCaddyfile(state.request, false), 0o600)
+  host.chmod(path, 0o600)
+  return { path, temporary: true }
+}
+
 function activateSystem(host: InstallerHost, initial: InstallState): InstallState {
   const systemctlPath = systemctl(host)
   let state = initial
   const activation = state.activation
   if (activation === undefined) throw new InstallerError('service activation journal is missing', ExitCode.execution)
-  runChecked(host, { executable: state.paths.caddyBinary, args: ['validate', '--config', state.paths.caddyfile] }, 'CADDY_CONFIG_VALIDATE_FAILED')
+  const validation = caddyValidationConfig(host, state)
+  try {
+    runChecked(host, { executable: state.paths.caddyBinary, args: ['validate', '--config', validation.path] }, 'CADDY_CONFIG_VALIDATE_FAILED')
+  } finally {
+    if (validation.temporary && host.fileExists(validation.path)) host.removeFile(validation.path)
+  }
   state = updateState(host, state, { activation: { ...activation, daemonReloadAttempted: true } })
   runChecked(host, { executable: systemctlPath, args: ['daemon-reload'] }, 'SYSTEMD_DAEMON_RELOAD_FAILED')
   const afterReload = state.activation
@@ -279,7 +297,6 @@ function createManagedDirectories(host: InstallerHost, prepared: PreparedSetup, 
     assertSafeRootDirectory(host, host.fileExists(binaryDirectory) ? binaryDirectory : dirname(binaryDirectory))
     assertSafeRootDirectory(host, dirname(paths.systemdDropInDirectory))
     state = ensureDirectory(host, state, binaryDirectory, 0o755, 0, 0)
-    state = ensureDirectory(host, state, paths.caddyStateDirectory, 0o700, 0, 0)
     state = ensureDirectory(host, state, paths.systemdDropInDirectory, 0o755, 0, 0)
   } else {
     state = ensureDirectory(host, state, paths.caddyStateDirectory, 0o700, context.configUid, context.configGid)

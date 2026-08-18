@@ -79,6 +79,15 @@ export class FakeInstallerHost implements InstallerHost {
         return { status: 0, stdout: `v${CADDY_VERSION} h1:test\n`, stderr: '' }
       }
       if (command.args[0] === 'validate' && command.executable.endsWith('/caddy')) {
+        const config = command.args[command.args.indexOf('--config') + 1]
+        if (config !== undefined && this.regularFile(config)) {
+          const rendered = this.readFile(config)
+          for (const match of rendered.matchAll(/tls "(\/[^"]+)" "(\/[^"]+)"/gu)) {
+            if (!this.regularFile(match[1] ?? '') || !this.regularFile(match[2] ?? '')) {
+              return { status: 1, stdout: '', stderr: 'tls files missing' }
+            }
+          }
+        }
         return { status: 0, stdout: 'Valid configuration\n', stderr: '' }
       }
       return prior(command)
