@@ -61,7 +61,7 @@
 | SEC-23 | `tests/auth-http.spec.ts`、真实 E2E Cookie | 已验证 |
 | SEC-24 | 真实 E2E 重启；`tests/login-token-store.spec.ts` | 已验证 |
 | SEC-25 | `npm pack` 82 files（含双架构 Caddy）、gitleaks、privacy、Git authors | 已验证 |
-| SEC-26 | `tests/caddy-installer.spec.ts`；`dsh-auth-0.1.15.tgz` 含 vendor/caddy；pack-smoke 离线 setup 通过；未 npm 发布 | 进行中 |
+| SEC-26 | `tests/caddy-installer.spec.ts`；`dsh-auth-0.1.15.tgz` 含 vendor/caddy；pack-smoke 离线 setup 通过；live setup 从主包复制校验后的 Caddy，不下载 | 已验证 |
 | FUN-01 | installer-system/cli；真实 E2E password 旅程 | 已验证 |
 | FUN-02 | `tests/installer-cli.spec.ts` login-token setup；真实 E2E token 旅程 | 已验证 |
 | FUN-03 | `tests/login-token-http.spec.ts`、`tests/installer-cli.spec.ts` | 已验证 |
@@ -71,12 +71,11 @@
 | FUN-07 | `tests/installer-cli.spec.ts` systemd 签发 | 已验证 |
 | FUN-08 | 真实 E2E `containerTokenIssue: json v2` | 已验证 |
 | FUN-09 | `tests/login-token-http.spec.ts` | 已验证 |
-| FUN-10 | `tests/installer-cli.spec.ts` v1 拒绝；未做会改写主机 `/etc` 的 live systemd 重装 | 部分 |
+| FUN-10 | `tests/installer-cli.spec.ts` v1 拒绝；live 显式卸载 v1 后 v2 setup；doctor 健康；公网 verify 404 | 已验证 |
 | FUN-11 | `test:e2e:latest-dsh` 退出 0，Harness `0.1.0-rc.7` | 已验证 |
-| FUN-12 | 本地 `dsh-auth-0.1.15.tgz` 离线 pack-smoke/installer-e2e 通过，不需要第二包；未 npm 发布 | 进行中 |
+| FUN-12 | 本地 `dsh-auth-0.1.15.tgz` 离线 pack-smoke/installer-e2e 通过；live setup 使用同一 tarball 内置 Caddy，不下载、不依赖第二包 | 已验证 |
 | FUN-13 | `test:e2e:caddy` manual + internal，HTTP/2 200 | 已验证 |
 
 ## 发布阻塞
 
-1. `dsh-auth@0.1.14` 仍要求不存在的独立 Caddy 平台包。用户已确认改为主包自包含双架构 Caddy，向前发布 `0.1.15`；未授权前不 npm/GitHub 发布、不弃用 `0.1.14`。
-2. 未在本机执行会写入 `/etc/dsh-auth` 并启停真实单元的 systemd setup；`docs/installer.md` 要求用可丢弃 output-dir，不碰已部署公网端口。FUN-10 live 重装因此保持部分。
+1. `dsh-auth@0.1.15` 尚未出现在官方 npm 或 GitHub Release。live 与离线证据来自本地 tarball。不弃用 `0.1.14`，除非用户明确授权。

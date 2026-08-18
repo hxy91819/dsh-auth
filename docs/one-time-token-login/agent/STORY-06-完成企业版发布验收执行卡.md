@@ -104,8 +104,9 @@ git diff --check
 - 验收发现 `lib/` 被 `.gitignore` 排除后，`npm pack` 只打出 15 个文件、没有 CLI。已增加 `.npmignore`（不忽略 `lib/`）和回归测试；修复后 tarball 77 files，`pack-smoke` 与 `installer-e2e` 退出 0。
 - Chrome fragment 兑换在 `replaceState` 后发送 `Origin: null`。token POST 在有效 CSRF 且 `Sec-Fetch-Site` 为 same-origin/none/缺省时接受；密码登录与 logout 仍用精确同源。
 - 锁定/latest Harness、password/login-token、Caddy manual+internal E2E 均退出 0。gitleaks 与 privacy 通过。Git 作者仅为批准公开身份与 Dependabot。
-- 本地 packer 写入主包 `vendor/caddy` 双架构布局；`npm pack` 产出 82 files / 32.9 MB，含 x64+ARM64 Caddy。`pack-smoke` 与 `installer-e2e` 对 `dsh-auth-0.1.15.tgz` 离线通过，不注入第二包。独立平台包方案已撤销。未发布、不弃用 `0.1.14`，除非用户明确授权。
-- 未做会改写主机 `/etc` 的 live systemd setup。SEC-26 / FUN-12 待主包 tarball 自包含验证后关闭；FUN-10 live 重装为部分。RELEASE 保持 0/1。不发布、不弃用 `0.1.14`，除非用户明确授权。
+- 本地 packer 写入主包 `vendor/caddy` 双架构布局；`npm pack` 产出 82 files / 32.9 MB，含 x64+ARM64 Caddy。`pack-smoke` 与 `installer-e2e` 对 `dsh-auth-0.1.15.tgz` 离线通过，不注入第二包。独立平台包方案已撤销。
+- live systemd：在现有 DSH Web 单元上卸载 v1 Nginx 安装后执行 v2 setup。`doctor --json` 退出 0；未认证 `/` 重定向到登录；公网 `/auth/verify` 为 404；loopback Harness 仍只监听本机；主机 Nginx `:80` 未改动。验收中修复 DynamicUser `STATE_DIRECTORY`、Caddyfile bind-mount 与 manual TLS 源证书校验。证据不记录主机标识、公网地址或秘密路径。
+- SEC-26 / FUN-12 / FUN-10 已关闭。RELEASE 保持 0/1，直到 `dsh-auth@0.1.15` 出现在官方 npm 与 GitHub Release。不弃用 `0.1.14`，除非用户明确授权。
 
 ## 交接
 
