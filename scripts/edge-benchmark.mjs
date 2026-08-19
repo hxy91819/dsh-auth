@@ -1,5 +1,5 @@
 /**
- * Compare the repository Nginx and Caddy edges on one host and one mock auth/upstream.
+ * Manual Nginx vs Caddy comparison. Not a CI gate or supported product edge.
  */
 import { createHash } from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
@@ -18,10 +18,10 @@ const HELP = `Usage:
   node scripts/edge-benchmark.mjs [--caddy ABSOLUTE_PATH] [--output-dir ABSOLUTE_DIRECTORY]
 
 Description:
-  Start the repository Nginx and Caddy templates together against one fixed
-  authentication/upstream process. After warmup, alternate three request-load
-  samples per edge and verify SSE plus WebSocket continuity. This is a project
-  edge-selection check, not a general-purpose web-server benchmark.
+  Manual comparison of the leftover Nginx fixture against the Caddy edge on
+  one host and one mock auth/upstream. After warmup, alternate three request-
+  load samples per edge and verify SSE plus WebSocket continuity. This is not
+  a CI gate, not a supported deployment path, and not a general benchmark.
 
 Options:
   --caddy PATH       Existing pinned Caddy executable; otherwise prepare it.

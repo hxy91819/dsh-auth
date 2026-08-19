@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- ci: stop installing Nginx and maintaining leftover Nginx checks in daily CI and E2E.
+
 ## v0.2.2
 
 Changes since [v0.2.1](https://github.com/hxy91819/dsh-auth/compare/v0.2.1...v0.2.2).

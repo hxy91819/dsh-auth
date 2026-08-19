@@ -23,8 +23,6 @@ jobs:
         with:
           node-version: 24.15.0
           cache: pnpm
-      - name: Install Nginx and PTY support
-        run: sudo apt-get update && sudo apt-get install --yes nginx util-linux
       - run: pnpm install --frozen-lockfile
       - name: Verify npm latest Harness through the canonical E2E
         run: pnpm run test:e2e:latest-dsh

@@ -75,7 +75,6 @@ function runE2e(caddy, tls, tarball) {
     stdio: 'inherit',
     env: {
       ...process.env,
-      DSH_E2E_EDGE: 'caddy',
       DSH_E2E_CADDY_BIN: caddy,
       DSH_E2E_CADDY_TLS: tls,
       DSH_E2E_BOOTSTRAP: 'password',

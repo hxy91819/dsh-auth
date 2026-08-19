@@ -1,3 +1,6 @@
+# Manual `benchmark:edge` fixture only. v2 does not install, render, or
+# support Nginx as a product edge.
+#
 # Include this file inside nginx's `http {}` block. Render only the declared
 # ${DSH_*} placeholders so nginx variables such as $request_uri stay intact.
 
