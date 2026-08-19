@@ -9,7 +9,7 @@
     "@deepseek-ai/dsh"
   ],
   "ignoreBinaries": [
-    // Isolated Caddy/Nginx checks and leftover template validation use host binaries.
+    // Optional manual edge-benchmark.mjs compares a host nginx with Caddy.
     "nginx"
   ]
 }

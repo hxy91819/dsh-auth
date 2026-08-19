@@ -59,7 +59,7 @@ Knip 明确登记所有动态或环境入口：
 
 - `src/index.ts`、`src/cli.ts` 是包与 CLI 入口；`./client` 由 `package.json` 的 exports 自动识别。
 - `@deepseek-ai/dsh` 的二进制由真实 E2E 通过绝对路径动态解析。
-- 系统 `caddy`/`nginx` 仅用于隔离检查和遗留模板校验，不是 npm 依赖。
+- 系统 `nginx` 仅用于可选的手动边缘性能对比脚本，不是 npm 依赖。
 
 `./client` 采用 DSH 官方自定义模块加载器格式，publint 仍负责阻断包结构错误；不启用与该格式不兼容的 `arethetypeswrong` 硬门禁。
 

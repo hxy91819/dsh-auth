@@ -65,13 +65,12 @@ jobs:
         with:
           node-version: 24.15.0
           cache: pnpm
-      - run: sudo apt-get update && sudo apt-get install --yes nginx util-linux
-      - run: nginx -v
+      - name: Install PTY support
+        run: sudo apt-get update && sudo apt-get install --yes util-linux
       - run: pnpm install --frozen-lockfile
       - name: Audit production and development dependencies
         run: pnpm audit --audit-level high
       - run: pnpm run check:functional
-      - run: pnpm run check:nginx
       - run: pnpm pack --pack-destination packed
       - run: node scripts/pack-smoke.mjs packed/dsh-auth-*.tgz
       - run: node scripts/installer-e2e.mjs packed/dsh-auth-*.tgz

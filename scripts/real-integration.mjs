@@ -35,7 +35,6 @@ Environment:
   DSH_E2E_CWD         Absolute DSH workspace path (default: repository root).
   DSH_E2E_DSH_BIN     Absolute DSH executable (default: local dependency).
   DSH_E2E_CHROME_BIN  Absolute Chrome/Chromium executable (default: auto-detect).
-  DSH_E2E_EDGE        caddy or nginx (default: caddy).
   DSH_E2E_CADDY_BIN   Absolute Caddy executable (default: verified test binary).
   DSH_E2E_CADDY_TLS   manual or internal (default: manual).
   DSH_E2E_BOOTSTRAP   password or login-token (default: login-token).
@@ -49,7 +48,7 @@ Outputs:
 Examples:
   corepack pnpm run test:e2e
   DSH_E2E_CHROME_BIN=/usr/bin/chromium node scripts/real-integration.mjs packed/dsh-auth-0.1.15.tgz
-  DSH_E2E_BOOTSTRAP=password DSH_E2E_EDGE=caddy node scripts/real-integration.mjs
+  DSH_E2E_BOOTSTRAP=password node scripts/real-integration.mjs
 `
 
 const args = process.argv.slice(2).filter(argument => argument !== '--')
@@ -60,6 +59,9 @@ if (args.includes('--help') || args.includes('-h')) {
 if (args.length > 1 || args.some(argument => argument.startsWith('-'))) {
   process.stderr.write(HELP)
   process.exit(2)
+}
+if (process.env.DSH_E2E_EDGE !== undefined) {
+  throw new Error('DSH_E2E_EDGE was removed; the real integration uses Caddy only')
 }
 
 function executable(path, label) {
@@ -95,8 +97,6 @@ const dshExecutable = executable(
   'DSH executable',
 )
 const browserExecutable = chromeExecutable()
-const edgeRuntime = process.env.DSH_E2E_EDGE ?? 'caddy'
-if (edgeRuntime !== 'nginx' && edgeRuntime !== 'caddy') throw new Error('DSH_E2E_EDGE must be nginx or caddy')
 const requestedCaddy = process.env.DSH_E2E_CADDY_BIN
 const caddyTls = process.env.DSH_E2E_CADDY_TLS ?? 'manual'
 if (caddyTls !== 'manual' && caddyTls !== 'internal') throw new Error('DSH_E2E_CADDY_TLS must be manual or internal')
@@ -108,17 +108,14 @@ const topology = process.env.DSH_E2E_TOPOLOGY ?? 'direct'
 if (topology !== 'direct' && topology !== 'behind-tls-proxy') {
   throw new Error('DSH_E2E_TOPOLOGY must be direct or behind-tls-proxy')
 }
-if (topology === 'behind-tls-proxy' && edgeRuntime !== 'caddy') {
-  throw new Error('DSH_E2E_TOPOLOGY=behind-tls-proxy requires DSH_E2E_EDGE=caddy')
-}
 const root = mkdtempSync(join(tmpdir(), 'dsh-auth-real-integration-'))
 const home = join(root, 'dsh-home')
 const secrets = join(root, 'managed')
-const nginxRoot = join(root, 'edge')
+const edgeRoot = join(root, 'edge')
 mkdirSync(secrets, { mode: 0o700 })
 mkdirSync(join(secrets, 'state', 'login-tokens'), { recursive: true, mode: 0o700 })
 chmodSync(join(secrets, 'state', 'login-tokens'), 0o700)
-mkdirSync(nginxRoot, { recursive: true })
+mkdirSync(edgeRoot, { recursive: true })
 
 let dshProcess
 let edgeProcess
@@ -143,7 +140,6 @@ function issueLoginToken(authStateFile, origin) {
 }
 
 async function resolveCaddyBinary() {
-  if (edgeRuntime !== 'caddy') return undefined
   if (requestedCaddy !== undefined) return executable(requestedCaddy, 'DSH_E2E_CADDY_BIN')
   return (await prepareCaddyRelease(join(root, 'caddy-runtime'))).binary
 }
@@ -604,7 +600,7 @@ async function verifyDormantPreinstall(authStateFile) {
   return { dormantBoot: 'web usable without auth surface', partialConfig: `exit ${String(partialExit)}` }
 }
 
-// eslint-disable-next-line complexity, max-lines-per-function, max-statements -- 真实 E2E 按拓扑部署→令牌或密码登录→受保护资源→重启→浏览器的时间顺序编排，拆散会隐藏跨层状态关系。
+// eslint-disable-next-line max-lines-per-function, max-statements -- 真实 E2E 按拓扑部署→令牌或密码登录→受保护资源→重启→浏览器的时间顺序编排，拆散会隐藏跨层状态关系。
 async function main() {
   const tarball = packageTarball()
   const harnessVersion = checked(dshExecutable, ['--version']).trim()
@@ -638,7 +634,7 @@ async function main() {
     DSH_AUTH_SESSION_SECRET_FILE: layout.secretFile,
     DSH_AUTH_LOGIN_TOKEN_ENABLED: 'true',
     DSH_AUTH_LOGIN_TOKEN_DIRECTORY: layout.tokenDirectory,
-    DSH_AUTH_TRUSTED_PROXY_ADDRESSES: edgeRuntime === 'nginx' ? '127.0.0.2' : '127.0.0.1,::1',
+    DSH_AUTH_TRUSTED_PROXY_ADDRESSES: '127.0.0.1,::1',
     DSH_AUTH_SECURE_COOKIES: 'true',
     DSH_AUTH_SESSION_RENEWAL_SECONDS: '1',
   }
@@ -648,24 +644,24 @@ async function main() {
     return response.status === 200
   }, 'DSH', [{ name: 'DSH', process: dshProcess }])
 
-  const certificate = join(nginxRoot, 'certificate.pem')
-  const key = join(nginxRoot, 'key.pem')
+  const certificate = join(edgeRoot, 'certificate.pem')
+  const key = join(edgeRoot, 'key.pem')
   checked('openssl', [
     'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
     '-subj', '/CN=localhost', '-keyout', key, '-out', certificate,
   ])
   if (topology === 'behind-tls-proxy') {
-    const innerConfig = join(nginxRoot, 'Caddyfile.inner')
+    const innerConfig = join(edgeRoot, 'Caddyfile.inner')
     writeFileSync(innerConfig, renderInstallerCaddyfile({
       mode: 'http', behindTlsProxy: true, profile: 'web', packageSource: tarball,
       adminBootstrap: bootstrap, loginTokenEnabled: true,
       upstream: `127.0.0.1:${String(dshPort)}`, listenAddress: '127.0.0.1',
       httpPort: innerPort, httpsPort: 443,
-    }, false, nginxRoot))
+    }, false, edgeRoot))
     const innerEnvironment = {
       ...process.env,
-      XDG_DATA_HOME: join(nginxRoot, 'inner-data'),
-      XDG_CONFIG_HOME: join(nginxRoot, 'inner-config'),
+      XDG_DATA_HOME: join(edgeRoot, 'inner-data'),
+      XDG_CONFIG_HOME: join(edgeRoot, 'inner-config'),
     }
     checked(caddyExecutable, ['validate', '--config', innerConfig, '--adapter', 'caddyfile'], { env: innerEnvironment })
     innerEdgeProcess = child(caddyExecutable, ['run', '--config', innerConfig, '--adapter', 'caddyfile'], {
@@ -685,69 +681,41 @@ async function main() {
     })
     assert(invalidForwarding.status === 421, 'inner HTTP edge accepted a non-HTTPS forwarded protocol')
 
-    const outerConfig = join(nginxRoot, 'Caddyfile.outer')
+    const outerConfig = join(edgeRoot, 'Caddyfile.outer')
     const formattedOuter = checked(caddyExecutable, ['fmt', '-'], {
       input: outerTlsProxyConfig(httpPort, httpsPort, innerPort, certificate, key),
     })
     writeFileSync(outerConfig, formattedOuter)
     const outerEnvironment = {
       ...process.env,
-      XDG_DATA_HOME: join(nginxRoot, 'outer-data'),
-      XDG_CONFIG_HOME: join(nginxRoot, 'outer-config'),
+      XDG_DATA_HOME: join(edgeRoot, 'outer-data'),
+      XDG_CONFIG_HOME: join(edgeRoot, 'outer-config'),
     }
     checked(caddyExecutable, ['validate', '--config', outerConfig, '--adapter', 'caddyfile'], { env: outerEnvironment })
     edgeProcess = child(caddyExecutable, ['run', '--config', outerConfig, '--adapter', 'caddyfile'], {
       cwd: checkout,
       env: outerEnvironment,
     })
-  } else if (edgeRuntime === 'nginx') {
-    const replacements = new Map([
-      ['${DSH_UPSTREAM}', `127.0.0.1:${String(dshPort)}`],
-      ['${DSH_HTTP_LISTEN}', `127.0.0.1:${String(httpPort)}`],
-      ['${DSH_HTTPS_LISTEN}', `127.0.0.1:${String(httpsPort)}`],
-      ['${DSH_PUBLIC_SERVER_NAME}', 'localhost'],
-      ['${DSH_PUBLIC_HTTPS_AUTHORITY}', `localhost:${String(httpsPort)}`],
-      ['${DSH_TLS_CERTIFICATE}', certificate],
-      ['${DSH_TLS_CERTIFICATE_KEY}', key],
-      ['${DSH_LOGIN_RATE}', '100r/s'],
-      ['${DSH_LOGIN_BURST}', '20'],
-    ])
-    let rendered = readFileSync(join(checkout, 'deploy/nginx/dsh-auth.conf.template'), 'utf8')
-    for (const [placeholder, value] of replacements) rendered = rendered.replaceAll(placeholder, value)
-    rendered = rendered.replace('    client_max_body_size 170m;', '    client_max_body_size 170m;\n    proxy_bind 127.0.0.2;')
-    const nginxConfig = join(nginxRoot, 'nginx.conf')
-    writeFileSync(nginxConfig, [
-      `pid ${join(nginxRoot, 'nginx.pid')};`,
-      `error_log ${join(nginxRoot, 'error.log')} notice;`,
-      'events {}',
-      'http {',
-      `  access_log ${join(nginxRoot, 'access.log')};`,
-      rendered,
-      '}',
-      '',
-    ].join('\n'))
-    checked('nginx', ['-t', '-p', nginxRoot, '-c', nginxConfig])
-    edgeProcess = child('nginx', ['-p', nginxRoot, '-c', nginxConfig, '-g', 'daemon off;'], { cwd: checkout })
   } else {
-    const caddyConfig = join(nginxRoot, 'Caddyfile')
+    const caddyConfig = join(edgeRoot, 'Caddyfile')
     writeFileSync(caddyConfig, renderCaddyfile({
       publicHost: 'localhost', httpPort, httpsPort, listenAddress: '127.0.0.1',
       upstream: `127.0.0.1:${String(dshPort)}`,
       tls: caddyTls === 'internal' ? { mode: 'internal' } : { mode: 'manual', certificate, key },
-      accessLogFile: join(nginxRoot, 'caddy-access.log'),
+      accessLogFile: join(edgeRoot, 'caddy-access.log'),
     }))
     checked(caddyExecutable, ['validate', '--config', caddyConfig, '--adapter', 'caddyfile'], {
-      env: { ...process.env, XDG_DATA_HOME: join(nginxRoot, 'data'), XDG_CONFIG_HOME: join(nginxRoot, 'config') },
+      env: { ...process.env, XDG_DATA_HOME: join(edgeRoot, 'data'), XDG_CONFIG_HOME: join(edgeRoot, 'config') },
     })
     edgeProcess = child(caddyExecutable, ['run', '--config', caddyConfig, '--adapter', 'caddyfile'], {
       cwd: checkout,
-      env: { ...process.env, XDG_DATA_HOME: join(nginxRoot, 'data'), XDG_CONFIG_HOME: join(nginxRoot, 'config') },
+      env: { ...process.env, XDG_DATA_HOME: join(edgeRoot, 'data'), XDG_CONFIG_HOME: join(edgeRoot, 'config') },
     })
   }
-  await waitUntil(async () => (await request(httpsPort, '/auth/login')).status === 200, edgeRuntime, [
+  await waitUntil(async () => (await request(httpsPort, '/auth/login')).status === 200, 'Caddy', [
     { name: 'DSH', process: dshProcess },
     ...(innerEdgeProcess === undefined ? [] : [{ name: 'inner Caddy', process: innerEdgeProcess }]),
-    { name: edgeRuntime, process: edgeProcess },
+    { name: 'Caddy', process: edgeProcess },
   ])
 
   chromeProcess = child(browserExecutable, [
@@ -758,7 +726,7 @@ async function main() {
   await waitUntil(async () => (await fetch(`http://127.0.0.1:${String(chromePort)}/json/version`)).ok, 'Chrome', [
     { name: 'DSH', process: dshProcess },
     ...(innerEdgeProcess === undefined ? [] : [{ name: 'inner Caddy', process: innerEdgeProcess }]),
-    { name: edgeRuntime, process: edgeProcess },
+    { name: 'Caddy', process: edgeProcess },
     { name: 'Chrome', process: chromeProcess },
   ])
 
@@ -813,15 +781,14 @@ async function main() {
   const unauthenticatedWebSocket = await websocketStatus(httpsPort)
   assert(unauthenticatedWebSocket === 401, `unauthenticated WebSocket returned ${String(unauthenticatedWebSocket)}`)
   const unauthenticatedSse = await sseStatus(httpsPort)
-  const expectedSseDenial = edgeRuntime === 'caddy' ? 401 : 303
-  assert(unauthenticatedSse.status === expectedSseDenial, 'unauthenticated SSE was not rejected')
-  assert(await http2Status(httpsPort, '/auth/login') === 200, `${edgeRuntime} did not negotiate HTTP/2`)
+  assert(unauthenticatedSse.status === 401, 'unauthenticated SSE was not rejected')
+  assert(await http2Status(httpsPort, '/auth/login') === 200, 'Caddy did not negotiate HTTP/2')
   const oversizedLogin = await request(httpsPort, '/auth/login', {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: `padding=${'x'.repeat(21 * 1024)}`,
   })
-  assert(oversizedLogin.status === 413, `${edgeRuntime} did not reject an oversized authentication body`)
+  assert(oversizedLogin.status === 413, 'Caddy did not reject an oversized authentication body')
 
   if (bootstrap === 'login-token') {
     await completeTokenOnboarding(httpsPort, chromePort, layout.authStateFile, username, password)
@@ -874,7 +841,7 @@ async function main() {
   assert(
     (Array.isArray(spa.headers['set-cookie']) ? spa.headers['set-cookie'] : [spa.headers['set-cookie']])
       .some(field => field?.startsWith('__Host-dsh_auth_session=')),
-    `${edgeRuntime} did not forward the renewed session cookie from the authentication check`,
+    'Caddy did not forward the renewed session cookie from the authentication check',
   )
   assert(!spaHtml.includes('browser-bootstrap.js'), 'HTTPS SPA included the HTTP compatibility script')
   const sessionView = await request(httpsPort, '/auth/session', { headers: { cookie: session.pair } })
@@ -999,7 +966,7 @@ async function main() {
     harnessVersion,
     preinstall: preinstall.dormantBoot,
     partialPreinstall: preinstall.partialConfig,
-    edgeRuntime,
+    edgeRuntime: 'caddy',
     topology,
     bootstrap,
     http2: 200,
@@ -1018,7 +985,7 @@ async function main() {
     authenticatedDownload: download.status,
     authenticatedSse: sse.status,
     authenticatedWebSocket: 101,
-    sessionRenewal: `Set-Cookie via ${edgeRuntime === 'caddy' ? 'forward_auth' : 'auth_request'}`,
+    sessionRenewal: 'Set-Cookie via forward_auth',
     sessionPersistence: 'survived DSH restart',
     browserSettingsSignOut: 'Settings -> Sign out -> /auth/login',
     browserSettingsPasswordReset: 'Settings -> Reset password',

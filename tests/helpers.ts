@@ -81,7 +81,7 @@ export async function startTestServer(
   return { baseUrl: `http://127.0.0.1:${String(port)}`, server }
 }
 
-/** Headers emitted by the trusted local Nginx proxy. */
+/** Headers emitted by the trusted reverse proxy. */
 export function proxyHeaders(client = '192.0.2.10'): Record<string, string> {
   return {
     origin: 'https://auth.test',
