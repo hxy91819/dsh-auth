@@ -2,10 +2,12 @@ import { dirname } from 'node:path'
 import { join } from 'node:path'
 import { authStateSecretId, createAuthStateDocument } from '../auth-state.js'
 import { ADMIN_PASSWORD_MAX_BYTES, assertAdministratorPassword, hashPassword } from '../password.js'
+import { computePackageIdentity, type PackageIdentity } from './build-identity.js'
 import { renderCaddyfile, renderCaddyUnit, resolveCaddyPackage } from './caddy.js'
 import { renderEnvironmentFile, renderSystemdDropIn, serializeInstallState } from './config-files.js'
 import { InstallerError } from './errors.js'
 import { bootstrapStatePath, initialInstallState, readInstallState, validateStatePaths } from './plan.js'
+import { profileBundleRoot, profilePackageStateFields } from './profile-package.js'
 import { ExitCode, type CommandSpec, type InstallState, type InstallerHost, type ManagedPaths, type PreparedSetup } from './types.js'
 
 /** Secret reader invoked only after planning and confirmation complete. */
@@ -282,11 +284,43 @@ function writeOwnershipJournal(host: InstallerHost, paths: ManagedPaths, context
 }
 
 function installProfilePackage(host: InstallerHost, prepared: PreparedSetup, initial: InstallState): InstallState {
+  if (prepared.profilePackage !== undefined) {
+    // Same-build adoption: the externally pre-installed bundle keeps external
+    // ownership, so rollback and uninstall never delete it.
+    return updateState(host, initial, {
+      profilePackageInstalledByDshAuth: false,
+      ...profilePackageStateFields(prepared.profilePackage),
+    })
+  }
   const packageAction = prepared.plan.actions.find(action => action.id === 'install-profile-package')
   if (packageAction?.command === undefined) return initial
   const state = updateState(host, initial, { profilePackageInstalledByDshAuth: true })
   runChecked(host, profileCommand(host, state, packageAction.command.args), 'PROFILE_PACKAGE_INSTALL_FAILED', dshEnvironment(state))
-  return state
+  const manifestPath = join(state.dshHome, 'profiles', state.request.profile, 'package.json')
+  const bundleRoot = profileBundleRoot(state.dshHome, state.request.profile)
+  let spec: string
+  let identity: PackageIdentity
+  try {
+    const manifest = JSON.parse(host.readFile(manifestPath)) as { readonly dependencies?: Record<string, unknown> }
+    const dependency = manifest.dependencies?.['dsh-auth']
+    if (typeof dependency !== 'string' || dependency.length === 0) throw new Error('dependency is not a string')
+    spec = dependency
+    identity = computePackageIdentity(host, host.realpath(bundleRoot), 'profile bundle')
+  } catch {
+    throw new InstallerError('the installed profile bundle cannot be identified', ExitCode.execution, [{
+      code: 'PROFILE_PACKAGE_INVALID',
+      severity: 'error',
+      message: 'The freshly installed dsh-auth bundle did not resolve to an identifiable package.',
+      remediation: 'Reinstall dsh-auth from a trusted source, then rerun setup.',
+    }])
+  }
+  return updateState(host, state, profilePackageStateFields({
+    origin: 'dsh-auth',
+    spec,
+    version: identity.version,
+    buildIdentity: identity.buildIdentity,
+    resolvedPath: host.realpath(bundleRoot),
+  }))
 }
 
 function createManagedDirectories(host: InstallerHost, prepared: PreparedSetup, paths: ManagedPaths, context: ExecutionContext, initial: InstallState): InstallState {

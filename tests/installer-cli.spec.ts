@@ -294,6 +294,7 @@ const TOKEN_URL = /^http:\/\/10\.0\.0\.20:8080\/auth\/token#token=dsh_otl_v1_[A-
 function tokenSystemHost(): FakeInstallerHost {
   const host = new FakeInstallerHost()
   host.withSystemdService()
+  host.installCliPackage()
   host.installBundledCaddy()
   return host
 }

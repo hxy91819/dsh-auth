@@ -49,6 +49,9 @@ export function prepareUninstall(host: InstallerHost, stateFile = DEFAULT_STATE_
     { id: 'remove-drop-in', kind: 'remove-file' as const, description: 'Remove the recorded project-owned systemd drop-in.', target: state.paths.systemdDropInFile },
     { id: 'remove-owned-files', kind: 'remove-file' as const, description: 'Remove the remaining files listed in the ownership record.' },
   ]
+  const diagnostics = state.profilePackageOrigin === 'external'
+    ? [{ code: 'PROFILE_PACKAGE_EXTERNAL', severity: 'info' as const, message: 'The externally pre-installed dsh-auth bundle is preserved; without managed configuration it stays dormant.' }]
+    : []
   return {
     plan: {
       schemaVersion: 2,
@@ -56,7 +59,7 @@ export function prepareUninstall(host: InstallerHost, stateFile = DEFAULT_STATE_
       mode: 'system',
       status: 'ready',
       actions,
-      diagnostics: [],
+      diagnostics,
     },
     state,
   }

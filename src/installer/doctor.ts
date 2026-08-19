@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
+import { computePackageIdentity } from './build-identity.js'
 import { CADDY_SERVICE_NAME, CADDY_VERSION, renderCaddyfile, renderCaddyUnit, resolveCaddyPackage } from './caddy.js'
 import { renderEnvironmentFile, renderSystemdDropIn } from './config-files.js'
 import { discoverDshService } from './discovery.js'
 import { InstallerError } from './errors.js'
 import { expectedManagedOwners } from './ownership.js'
+import { profileBundleRoot } from './profile-package.js'
 import { readInstallState, validateStatePaths } from './plan.js'
 import { ExitCode, type Diagnostic, type DshServiceDiscovery, type InstallationPlan, type InstallerHost, type InstallState } from './types.js'
 
@@ -101,7 +103,31 @@ function profileDiagnostics(host: InstallerHost, state: InstallState): Diagnosti
   if (!host.regularFile(path)) {
     return [{ code: 'PROFILE_PACKAGE_MISSING', severity: 'error', message: `DSH profile package manifest is missing: ${path}` }]
   }
-  return []
+  const diagnostics: Diagnostic[] = []
+  if (state.profilePackageOrigin === undefined) return diagnostics
+  const bundleRoot = profileBundleRoot(state.dshHome, state.request.profile)
+  try {
+    const identity = computePackageIdentity(host, host.realpath(bundleRoot), 'profile bundle')
+    if (identity.buildIdentity !== state.profilePackageBuildIdentity) {
+      diagnostics.push({
+        code: 'PROFILE_PACKAGE_BUILD_DRIFT',
+        severity: 'error',
+        message: 'The profile dsh-auth bundle no longer matches the build recorded by setup.',
+        remediation: `Restore the recorded build with dsh plugin --profile ${state.request.profile} add ${state.profilePackageSpec ?? 'dsh-auth'} from a trusted source, then rerun doctor.`,
+      })
+    }
+    if (state.profilePackageOrigin === 'external') {
+      diagnostics.push({
+        code: 'PROFILE_PACKAGE_EXTERNAL',
+        severity: 'info',
+        message: 'The profile dsh-auth bundle is externally owned; uninstall preserves it and it stays dormant without managed configuration.',
+      })
+    }
+  } catch (error) {
+    if (error instanceof InstallerError) diagnostics.push(...error.diagnostics.map(entry => ({ ...entry, message: `Profile bundle: ${entry.message}` })))
+    else diagnostics.push({ code: 'PROFILE_PACKAGE_INVALID', severity: 'error', message: `The profile dsh-auth bundle cannot be inspected: ${bundleRoot}` })
+  }
+  return diagnostics
 }
 
 function caddyDiagnostics(host: InstallerHost, state: InstallState): Diagnostic[] {

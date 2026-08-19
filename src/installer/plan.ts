@@ -1,10 +1,11 @@
+import { resolveCliPackageIdentity } from './build-identity.js'
+import { inspectProfilePackage } from './profile-package.js'
 import { dirname, isAbsolute, join } from 'node:path'
-import { assertRootOwnedDirectory } from './discovery.js'
 import { InstallerError } from './errors.js'
 import { persistentRequest, renderEnvironmentFile, renderSystemdDropIn, requestFingerprint } from './config-files.js'
 import { assertPublicPortsFree, CADDY_VERSION, renderCaddyfile, renderCaddyUnit, resolveCaddyPackage, SYSTEM_CADDY_BINARY, SYSTEM_CADDY_STATE, SYSTEM_CADDY_UNIT } from './caddy.js'
 import { expectedManagedOwners } from './ownership.js'
-import { ExitCode, type Diagnostic, type HostDiscovery, type InstallationPlan, type InstallerHost, type InstallState, type ManagedPaths, type PlanAction, type PreparedSetup, type SetupRequest } from './types.js'
+import { ExitCode, type Diagnostic, type HostDiscovery, type InstallationPlan, type InstallerHost, type InstallState, type ManagedPaths, type PlanAction, type PreparedSetup, type ProfilePackageFacts, type SetupRequest } from './types.js'
 import { publicOrigin, validateServiceName, validateSetupRequest } from './validation.js'
 
 const SYSTEM_CONFIG_DIRECTORY = '/etc/dsh-auth'
@@ -94,6 +95,14 @@ function parseInstallState(host: InstallerHost, path: string): Record<string, un
   return candidate
 }
 
+function hasSupportedProfilePackageGroup(candidate: Record<string, unknown>): boolean {
+  const fields = [candidate.profilePackageOrigin, candidate.profilePackageSpec, candidate.profilePackageVersion, candidate.profilePackageBuildIdentity, candidate.profilePackagePath]
+  if (fields.every(field => field === undefined)) return true
+  const origin = candidate.profilePackageOrigin
+  const knownOrigin = origin === 'dsh-auth' || origin === 'external'
+  return knownOrigin && fields.slice(1).every(field => typeof field === 'string')
+}
+
 function hasSupportedIdentity(candidate: Record<string, unknown>): boolean {
   return !(
     candidate.schemaVersion !== 2
@@ -111,6 +120,7 @@ function hasSupportedIdentity(candidate: Record<string, unknown>): boolean {
     || typeof candidate.dshUid !== 'number'
     || typeof candidate.dshGid !== 'number'
     || typeof candidate.profilePackageInstalledByDshAuth !== 'boolean'
+    || !hasSupportedProfilePackageGroup(candidate)
   )
 }
 
@@ -194,38 +204,6 @@ export function readInstallState(host: InstallerHost, path: string): InstallStat
   validatePersistedRequest(state)
   validateOwnedPaths(state)
   return state
-}
-
-function packageStatus(host: InstallerHost, request: SetupRequest, discovery: HostDiscovery): 'missing' | 'exact' | 'conflict' {
-  const service = discovery.dshService
-  if (service === undefined) return 'missing'
-  if (service.user === 'root') {
-    const profilesDirectory = join(service.dshHome, 'profiles')
-    if (host.fileExists(profilesDirectory)) assertRootOwnedDirectory(host, profilesDirectory)
-    const profileDirectory = join(profilesDirectory, request.profile)
-    if (host.fileExists(profileDirectory)) assertRootOwnedDirectory(host, profileDirectory)
-  }
-  const manifestPath = join(service.dshHome, 'profiles', request.profile, 'package.json')
-  if (!host.regularFile(manifestPath)) return 'missing'
-  let manifest: unknown
-  try {
-    manifest = JSON.parse(host.readFile(manifestPath))
-  } catch {
-    return 'conflict'
-  }
-  if (manifest === null || typeof manifest !== 'object' || Array.isArray(manifest)) return 'conflict'
-  const record = manifest as { readonly dependencies?: Record<string, unknown>; readonly dsh?: { readonly profile?: { readonly bundles?: unknown } } }
-  const dependency = record.dependencies?.['dsh-auth']
-  if (dependency === undefined) return 'missing'
-  const bundles = record.dsh?.profile?.bundles
-  if (!Array.isArray(bundles) || !bundles.includes('dsh-auth')) return 'conflict'
-  if (request.packageSource.startsWith('dsh-auth@')) {
-    return dependency === request.packageSource.slice('dsh-auth@'.length) ? 'exact' : 'conflict'
-  }
-  if (isAbsolute(request.packageSource)) {
-    return dependency === `file:${request.packageSource}` ? 'exact' : 'conflict'
-  }
-  return 'conflict'
 }
 
 function systemDiagnostics(host: InstallerHost, request: SetupRequest, discovery: HostDiscovery): Diagnostic[] {
@@ -362,24 +340,41 @@ function assertNoUnownedFiles(host: InstallerHost, context: SetupContext): void 
   })))
 }
 
-function profileInstallAction(host: InstallerHost, request: SetupRequest, discovery: HostDiscovery, context: SetupContext): PlanAction {
-  const packageState = packageStatus(host, request, discovery)
-  const recoverableOwnedPackage = context.state?.status === 'installing'
-    && context.state.profilePackageInstalledByDshAuth
-    && packageState === 'exact'
-  if (packageState !== 'missing' && !recoverableOwnedPackage) {
-    throw new InstallerError('existing DSH profile already contains dsh-auth outside installer ownership', ExitCode.conflict, [{ code: 'PROFILE_PACKAGE_CONFLICT', severity: 'error', message: 'The profile already contains dsh-auth without a dsh-auth ownership record.', remediation: 'Preserve or remove that package manually before allowing setup to own the installation.' }])
-  }
+function profileInstallAction(
+  host: InstallerHost,
+  request: SetupRequest,
+  discovery: HostDiscovery,
+  context: SetupContext,
+): { readonly action: PlanAction; readonly profilePackage?: ProfilePackageFacts } {
   const service = discovery.dshService
   if (service === undefined) throw new InstallerError('DSH service discovery is missing', ExitCode.prerequisite)
+  const inspection = inspectProfilePackage(host, request, service, resolveCliPackageIdentity(host))
+  const recoveringOwnedPackage = context.state?.status === 'installing'
+    && context.state.profilePackageInstalledByDshAuth
+    && inspection.kind === 'adoptable'
+  if (inspection.kind === 'conflict') {
+    throw new InstallerError('existing DSH profile dsh-auth bundle cannot be adopted', ExitCode.conflict, inspection.diagnostics)
+  }
+  if (inspection.kind === 'adoptable' && !recoveringOwnedPackage) {
+    return {
+      action: {
+        id: 'adopt-profile-package',
+        kind: 'check',
+        description: `Adopt the externally pre-installed dsh-auth ${inspection.facts.version} bundle in profile ${request.profile}; it is the same build as this CLI and keeps external ownership.`,
+      },
+      profilePackage: inspection.facts,
+    }
+  }
   const offline = isAbsolute(request.packageSource)
   return {
-    id: 'install-profile-package',
-    kind: 'install-package',
-    description: `Install the pinned dsh-auth bundle into profile ${request.profile}.`,
-    command: {
-      executable: service.dshExecutable,
-      args: ['plugin', '--profile', request.profile, 'add', ...(offline ? ['--offline', '--config.auto-install-peers=false'] : []), request.packageSource],
+    action: {
+      id: 'install-profile-package',
+      kind: 'install-package',
+      description: `Install the pinned dsh-auth bundle into profile ${request.profile}.`,
+      command: {
+        executable: service.dshExecutable,
+        args: ['plugin', '--profile', request.profile, 'add', ...(offline ? ['--offline', '--config.auto-install-peers=false'] : []), request.packageSource],
+      },
     },
   }
 }
@@ -430,19 +425,22 @@ export function prepareSetup(host: InstallerHost, request: SetupRequest, discove
   const unchanged = unchangedPreparation(host, request, discovery, context)
   if (unchanged !== undefined) return unchanged
   assertNoUnownedFiles(host, context)
+  const profile = mode === 'system' ? profileInstallAction(host, request, discovery, context) : undefined
   const actions = [
-    ...(mode === 'system' ? [profileInstallAction(host, request, discovery, context)] : []),
+    ...(profile === undefined ? [] : [profile.action]),
     ...managedFileActions(request, context),
     ...(mode === 'system' ? activationActions(discovery, context.paths) : []),
   ]
   if (context.state?.status === 'installing') {
     actions.unshift({ id: 'recover-interrupted-install', kind: 'remove-file', description: 'Rollback the recorded interrupted installation before retrying.' })
   }
+  const adoptedPackage = profile?.profilePackage
   return {
     plan: { schemaVersion: 2, operation: 'setup', mode, status: 'ready', actions, diagnostics: [], fingerprint: context.fingerprint },
     request,
     discovery,
     ...(context.state === undefined ? {} : { state: context.state }),
+    ...(adoptedPackage === undefined ? {} : { profilePackage: adoptedPackage }),
     paths: context.paths,
     fingerprint: context.fingerprint,
   }

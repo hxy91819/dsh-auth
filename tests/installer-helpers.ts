@@ -45,6 +45,52 @@ export class FakeInstallerHost implements InstallerHost {
     this.entries.set(path, { content: Buffer.isBuffer(content) ? Buffer.from(content) : Buffer.from(content), mode, uid, gid, directory: false })
   }
 
+  private removeTreeEntries(root: string): void {
+    for (const path of [...this.entries.keys()].filter(candidate => candidate === root || candidate.startsWith(`${root}/`))) {
+      this.entries.delete(path)
+    }
+  }
+
+  private copyTree(from: string, to: string): void {
+    for (const entry of this.listDirectory(from)) {
+      const source = join(from, entry)
+      const target = join(to, entry)
+      if (this.stat(source).isDirectory) {
+        this.addDirectory(target)
+        this.copyTree(source, target)
+      } else {
+        const stat = this.stat(source)
+        this.addFile(target, this.readFileBytes(source), stat.mode, stat.uid, stat.gid)
+      }
+    }
+  }
+
+  /** Install the CLI's own package tree the global anchor resolves to. */
+  installCliPackage(version = '0.2.0'): void {
+    this.addDirectory('/usr/lib/node_modules/dsh-auth/lib')
+    this.addFile('/usr/lib/node_modules/dsh-auth/package.json', `${JSON.stringify({ name: 'dsh-auth', version }, null, 2)}\n`, 0o644)
+    this.addFile('/usr/lib/node_modules/dsh-auth/lib/cli.js', 'export {}\n', 0o644)
+  }
+
+  /** Simulate an external dsh plugin install of the given build into the profile. */
+  preinstallProfileBundle(profile: string, options: { readonly spec?: string; readonly mutate?: (root: string) => void } = {}): void {
+    const profileRoot = `/root/.dsh/profiles/${profile}`
+    if (!this.fileExists('/root/.dsh')) this.addDirectory('/root/.dsh')
+    if (!this.fileExists('/root/.dsh/profiles')) this.addDirectory('/root/.dsh/profiles')
+    this.addDirectory(profileRoot)
+    this.addDirectory(`${profileRoot}/node_modules`)
+    const bundleRoot = `${profileRoot}/node_modules/dsh-auth`
+    this.copyTree('/usr/lib/node_modules/dsh-auth', bundleRoot)
+    options.mutate?.(bundleRoot)
+    const manifestPath = `${profileRoot}/package.json`
+    const manifest = this.regularFile(manifestPath)
+      ? JSON.parse(this.readFile(manifestPath)) as { dependencies?: Record<string, string>; dsh?: { profile?: { bundles?: string[] } } }
+      : { dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } } }
+    manifest.dependencies = { ...(manifest.dependencies ?? {}), 'dsh-auth': options.spec ?? '0.2.0' }
+    manifest.dsh = { profile: { bundles: [...new Set([...(manifest.dsh?.profile?.bundles ?? []), 'dsh-auth'])] } }
+    this.addFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+  }
+
   installBundledCaddy(): void {
     const directory = '/usr/lib/node_modules/dsh-auth/vendor/caddy'
     const license = 'Caddy license placeholder\n'
@@ -136,8 +182,14 @@ export class FakeInstallerHost implements InstallerHost {
         const source = command.args.at(-1) ?? 'dsh-auth@0.1.11'
         const version = source.startsWith('dsh-auth@') ? source.slice('dsh-auth@'.length) : `file:${source}`
         this.addFile(manifestPath, `${JSON.stringify({ dependencies: { 'dsh-auth': version }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', 'dsh-auth'] } } }, null, 2)}\n`)
+        const bundleRoot = `${profileRoot}/node_modules/dsh-auth`
+        if (this.fileExists(bundleRoot)) this.removeTreeEntries(bundleRoot)
+        this.addDirectory(`${profileRoot}/node_modules`)
+        this.copyTree('/usr/lib/node_modules/dsh-auth', bundleRoot)
       } else if (verb === 'remove') {
         this.addFile(manifestPath, `${JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } } }, null, 2)}\n`)
+        const bundleRoot = `${profileRoot}/node_modules/dsh-auth`
+        if (this.fileExists(bundleRoot)) this.removeTreeEntries(bundleRoot)
       }
     }
     return this.commandHandler(command)

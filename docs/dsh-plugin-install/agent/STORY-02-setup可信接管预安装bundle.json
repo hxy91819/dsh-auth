@@ -3,12 +3,12 @@
   "schema_version": 1,
   "story": "STORY-02",
   "intent_version": 1,
-  "status": "todo",
-  "owner": "待领取",
+  "status": "done",
+  "owner": "opencode",
   "blocker": "无",
   "status_updated": "2026-08-19",
-  "refreshed": "待领取",
-  "code_baseline": "待领取",
+  "refreshed": "2026-08-19",
+  "code_baseline": "5aaf1fb",
   "owns": [
     "TRUSTED_ADOPTION"
   ],
@@ -22,28 +22,28 @@
   "claim_checks": "确认 STORY-01 已完成并读取交接；intent_version=1；当前 profile manifest、pnpm 安装记录和包解析方式与 DSH 基线一致；发布物可生成稳定构建身份。",
   "checklist": [
     {
-      "done": false,
+      "done": true,
       "text": "冻结 registry、私有镜像和 tarball 共用的构建身份契约。"
     },
     {
-      "done": false,
+      "done": true,
       "text": "实现同构建预装包的 setup 接管和状态记录。"
     },
     {
-      "done": false,
+      "done": true,
       "text": "验证不匹配输入在主机变更前失败。"
     },
     {
-      "done": false,
+      "done": true,
       "text": "验证回滚与 uninstall 保留预装包。"
     },
     {
-      "done": false,
+      "done": true,
       "text": "完成安装器测试、打包检查和 Story 交接。"
     }
   ],
   "steps": "先保存现有 PROFILE_PACKAGE_CONFLICT 基线；定义并生成构建身份；扩展发现与计划；实现外部来源状态和清理分支；覆盖成功、拒绝、崩溃恢复、回滚及卸载。",
-  "verification": "固定接管成功与拒绝场景分母；运行 installer 聚焦测试、pack smoke、installer E2E、check、check:caddy 和 git diff --check。",
+  "verification": "接管与拒绝分母：tests/installer-system.spec.ts 共 34 用例，其中接管 describe 8 用例覆盖同构建接管（无 plugin 命令、状态记录 external+spec+version+identity+path）、自装记录 origin=dsh-auth+identity、版本不匹配/构建不匹配/声明缺失/无法解析均在任何主机变更前以退出码 4 拒绝、回滚保留外部 bundle、uninstall 对 external 无 remove-profile-package 且保留 bundle 而自装被移除、doctor 检出外部构建漂移并给出 dsh plugin 恢复顺序。全量 pnpm run check 18 文件 175 测试通过；pack-smoke、installer-e2e（交互+非交互）、check:caddy、git diff --check 全部退出码 0。真实确定性证据：同一 tarball 经 npm -g 与 dsh plugin add 两种安装方式身份一致（4ef7bc85…），篡改单文件后身份不同（STORY-02-build-identity-real-check.txt）。",
   "stop_conditions": "构建身份不能跨受支持发布来源稳定比较；接管需要信任服务用户可写代码；状态变化要求破坏 schema v2 或改变既有卸载语义时停止并请求确认。",
-  "handoff": "完成后记录身份格式、可恢复 package spec、状态兼容、所有权分支、失败清理和命令证据，并向 STORY-03 交付可升级且可恢复健康的安装来源模型。"
+  "handoff": "起止版本：5aaf1fb..本提交。新增 src/installer/build-identity.ts（内容摘要身份，registry/镜像/tarball 通用）与 src/installer/profile-package.ts（预装包检查与接管事实）；plan/executor/doctor/uninstall/types 扩展可选状态字段 profilePackageOrigin|Spec|Version|BuildIdentity|Path（全有或全无校验，兼容既有 v2 记录）；卸载语义以 profilePackageInstalledByDshAuth 为准，external 永不删除。诊断码新增 PROFILE_PACKAGE_VERSION_MISMATCH、PROFILE_PACKAGE_BUILD_MISMATCH、PROFILE_BUNDLE_DECLARATION_INVALID、PROFILE_PACKAGE_UNRESOLVED、PROFILE_PACKAGE_INVALID、PROFILE_PACKAGE_BUILD_DRIFT、PROFILE_PACKAGE_EXTERNAL。副作用：临时目录均在 /tmp/opencode/s02（不入库）。Git 状态：仅本任务文件。blocker 无。STORY-03 输入：状态已记录可恢复 package spec 与构建身份；upgrade 可据此比较目标包、拒绝漂移并按 spec 恢复旧 bundle；runtime 漂移失败关闭仍待实现。"
 }

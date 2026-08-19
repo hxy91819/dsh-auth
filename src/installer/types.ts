@@ -73,6 +73,15 @@ export type PasswordSource =
   | { readonly kind: 'file'; readonly path: string }
   | { readonly kind: 'interactive' }
 
+/** Recorded facts describing the externally pre-installed profile package a setup adopts. */
+export interface ProfilePackageFacts {
+  readonly origin: 'external'
+  readonly spec: string
+  readonly version: string
+  readonly buildIdentity: string
+  readonly resolvedPath: string
+}
+
 /** Paths owned by one completed system or output installation. */
 export interface ManagedPaths {
   readonly configDirectory: string
@@ -110,6 +119,12 @@ export interface InstallState {
   readonly caddyVersion: string
   readonly caddyBinarySha256: string
   readonly profilePackageInstalledByDshAuth: boolean
+  /** Facts about the profile package this installation relies on; all fields or none. */
+  readonly profilePackageOrigin?: 'dsh-auth' | 'external'
+  readonly profilePackageSpec?: string
+  readonly profilePackageVersion?: string
+  readonly profilePackageBuildIdentity?: string
+  readonly profilePackagePath?: string
   readonly createdPaths: readonly string[]
   readonly activation?: {
     readonly dshWasActive: boolean
@@ -158,6 +173,8 @@ export interface PreparedSetup {
   readonly state?: InstallState
   readonly paths?: ManagedPaths
   readonly fingerprint?: string
+  /** Present when the plan adopts an externally pre-installed same-build bundle. */
+  readonly profilePackage?: ProfilePackageFacts
 }
 
 /** One argv-only subprocess invocation. */
