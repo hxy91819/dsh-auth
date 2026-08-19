@@ -27,8 +27,8 @@ Environment:
                              for inspection when the run fails.
   LIFECYCLE_TARBALL_BASE     Optional prebuilt current-version tarball used
                              instead of packing in-process.
-  LIFECYCLE_TARBALL_UPGRADE  Optional prebuilt first patch upgrade tarball.
-  LIFECYCLE_TARBALL_RECOVER  Optional prebuilt second patch upgrade tarball.
+  LIFECYCLE_TARBALL_UPGRADE  Optional prebuilt first upgrade tarball.
+  LIFECYCLE_TARBALL_RECOVER  Optional prebuilt second upgrade tarball.
 
 Outputs:
   One JSON summary on stdout and exit 0 on success. All units, prefixes,
@@ -106,6 +106,18 @@ function cleanupUnit() {
   currentUnit = undefined
 }
 
+/** Bump the manifest's patch version so the merged build is a higher release. */
+function bumpedPatch(manifestPath, offset) {
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  const [major, minor, patch] = manifest.version.split('.').map(Number)
+  return `${String(major)}.${String(minor)}.${String(patch + offset)}`
+}
+
+function candidateVersions(manifestPath) {
+  const base = JSON.parse(readFileSync(manifestPath, 'utf8')).version
+  return { base, upgrade: bumpedPatch(manifestPath, 1), recover: bumpedPatch(manifestPath, 2) }
+}
+
 function packVersion(version) {
   if (version === undefined) {
     checked('corepack', ['pnpm', 'pack', '--pack-destination', join(root, 'artifacts')], { cwd: checkout })
@@ -133,12 +145,6 @@ function prebuiltOrPack(environmentVariable, version) {
     return resolved
   }
   return packVersion(version)
-}
-
-function bumpPatch(version, offset) {
-  const match = /^(\d+)\.(\d+)\.(\d+)$/u.exec(version)
-  if (match === null) throw new Error(`lifecycle base version must be stable semver: ${version}`)
-  return `${match[1]}.${match[2]}.${String(Number(match[3]) + offset)}`
 }
 
 function installGlobalCli(tarball) {
@@ -319,9 +325,8 @@ async function verifyProxiedSystemLifecycle(tarball) {
 
 async function main() {
   mkdirSync(join(root, 'artifacts'), { recursive: true })
-  const baseVersion = JSON.parse(readFileSync(join(checkout, 'package.json'), 'utf8')).version
-  const upgradeVersion = bumpPatch(baseVersion, 1)
-  const recoverVersion = bumpPatch(baseVersion, 2)
+  const manifestPath = join(checkout, 'package.json')
+  const { base: baseVersion, upgrade: upgradeVersion, recover: recoverVersion } = candidateVersions(manifestPath)
   const tarballA = prebuiltOrPack('LIFECYCLE_TARBALL_BASE')
   const tarballB = prebuiltOrPack('LIFECYCLE_TARBALL_UPGRADE', upgradeVersion)
   const tarballC = prebuiltOrPack('LIFECYCLE_TARBALL_RECOVER', recoverVersion)
@@ -399,7 +404,7 @@ async function main() {
   }
   assert(sessionView?.status === 200, 'existing session did not survive the managed upgrade restart')
   assert(cli('doctor', []).status === 0, 'doctor rejected the upgraded installation')
-  summary.upgrade = `bundle+Caddy+record+services at ${upgradeVersion}, session preserved`
+  summary.upgrade = `bundle+Caddy+record+services at ${upgradeVersion} (base ${baseVersion}), session preserved`
 
   // 4. External drift through plain dsh plugin: runtime fails closed, upgrade refuses.
   checked(dshCli, ['plugin', '--profile', 'web', 'add', '--offline', '--config.auto-install-peers=false', tarballA], {
