@@ -430,6 +430,45 @@ describe('system installer transactions', () => {
     expect(host.fileExists('/etc/dsh-auth/install-state.json')).toBe(true)
   }, 30_000)
 
+  it('removes issued login tokens with the owned state directories', async () => {
+    const host = readyHost()
+    await runCli(['setup', ...SYSTEM_ARGS, '--password-stdin'], new FakeCliIo(false, [], [], PASSWORD), host)
+    const tokenFile = `/var/lib/dsh-auth/login-tokens/${'a'.repeat(64)}`
+    host.addFile(tokenFile, '{"schemaVersion":1,"issuedAt":1,"expiresAt":2}\n', 0o600)
+
+    const exitCode = await runCli(['uninstall', '--json', '--authorize-uninstall'], new FakeCliIo(false), host)
+
+    expect(exitCode).toBe(0)
+    expect(host.fileExists(tokenFile)).toBe(false)
+    expect(host.fileExists('/var/lib/dsh-auth/login-tokens')).toBe(false)
+    expect(host.fileExists('/etc/dsh-auth/install-state.json')).toBe(false)
+  }, 30_000)
+
+  it('restores every owned path, issued token, profile, and Caddy after uninstall reload fails', async () => {
+    const host = readyHost()
+    await runCli(['setup', ...SYSTEM_ARGS, '--password-stdin'], new FakeCliIo(false, [], [], PASSWORD), host)
+    const state = JSON.parse(host.readFile('/etc/dsh-auth/install-state.json')) as { createdPaths: string[] }
+    const tokenFile = `/var/lib/dsh-auth/login-tokens/${'b'.repeat(64)}`
+    host.addFile(tokenFile, '{"schemaVersion":1,"issuedAt":1,"expiresAt":2}\n', 0o600)
+    const prior = host.commandHandler
+    let failed = false
+    host.commandHandler = command => {
+      if (!failed && command.executable === '/usr/bin/systemctl' && command.args[0] === 'daemon-reload') {
+        failed = true
+        return { status: 1, stdout: '', stderr: '' }
+      }
+      return prior(command)
+    }
+
+    const exitCode = await runCli(['uninstall', '--json', '--authorize-uninstall'], new FakeCliIo(false), host)
+
+    expect(exitCode).toBe(6)
+    expect(state.createdPaths.every(path => host.fileExists(path))).toBe(true)
+    expect(host.fileExists(tokenFile)).toBe(true)
+    expect(host.readFile('/root/.dsh/profiles/web/package.json')).toContain('dsh-auth')
+    expect(host.commands.some(command => command.args[0] === 'enable' && command.args.includes('dsh-auth-caddy.service'))).toBe(true)
+  }, 30_000)
+
   it('refuses a tampered ownership record that points outside exact managed targets', async () => {
     const host = readyHost()
     host.addFile('/etc/important-system-file', 'keep\n', 0o600)

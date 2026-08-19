@@ -219,8 +219,15 @@ export class FakeInstallerHost implements InstallerHost {
     const entry = this.entries.get(from)
     if (entry === undefined) throw new Error(`ENOENT: ${from}`)
     if (this.entries.has(to)) throw new Error(`EEXIST: ${to}`)
+    const descendants = entry.directory
+      ? [...this.entries.entries()].filter(([path]) => path.startsWith(`${from}/`))
+      : []
     this.entries.set(to, entry)
     this.entries.delete(from)
+    for (const [path, descendant] of descendants) {
+      this.entries.set(`${to}${path.slice(from.length)}`, descendant)
+      this.entries.delete(path)
+    }
   }
 
   chmod(path: string, mode: number): void {

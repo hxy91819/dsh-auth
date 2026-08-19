@@ -1,4 +1,4 @@
-import { serializeInstallState } from './config-files.js'
+import { dirname, join } from 'node:path'
 import { DEFAULT_STATE_FILE } from './doctor.js'
 import { InstallerError } from './errors.js'
 import { readInstallState, validateStatePaths } from './plan.js'
@@ -62,55 +62,99 @@ export function prepareUninstall(host: InstallerHost, stateFile = DEFAULT_STATE_
   }
 }
 
-interface FileBackup {
-  readonly path: string
-  readonly content: Buffer
-  readonly mode: number
-  readonly uid: number
-  readonly gid: number
+interface StagedPath {
+  readonly original: string
+  readonly staged: string
 }
 
-function backupFile(host: InstallerHost, path: string): FileBackup | undefined {
-  if (!host.fileExists(path) || host.stat(path).isDirectory) return undefined
-  const stat = host.stat(path)
-  return { path, content: host.readFileBytes(path), mode: stat.mode, uid: stat.uid, gid: stat.gid }
+function removalRoots(paths: readonly string[]): readonly string[] {
+  const owned = new Set(paths)
+  return paths.filter(path => {
+    let parent = dirname(path)
+    while (parent !== dirname(parent)) {
+      if (owned.has(parent)) return false
+      parent = dirname(parent)
+    }
+    return true
+  })
 }
 
-function restoreBackup(host: InstallerHost, backup: FileBackup | undefined): void {
-  if (backup === undefined) return
-  if (host.fileExists(backup.path)) host.removeFile(backup.path)
-  host.writeNewFile(backup.path, backup.content, backup.mode)
-  host.chown(backup.path, backup.uid, backup.gid)
-  host.chmod(backup.path, backup.mode)
+function stageRemoval(host: InstallerHost, paths: readonly string[]): StagedPath[] {
+  const staged: StagedPath[] = []
+  try {
+    for (const original of removalRoots(paths)) {
+      if (!host.fileExists(original)) continue
+      let target: string
+      do target = join(dirname(original), `.dsh-auth-uninstall-${host.randomBytes(16).toString('hex')}`)
+      while (host.fileExists(target))
+      host.renameFile(original, target)
+      staged.push({ original, staged: target })
+    }
+    return staged
+  } catch (error) {
+    restoreStaged(host, staged)
+    throw error
+  }
+}
+
+function restoreStaged(host: InstallerHost, paths: readonly StagedPath[]): void {
+  for (const path of [...paths].reverse()) {
+    if (host.fileExists(path.staged)) host.renameFile(path.staged, path.original)
+  }
+}
+
+function removeTree(host: InstallerHost, path: string): void {
+  if (!host.stat(path).isDirectory) {
+    host.removeFile(path)
+    return
+  }
+  for (const entry of host.listDirectory(path)) removeTree(host, join(path, entry))
+  host.removeDirectory(path)
+  if (host.fileExists(path)) throw new Error(`managed directory could not be removed: ${path}`)
+}
+
+function restoreServiceState(host: InstallerHost, systemctlPath: string, paths: readonly StagedPath[], state: InstallState, profileAttempted: boolean, caddyAttempted: boolean): void {
+  try {
+    restoreStaged(host, paths)
+    if (paths.length > 0) runChecked(host, { executable: systemctlPath, args: ['daemon-reload'] }, 'SYSTEMD_DAEMON_RELOAD_RESTORE_FAILED')
+  } catch {
+    // Later recovery steps can still restore the profile and service availability.
+  }
+  if (profileAttempted && state.profilePackageInstalledByDshAuth) {
+    try {
+      runChecked(host, profileCommand(host, state, 'add'), 'PROFILE_PACKAGE_RESTORE_FAILED', dshEnvironment(state))
+    } catch {
+      // A failed external package restore must not prevent the Caddy recovery attempt.
+    }
+  }
+  if (caddyAttempted) {
+    try {
+      runChecked(host, { executable: systemctlPath, args: ['enable', '--now', 'dsh-auth-caddy.service'] }, 'CADDY_ENABLE_RESTORE_FAILED')
+    } catch {
+      // Preserve the original uninstall error after attempting every recovery action.
+    }
+  }
 }
 
 /** Remove only recorded owned files, stopping the owned Caddy unit. */
 export function executeUninstall(host: InstallerHost, state: InstallState): void {
   validateStatePaths(state)
   const systemctlPath = systemctl(host)
-  const dropInBackup = backupFile(host, state.paths.systemdDropInFile)
-  const caddyUnitBackup = backupFile(host, state.paths.caddyUnitFile)
+  let caddyAttempted = false
+  let profileAttempted = false
+  let staged: StagedPath[] = []
   try {
+    caddyAttempted = true
     runChecked(host, { executable: systemctlPath, args: ['disable', '--now', 'dsh-auth-caddy.service'] }, 'CADDY_DISABLE_FAILED')
     if (state.profilePackageInstalledByDshAuth) {
+      profileAttempted = true
       runChecked(host, profileCommand(host, state, 'remove'), 'PROFILE_PACKAGE_REMOVE_FAILED', dshEnvironment(state))
     }
-    for (const path of [...state.createdPaths].reverse()) {
-      if (host.fileExists(path) && host.stat(path).isDirectory) host.removeDirectory(path)
-      else host.removeFile(path)
-    }
+    staged = stageRemoval(host, state.createdPaths)
     runChecked(host, { executable: systemctlPath, args: ['daemon-reload'] }, 'SYSTEMD_DAEMON_RELOAD_FAILED')
   } catch (error) {
-    restoreBackup(host, dropInBackup)
-    restoreBackup(host, caddyUnitBackup)
-    if (state.profilePackageInstalledByDshAuth) {
-      try {
-        runChecked(host, profileCommand(host, state, 'add'), 'PROFILE_PACKAGE_RESTORE_FAILED', dshEnvironment(state))
-      } catch {
-        // Restore of the unit files is the primary recovery; profile restore is best-effort after that.
-      }
-    }
-    host.replaceFile(state.paths.stateFile, serializeInstallState(state), 0o600)
+    restoreServiceState(host, systemctlPath, staged, state, profileAttempted, caddyAttempted)
     throw error
   }
+  for (const path of staged) removeTree(host, path.staged)
 }
