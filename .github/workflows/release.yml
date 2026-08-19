@@ -72,6 +72,10 @@ jobs:
       - name: Run repository checks
         run: pnpm run check
 
+      # The tagged systemd template keeps its production log path during validation.
+      - name: Prepare the disposable managed Caddy log directory
+        run: sudo install -d -o "$(id -u)" -g "$(id -g)" /var/lib/dsh-auth-caddy
+
       - name: Run Caddy configuration checks
         run: pnpm run check:caddy
 
