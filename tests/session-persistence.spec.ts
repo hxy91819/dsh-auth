@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CSRF_COOKIE, SESSION_COOKIE } from '../src/cookies.js'
-import { authStateSecretId, createAuthStateDocument } from '../src/auth-state.js'
+import { authStateSecretId, createAuthStateDocument, loadAuthState } from '../src/auth-state.js'
 import { SessionStore } from '../src/session.js'
 import type { TestCredentials } from './helpers.js'
 import {
@@ -212,6 +212,8 @@ describe('persistent renewable sessions', () => {
     expect(() => testConfig(credentials, {
       authStateFile: linkedStateFile,
     })).toThrow(/regular file/u)
+    const secretId = authStateSecretId(Buffer.from(credentials.secret))
+    expect(() => loadAuthState(linkedStateFile, secretId)).toThrow(/regular file/u)
 
     const duplicateStateFile = join(root, 'duplicate.json')
     const duplicateSession = {
