@@ -433,6 +433,25 @@ async function waitForBrowser(evaluate, expression, label) {
   }
 }
 
+const AUTHENTICATED_SPA = 'location.pathname === "/" && Array.from(document.querySelectorAll("button")).some(button => { const text = button.textContent?.trim(); return text === "Settings" || text === "设置" })'
+
+async function openHarnessSettings(browser, label) {
+  await waitForBrowser(browser.evaluate, AUTHENTICATED_SPA, label)
+  await browser.evaluate(`(() => {
+    const labels = new Set(['Settings', '设置'])
+    const settings = Array.from(document.querySelectorAll('button')).find(button => labels.has(button.textContent?.trim() ?? ''))
+    settings?.click()
+    return settings !== undefined
+  })()`)
+}
+
+async function signOutFromSettings(browser, readyLabel, redirectLabel) {
+  await openHarnessSettings(browser, readyLabel)
+  await waitForBrowser(browser.evaluate, 'document.querySelector(".dsh-auth-logout") !== null', 'Settings sign-out row')
+  await browser.evaluate('document.querySelector(".dsh-auth-logout")?.click()')
+  await waitForBrowser(browser.evaluate, 'location.pathname === "/auth/login"', redirectLabel)
+}
+
 async function completeTokenOnboarding(httpsPort, chromePort, authStateFile, username, password) {
   const origin = `https://localhost:${String(httpsPort)}`
   const loginPage = await request(httpsPort, '/auth/login')
@@ -469,9 +488,7 @@ async function completeTokenOnboarding(httpsPort, chromePort, authStateFile, use
       'first token setup page',
     )
     await browser.evaluate('document.querySelector("a.button.secondary")?.click()')
-    await waitForBrowser(browser.evaluate, 'location.pathname === "/" && document.querySelector(".dsh-auth-logout") !== null', 'Later returnTo')
-    await browser.evaluate('document.querySelector(".dsh-auth-logout")?.click()')
-    await waitForBrowser(browser.evaluate, 'location.pathname === "/auth/login"', 'sign out after Later')
+    await signOutFromSettings(browser, 'Later returnTo', 'sign out after Later')
     const second = issueLoginToken(authStateFile, origin)
     await browser.evaluate(`location.replace(${JSON.stringify(second.loginUrl)})`)
     await waitForBrowser(
@@ -491,7 +508,7 @@ async function completeTokenOnboarding(httpsPort, chromePort, authStateFile, use
       form.requestSubmit()
       return true
     })()`)
-    await waitForBrowser(browser.evaluate, 'location.pathname === "/" && document.querySelector(".dsh-auth-logout") !== null', 'setup saved returnTo')
+    await waitForBrowser(browser.evaluate, AUTHENTICATED_SPA, 'setup saved returnTo')
     await browser.clearCookies()
   } finally {
     browser.close()
@@ -771,45 +788,30 @@ async function main() {
       form.requestSubmit()
       return true
     })()`)
+    await openHarnessSettings(browser, 'Harness authenticated SPA')
     await waitForBrowser(
       browser.evaluate,
-      'location.pathname === "/" && document.querySelector(".dsh-auth-logout") !== null',
-      'Harness sidebar logout action',
+      'document.querySelector(".dsh-auth-password") !== null && document.querySelector(".dsh-auth-logout") !== null',
+      'Settings account rows',
     )
-    const logoutView = await browser.evaluate(`(() => {
-      const button = document.querySelector('.dsh-auth-logout')
-      return button === null ? null : {
-        label: button.textContent?.trim(),
-        aria: button.getAttribute('aria-label'),
-        wide: button.querySelector('.dsh-auth-logout-label') !== null,
+    const accountView = await browser.evaluate(`(() => {
+      const rows = Array.from(document.querySelectorAll('.dsh-auth-settings-row'))
+      const password = document.querySelector('.dsh-auth-password')
+      const logout = document.querySelector('.dsh-auth-logout')
+      return {
+        passwordTitle: rows.find(row => row.querySelector('.dsh-auth-password'))?.querySelector('.dsh-auth-settings-title')?.textContent?.trim(),
+        passwordAction: password?.textContent?.trim(),
+        logoutTitle: rows.find(row => row.querySelector('.dsh-auth-logout'))?.querySelector('.dsh-auth-settings-title')?.textContent?.trim(),
+        logoutAction: logout?.textContent?.trim(),
       }
     })()`)
     assert(
-      logoutView?.label === 'Sign out' && logoutView.aria === 'Sign out' && logoutView.wide === true,
-      'Harness sidebar logout action did not follow the active locale or wide layout',
-    )
-    await browser.evaluate(`(() => {
-      const buttons = Array.from(document.querySelectorAll('button'))
-      const settings = buttons.find(button => button.textContent?.trim() === 'Settings')
-      settings?.click()
-      return settings !== undefined
-    })()`)
-    await waitForBrowser(
-      browser.evaluate,
-      'document.querySelector(".dsh-auth-password") !== null',
-      'Settings password-reset row',
-    )
-    const passwordView = await browser.evaluate(`(() => {
-      const row = document.querySelector('.dsh-auth-password-row')
-      const button = document.querySelector('.dsh-auth-password')
-      return row === null || button === null ? null : {
-        title: row.querySelector('.dsh-auth-password-title')?.textContent?.trim(),
-        action: button.textContent?.trim(),
-      }
-    })()`)
-    assert(
-      passwordView?.title === 'Reset password' && passwordView.action === 'Reset',
+      accountView.passwordTitle === 'Reset password' && accountView.passwordAction === 'Reset',
       'Settings password-reset row did not follow the active locale',
+    )
+    assert(
+      accountView.logoutTitle === 'Current session' && accountView.logoutAction === 'Sign out',
+      'Settings sign-out row did not follow the active locale',
     )
     await browser.evaluate('document.querySelector(".dsh-auth-logout")?.click()')
     await waitForBrowser(browser.evaluate, 'location.pathname === "/auth/login"', 'browser logout redirect')
@@ -820,7 +822,7 @@ async function main() {
   const logoutToken = await request(httpsPort, '/auth/csrf', { headers: { cookie: session.pair } })
   const logoutCsrf = cookiePair(logoutToken.headers['set-cookie'], '__Host-dsh_auth_csrf')
   const logoutTokenJson = JSON.parse(logoutToken.body.toString('utf8'))
-  assert(logoutToken.status === 200 && typeof logoutTokenJson.csrf === 'string', 'sidebar logout token was unavailable')
+  assert(logoutToken.status === 200 && typeof logoutTokenJson.csrf === 'string', 'settings logout token was unavailable')
   const logout = await request(httpsPort, '/auth/logout', {
     method: 'POST',
     headers: { ...commonPostHeaders, cookie: `${session.pair}; ${logoutCsrf.pair}` },
@@ -860,7 +862,7 @@ async function main() {
     authenticatedWebSocket: 101,
     sessionRenewal: `Set-Cookie via ${edgeRuntime === 'caddy' ? 'forward_auth' : 'auth_request'}`,
     sessionPersistence: 'survived DSH restart',
-    browserSidebarSignOut: 'Sign out -> /auth/login',
+    browserSettingsSignOut: 'Settings -> Sign out -> /auth/login',
     browserSettingsPasswordReset: 'Settings -> Reset password',
     logoutRevocation: 401,
     tamperedCookie: 401,

@@ -3,7 +3,6 @@ import type { UserConfig } from 'tsdown'
 const CLIENT_EXTERNALS = [
   'react',
   'react/jsx-runtime',
-  '@deepseek-ai/dsh-client-ui-primitives',
 ] as const
 
 const config: UserConfig = {
