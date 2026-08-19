@@ -24,6 +24,16 @@ export function profileBundleRoot(dshHome: string, profile: string): string {
   return join(dshHome, 'profiles', profile, 'node_modules', 'dsh-auth')
 }
 
+/** Absolute tarball paths and pnpm's persisted `file:` form both resolve without the registry. */
+export function isOfflinePluginSpec(spec: string): boolean {
+  return spec.startsWith('/') || spec.startsWith('file:/')
+}
+
+/** Flags that keep a local tarball add from contacting the registry. */
+export function offlinePluginAddFlags(spec: string): readonly string[] {
+  return isOfflinePluginSpec(spec) ? ['--offline', '--config.auto-install-peers=false'] : []
+}
+
 /**
  * Inspect the profile manifest and the bundle it actually resolves. A
  * pre-installed bundle is adoptable only when its package name, version,

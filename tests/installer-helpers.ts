@@ -33,6 +33,7 @@ export class FakeInstallerHost implements InstallerHost {
   commandHandler: (command: CommandSpec) => CommandResult = () => ({ status: 0, stdout: '', stderr: '' })
   private randomCounter = 0
   private readonly cliSnapshots = new Map<string, Map<string, FakeEntry>>()
+  private readonly tarballSnapshots = new Map<string, Map<string, FakeEntry>>()
 
   constructor() {
     for (const path of ['/', '/etc', '/etc/systemd', '/etc/systemd/system', '/usr', '/usr/bin', '/usr/sbin', '/usr/lib', '/opt', '/opt/dsh', '/opt/dsh/bin', '/root', '/root/.dsh', '/var', '/var/lib', '/usr/lib/node_modules', '/usr/lib/node_modules/dsh-auth']) {
@@ -94,6 +95,12 @@ export class FakeInstallerHost implements InstallerHost {
     this.addDirectory('/usr/lib/node_modules/dsh-auth/lib')
     this.addFile('/usr/lib/node_modules/dsh-auth/package.json', `${JSON.stringify({ name: 'dsh-auth', version }, null, 2)}\n`, 0o644)
     this.addFile('/usr/lib/node_modules/dsh-auth/lib/cli.js', 'export {}\n', 0o644)
+  }
+
+  /** Register the current CLI tree as restorable for a later plugin add of this version. */
+  stashCliSnapshot(): void {
+    const version = (JSON.parse(this.readFile('/usr/lib/node_modules/dsh-auth/package.json')) as { version: string }).version
+    this.cliSnapshots.set(version, this.snapshotTree('/usr/lib/node_modules/dsh-auth'))
   }
 
   /** Simulate a newer globally installed CLI build, keeping the old tree restorable. */
@@ -212,13 +219,26 @@ export class FakeInstallerHost implements InstallerHost {
       const manifestPath = `${profileRoot}/package.json`
       if (verb === 'add') {
         const source = command.args.at(-1) ?? 'dsh-auth@0.1.11'
-        const requestedVersion = source.startsWith('dsh-auth@') ? source.slice('dsh-auth@'.length) : source.startsWith('/') ? undefined : source
-        const version = source.startsWith('dsh-auth@') ? source.slice('dsh-auth@'.length) : source.startsWith('/') ? `file:${source}` : source
+        const tarballPath = source.startsWith('/') ? source : source.startsWith('file:/') ? source.slice('file:'.length) : undefined
+        const requestedVersion = tarballPath !== undefined ? undefined : source.startsWith('dsh-auth@') ? source.slice('dsh-auth@'.length) : source
+        const version = source.startsWith('dsh-auth@') ? source.slice('dsh-auth@'.length) : tarballPath !== undefined ? `file:${tarballPath}` : source
         this.addFile(manifestPath, `${JSON.stringify({ dependencies: { 'dsh-auth': version }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', 'dsh-auth'] } } }, null, 2)}\n`)
         const bundleRoot = `${profileRoot}/node_modules/dsh-auth`
         if (this.fileExists(bundleRoot)) this.removeTreeEntries(bundleRoot)
         this.addDirectory(`${profileRoot}/node_modules`)
-        this.installTreeCopy('/usr/lib/node_modules/dsh-auth', bundleRoot, requestedVersion)
+        // A tarball spec resolves to the exact build it captured: the first add
+        // copies the current CLI tree and pins it to that spec; later adds of
+        // the same spec restore the pinned bytes.
+        if (tarballPath !== undefined) {
+          const pinned = this.tarballSnapshots.get(tarballPath)
+          if (pinned !== undefined) this.restoreTree(pinned, bundleRoot, bundleRoot)
+          else {
+            this.copyTree('/usr/lib/node_modules/dsh-auth', bundleRoot)
+            this.tarballSnapshots.set(tarballPath, this.snapshotTree(bundleRoot))
+          }
+        } else {
+          this.installTreeCopy('/usr/lib/node_modules/dsh-auth', bundleRoot, requestedVersion)
+        }
         // A registry add of dsh-auth@X resolves the published X build, so the
         // copied tree reports that version even when the local CLI differs.
         if (requestedVersion !== undefined) {

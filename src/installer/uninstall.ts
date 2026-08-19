@@ -2,6 +2,7 @@ import { dirname, join } from 'node:path'
 import { DEFAULT_STATE_FILE } from './doctor.js'
 import { InstallerError } from './errors.js'
 import { readInstallState, validateStatePaths } from './plan.js'
+import { offlinePluginAddFlags } from './profile-package.js'
 import { ExitCode, type CommandSpec, type InstallationPlan, type InstallerHost, type InstallState } from './types.js'
 
 function systemctl(host: InstallerHost): string {
@@ -27,7 +28,7 @@ function dshEnvironment(state: InstallState): NodeJS.ProcessEnv {
 function profileCommand(host: InstallerHost, state: InstallState, verb: 'add' | 'remove'): CommandSpec {
   const source = verb === 'add' ? state.request.packageSource : 'dsh-auth'
   const args = ['plugin', '--profile', state.request.profile, verb]
-  if (verb === 'add' && source.startsWith('/')) args.push('--offline', '--config.auto-install-peers=false')
+  if (verb === 'add') args.push(...offlinePluginAddFlags(source))
   args.push(source)
   if (state.dshUser === 'root') return { executable: state.dshExecutable, args }
   const runuser = ['/usr/sbin/runuser', '/usr/bin/runuser'].find(candidate => host.regularFile(candidate))

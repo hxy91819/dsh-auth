@@ -8,7 +8,7 @@
  */
 import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:net'
-import { accessSync, chmodSync, constants, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { accessSync, chmodSync, constants, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { once } from 'node:events'
@@ -25,6 +25,9 @@ Description:
 Environment:
   LIFECYCLE_KEEP_ON_FAILURE  Set to any value to keep the disposable root
                              for inspection when the run fails.
+  LIFECYCLE_DISPOSABLE_HOST  Set to 1 only when the whole host is disposable;
+                             allows retiring a leftover installation first.
+                             Without it the script refuses to run beside one.
   LIFECYCLE_TARBALL_BASE     Optional prebuilt current-version tarball used
                              instead of packing in-process.
   LIFECYCLE_TARBALL_UPGRADE  Optional prebuilt first upgrade tarball.
@@ -337,16 +340,27 @@ async function main() {
   }
   installGlobalCli(tarballA)
 
-  // A previous interrupted run on this machine may have left a managed
-  // installation or edge unit behind; retire them before the lifecycle starts.
-  allowFailure(join(globalPrefix, 'bin', 'dsh-auth'), ['uninstall', '--non-interactive', '--authorize-uninstall'])
-  allowFailure('/usr/bin/systemctl', ['disable', '--now', 'dsh-auth-caddy.service'])
-  for (const leftover of ['/etc/dsh-auth', '/etc/dsh-auth.installing.json', '/usr/lib/dsh-auth', '/etc/systemd/system/dsh-auth-caddy.service', '/var/lib/dsh-auth']) {
-    try {
-      rmSync(leftover, { recursive: true, force: true })
-    } catch { /* best-effort cleanup */ }
+  // This script owns real system paths (/etc/dsh-auth, /usr/lib/dsh-auth,
+  // /var/lib/dsh-auth, the edge unit). It must never retire an installation it
+  // did not create: leftover cleanup only runs when the operator explicitly
+  // confirms the machine is disposable through LIFECYCLE_DISPOSABLE_HOST=1.
+  if (allowFailure('/usr/bin/systemctl', ['is-enabled', '--quiet', 'dsh-auth-caddy.service']).status === 0 || existsSync('/etc/dsh-auth') || existsSync('/etc/dsh-auth.installing.json')) {
+    if (process.env.LIFECYCLE_DISPOSABLE_HOST !== '1') {
+      throw new Error([
+        'This machine already holds a dsh-auth installation and the lifecycle test refuses to touch it.',
+        'Run the lifecycle inside a disposable machine or privileged container.',
+        'If (and only if) this whole host is disposable, rerun with LIFECYCLE_DISPOSABLE_HOST=1 to retire the leftover installation first.',
+      ].join(' '))
+    }
+    allowFailure(join(globalPrefix, 'bin', 'dsh-auth'), ['uninstall', '--non-interactive', '--authorize-uninstall'])
+    allowFailure('/usr/bin/systemctl', ['disable', '--now', 'dsh-auth-caddy.service'])
+    for (const leftover of ['/etc/dsh-auth', '/etc/dsh-auth.installing.json', '/usr/lib/dsh-auth', '/etc/systemd/system/dsh-auth-caddy.service', '/var/lib/dsh-auth']) {
+      try {
+        rmSync(leftover, { recursive: true, force: true })
+      } catch { /* best-effort cleanup */ }
+    }
+    allowFailure('/usr/bin/systemctl', ['daemon-reload'])
   }
-  allowFailure('/usr/bin/systemctl', ['daemon-reload'])
 
   const password = `Lifecycle-${randomBytes(12).toString('base64url')}`
   const passwordFile = join(root, 'admin-password')

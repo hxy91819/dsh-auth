@@ -6,7 +6,7 @@ import { buildDoctorPlan, DEFAULT_STATE_FILE } from './doctor.js'
 import { InstallerError } from './errors.js'
 import { dshEnvironment, profileCommand, runChecked, systemctlPath } from './executor.js'
 import { readInstallState } from './plan.js'
-import { profileBundleRoot } from './profile-package.js'
+import { offlinePluginAddFlags, profileBundleRoot } from './profile-package.js'
 import { ExitCode, type Diagnostic, type InstallationPlan, type InstallState, type InstallerHost, type PlanAction } from './types.js'
 
 /** Crash journal for one in-flight upgrade transaction; persisted inside the ownership record. */
@@ -180,7 +180,7 @@ function bundleIdentity(host: InstallerHost, state: UpgradableState): { readonly
 }
 
 function pluginAddArgs(state: UpgradableState, spec: string): readonly string[] {
-  return ['plugin', '--profile', state.request.profile, 'add', ...(spec.startsWith('/') ? ['--offline', '--config.auto-install-peers=false'] : []), spec]
+  return ['plugin', '--profile', state.request.profile, 'add', ...offlinePluginAddFlags(spec), spec]
 }
 
 function replaceManagedBinary(host: InstallerHost, source: CaddyPackage, managedPath: string): void {
