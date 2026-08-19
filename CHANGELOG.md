@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.2
+
+Changes since [v0.2.1](https://github.com/hxy91819/dsh-auth/compare/v0.2.1...v0.2.2).
+
+### Changes
+
+- release: prepare v0.2.2 (`8ed57ed`). Thanks @hxy91819.
+- test: cover outer TLS proxy end to end ([#21](https://github.com/hxy91819/dsh-auth/pull/21)). Thanks @hxy91819.
+- test: track the repository release in installer host fakes ([#19](https://github.com/hxy91819/dsh-auth/pull/19)). Thanks @hxy91819.
+- feat: harden managed plugin installation lifecycle ([#18](https://github.com/hxy91819/dsh-auth/pull/18)). Thanks @hxy91819.
+
+### Contributors
+
+Thanks @hxy91819 for this release.
+
 ## Unreleased
 
 ### Changes
