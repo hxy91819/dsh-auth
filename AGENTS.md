@@ -11,7 +11,7 @@
 ## Architecture
 
 - Caddy is the only public listener. Harness binds loopback; Caddy performs `forward_auth`, security headers, TLS, and authenticated HTTP, download, SSE, and WebSocket proxying.
-- The Cordis plugin owns `/auth/*`, the bilingual login page, signed CSRF values, Argon2id verification, persistent revocable sessions, the native Harness sign-out contribution, and the Settings password-reset row.
+- The Cordis plugin owns `/auth/*`, the bilingual login page, signed CSRF values, Argon2id verification, persistent revocable sessions, and the Settings password-reset and sign-out rows.
 - Protect the SPA, `/api/*`, `/plugins/*`, `/api/session.export`, `/api/events.mux`, `/api/events.host`, and `/plugins/events`. Public access to the upstream `/auth/verify` route must resolve as not found.
 - Integrate through Harness WebServer, Settings, index-tap, client-module, locale, and sidebar-slot extension points. Extend those seams instead of forking Harness, rewriting its assets, probing the DOM, or using Nginx `sub_filter`.
 - `cordis.patch.yml` is the normal bundle layer. `cordis.overlay.yml` is only for deployments that resolve the package outside `dsh.profile.bundles`; one deployment uses one of them.
@@ -33,7 +33,7 @@
 - HTTP routes, login/logout, password change, CSRF, proxy trust: `src/application.ts`, `src/admin-password.ts`, `src/http.ts`, `tests/auth-http.spec.ts`, and `tests/admin-password.spec.ts`.
 - Session persistence, expiry, renewal, revocation: `src/session.ts`, `src/cookies.ts`, and `tests/session-persistence.spec.ts`.
 - Password hashing and CLI generation: `src/password.ts`, `src/cli.ts`, and `tests/password.spec.ts`.
-- Harness UI, locale, theme, settings password-reset, and sign-out: `src/client.tsx`, `src/preferences.ts`, and `tests/client.spec.tsx`.
+- Harness UI, locale, theme, and Settings password-reset and sign-out: `src/client.tsx`, `src/preferences.ts`, and `tests/client.spec.tsx`.
 - Cordis registration and configuration: `src/index.ts`, `src/config.ts`, `cordis.patch.yml`, and `tests/plugin.spec.ts`.
 - Edge routing and WebSocket/download behavior: `deploy/caddy/dsh-auth.Caddyfile.template` and `scripts/check-caddy.mjs`.
 - Installer discovery, typed plans, execution, recovery, doctor, and uninstall: `src/installer/`, `src/cli.ts`, and `tests/installer-*.spec.ts`.

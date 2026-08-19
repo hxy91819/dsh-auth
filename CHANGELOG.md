@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- feat: move sign-out from the sidebar into Settings → General.
+
 ## v0.2.0
 
 Changes since [v0.1.15](https://github.com/hxy91819/dsh-auth/compare/v0.1.15...v0.2.0).

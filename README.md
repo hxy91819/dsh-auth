@@ -156,9 +156,9 @@ Unauthenticated visitors see a responsive login page styled to match DeepSeek Ha
   <img src="https://raw.githubusercontent.com/hxy91819/dsh-auth/main/docs/images/login.png" alt="dsh-auth login page for DeepSeek Harness" width="720">
 </p>
 
-After sign-in, users enter the real Harness Web app with its normal sessions, tools, model selection, and workspace navigation. The authentication plugin adds a native sign-out action to the sidebar and a password-reset row in Settings → General:
+After sign-in, users enter the real Harness Web app with its normal sessions, tools, model selection, and workspace navigation. The authentication plugin adds password-reset and sign-out rows in Settings → General:
 
-![Authenticated DeepSeek Harness Web app with the dsh-auth sign-out action](https://raw.githubusercontent.com/hxy91819/dsh-auth/main/docs/images/authenticated-harness.png)
+![Authenticated DeepSeek Harness Web app after dsh-auth sign-in](https://raw.githubusercontent.com/hxy91819/dsh-auth/main/docs/images/authenticated-harness.png)
 
 ## Issue a one-time login link
 
@@ -318,7 +318,7 @@ node scripts/installer-e2e.mjs packed/dsh-auth-X.Y.Z.tgz
 
 Replace `X.Y.Z` with the version in `package.json`.
 
-`test:e2e` packs the current checkout, installs it into a disposable DSH profile, and drives a real TLS Caddy edge plus a headless browser. It verifies unauthenticated denial, login-token issue and redemption, first-time administrator setup, password login, the protected SPA/API/download/WebSocket paths, session renewal and restart persistence, and sidebar sign-out revocation. It requires OpenSSL, `ss`, and Chrome or Chromium; set `DSH_E2E_CHROME_BIN` when the browser is not installed at a standard Linux path. Without `DSH_E2E_CADDY_BIN`, the test prepares a checksum-verified official Caddy `v2.11.4` binary for isolation only.
+`test:e2e` packs the current checkout, installs it into a disposable DSH profile, and drives a real TLS Caddy edge plus a headless browser. It verifies unauthenticated denial, login-token issue and redemption, first-time administrator setup, password login, the protected SPA/API/download/WebSocket paths, session renewal and restart persistence, and Settings sign-out revocation. It requires OpenSSL, `ss`, and Chrome or Chromium; set `DSH_E2E_CHROME_BIN` when the browser is not installed at a standard Linux path. Without `DSH_E2E_CADDY_BIN`, the test prepares a checksum-verified official Caddy `v2.11.4` binary for isolation only.
 
 Contributors should read [`AGENTS.md`](AGENTS.md). Installer architecture and maintenance checks are in [`docs/installer.md`](docs/installer.md).
 

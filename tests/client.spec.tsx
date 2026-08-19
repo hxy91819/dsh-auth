@@ -1,17 +1,15 @@
 /** @vitest-environment jsdom */
-import { act, type ReactElement } from 'react'
+import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { beginBrowserLogout, beginBrowserPasswordChange, LogoutAction, PasswordSettingsRow } from '../src/client.js'
-
-vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
-  Tooltip: ({ children }: { readonly children: ReactElement }) => children,
-}))
+import { beginBrowserLogout, beginBrowserPasswordChange, LogoutSettingsRow, PasswordSettingsRow } from '../src/client.js'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const copy = {
-  'logout.label': '退出登录',
+  'logout.label': '当前会话',
+  'logout.description': '结束当前会话。需要时重新登录即可。',
+  'logout.action': '退出登录',
   'logout.pending': '正在退出…',
   'logout.error': '退出登录失败，请重试',
   'password.label': '重设密码',
@@ -21,7 +19,7 @@ const copy = {
 
 const t = (key: string): string => key in copy ? copy[key as keyof typeof copy] : key
 
-describe('Harness sidebar sign-out action', () => {
+describe('Harness settings sign-out row', () => {
   let container: HTMLDivElement
   let root: Root
 
@@ -37,29 +35,23 @@ describe('Harness sidebar sign-out action', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders Harness wide and rail variants with accessible bilingual copy', () => {
+  it('renders the General settings row with accessible bilingual copy', () => {
     const beginLogout = vi.fn(() => Promise.resolve())
     act(() => {
-      root.render(<LogoutAction wide beginLogout={beginLogout} t={t} />)
+      root.render(<LogoutSettingsRow beginLogout={beginLogout} t={t} />)
     })
-    const wide = container.querySelector('button')
-    expect(wide?.textContent).toBe('退出登录')
-    expect(wide?.getAttribute('aria-label')).toBe('退出登录')
-
-    act(() => {
-      root.render(<LogoutAction wide={false} beginLogout={beginLogout} t={t} />)
-    })
-    const rail = container.querySelector('button')
-    expect(rail?.textContent).toBe('')
-    expect(rail?.getAttribute('aria-label')).toBe('退出登录')
-    expect(container.querySelector('[data-rail]')).not.toBeNull()
+    expect(container.querySelector('.dsh-auth-settings-title')?.textContent).toBe('当前会话')
+    expect(container.querySelector('.dsh-auth-settings-desc')?.textContent).toBe('结束当前会话。需要时重新登录即可。')
+    const button = container.querySelector('button')
+    expect(button?.textContent).toBe('退出登录')
+    expect(button?.classList.contains('dsh-auth-logout')).toBe(true)
   })
 
   it('prevents duplicate clicks and exposes a localized failure', async () => {
     let rejectLogout: ((error: Error) => void) | undefined
     const beginLogout = vi.fn(() => new Promise<void>((_resolve, reject) => { rejectLogout = reject }))
     act(() => {
-      root.render(<LogoutAction wide beginLogout={beginLogout} t={t} />)
+      root.render(<LogoutSettingsRow beginLogout={beginLogout} t={t} />)
     })
     const button = container.querySelector('button')
     expect(button).not.toBeNull()
@@ -101,8 +93,8 @@ describe('Harness settings password-reset row', () => {
     act(() => {
       root.render(<PasswordSettingsRow beginPasswordChange={beginPasswordChange} t={t} />)
     })
-    expect(container.querySelector('.dsh-auth-password-title')?.textContent).toBe('重设密码')
-    expect(container.querySelector('.dsh-auth-password-desc')?.textContent).toBe('更新管理员密码。成功后，其他会话将退出。')
+    expect(container.querySelector('.dsh-auth-settings-title')?.textContent).toBe('重设密码')
+    expect(container.querySelector('.dsh-auth-settings-desc')?.textContent).toBe('更新管理员密码。成功后，其他会话将退出。')
     const button = container.querySelector('button')
     expect(button?.textContent).toBe('重设')
     expect(button?.classList.contains('dsh-auth-password')).toBe(true)
