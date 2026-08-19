@@ -70,7 +70,13 @@ gh workflow run release.yml --ref main -f tag=vX.Y.Z
 gh run list --workflow release.yml --event workflow_dispatch --limit 1
 ```
 
-In the GitHub UI, open **Actions → Release → Run workflow**, keep **Use workflow from** set to `main`, enter the exact existing tag in **tag**, and run the workflow. Do not select the tag as the workflow ref: the `npm-release` Environment permits `main`, while the jobs themselves check out and validate the tag.
+In the GitHub UI, open **Actions → Release → Run workflow**, keep **Use workflow from** set to `main`, enter the exact existing tag in **tag**, leave **dry_run** unchecked, and run the workflow. Do not select the tag as the workflow ref: the `npm-release` Environment permits `main`, while the jobs themselves check out and validate the tag.
+
+To exercise packing and the parallel packed E2E jobs without publishing, dispatch the same workflow with **dry_run** checked. Dry-run may use the feature branch as the workflow ref; it packs the current HEAD, never requires a Git tag, never uses the `npm-release` environment, and never publishes. The synthetic `vX.Y.Z` in the dry-run manifest is only the tarball name.
+
+```sh
+gh workflow run release.yml --ref main -f dry_run=true
+```
 
 ## Failure handling
 

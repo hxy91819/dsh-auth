@@ -8,6 +8,7 @@ import {
   assertRegistryVersionPublished,
   classifyRegistryStatus,
   expectedTarballFilename,
+  identityFromPackageHead,
   isPublishedRegistryState,
   parseStableTag,
   validateArchivePaths,
@@ -79,6 +80,35 @@ describe('release validation', () => {
 
     git(repository, ['update-ref', 'refs/remotes/origin/main', `${tagCommit}^`])
     expect(() => validateReleaseSource(repository, 'v0.1.13')).toThrow(/origin\/main/u)
+  })
+
+  it('names a HEAD dry-run pack from package.json without requiring a Git tag', () => {
+    const repository = mkdtempSync(join(tmpdir(), 'dsh-auth-release-head-'))
+    temporaryRepositories.push(repository)
+    writeFileSync(join(repository, 'package.json'), JSON.stringify({ name: 'dsh-auth', version: '0.1.13' }))
+    git(repository, ['init', '--initial-branch=main'])
+    git(repository, ['config', 'user.name', 'release-test'])
+    git(repository, ['config', 'user.email', 'release-test@example.invalid'])
+    git(repository, ['add', 'package.json'])
+    git(repository, ['commit', '-m', 'head'])
+    const commit = git(repository, ['rev-parse', 'HEAD'])
+    expect(identityFromPackageHead(repository)).toEqual({
+      tag: 'v0.1.13',
+      version: '0.1.13',
+      commit,
+      filename: 'dsh-auth-0.1.13.tgz',
+    })
+    writeFileSync(join(repository, 'package.json'), JSON.stringify({ name: 'dsh-auth', version: '0.1.13-beta.1' }))
+    expect(() => identityFromPackageHead(repository)).toThrow(/stable/u)
+  })
+
+  it('refuses a publish tag when packing HEAD', () => {
+    const result = spawnSync(process.execPath, [
+      'scripts/release-validation.mjs', 'pack',
+      '--source', 'head', '--tag', 'v0.1.13', '--directory', 'release',
+    ], { encoding: 'utf8' })
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toMatch(/--tag is not valid with --source head/u)
   })
 
   it('accepts a complete manifest only when every identity field matches', () => {

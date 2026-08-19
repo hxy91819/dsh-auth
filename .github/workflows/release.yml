@@ -4,14 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing stable vX.Y.Z tag to publish
-        required: true
+        description: Existing stable vX.Y.Z tag to publish. Ignored when dry_run is true.
+        required: false
         type: string
+      dry_run:
+        description: Pack and run packed E2E from this workflow ref. Never publish to npm.
+        required: false
+        type: boolean
+        default: false
 
 permissions: {}
 
 concurrency:
-  group: npm-release-${{ inputs.tag }}
+  group: ${{ inputs.dry_run == true && format('release-dry-run-{0}', github.ref) || format('npm-release-{0}', inputs.tag) }}
   cancel-in-progress: false
 
 env:
@@ -26,19 +31,51 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    outputs:
+      ref: ${{ steps.identity.outputs.ref }}
+      tarball: ${{ steps.identity.outputs.tarball }}
+      version: ${{ steps.identity.outputs.version }}
     steps:
-      - name: Require the main workflow ref
-        if: github.ref != 'refs/heads/main'
+      - name: Require a real release to use main and a stable tag
+        if: ${{ inputs.dry_run != true }}
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          WORKFLOW_REF: ${{ github.ref }}
         run: |
-          echo '::error::Release must be dispatched from the main workflow ref.' >&2
-          exit 1
+          set -euo pipefail
+          if [ "$WORKFLOW_REF" != 'refs/heads/main' ]; then
+            echo '::error::Release must be dispatched from the main workflow ref.' >&2
+            exit 1
+          fi
+          if [ -z "$RELEASE_TAG" ]; then
+            echo '::error::Release requires an existing stable tag input.' >&2
+            exit 1
+          fi
 
-      - name: Check out the exact release tag
+      - name: Check out the release source
         uses: actions/checkout@v7
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: ${{ inputs.dry_run == true && github.sha || format('refs/tags/{0}', inputs.tag) }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Record the packed identity
+        id: identity
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = true ]; then
+            VERSION="$(node -p 'require("./package.json").version')"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "tarball=dsh-auth-${VERSION}.tgz" >> "$GITHUB_OUTPUT"
+            echo "ref=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "tarball=dsh-auth-${RELEASE_TAG#v}.tgz" >> "$GITHUB_OUTPUT"
+            echo "ref=refs/tags/${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up Node 24 without a package cache
         uses: actions/setup-node@v7
@@ -56,6 +93,7 @@ jobs:
           version: ${{ env.PNPM_VERSION }}
 
       - name: Validate the stable tag and main ancestry
+        if: ${{ inputs.dry_run != true }}
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: node scripts/release-validation.mjs source --tag "$RELEASE_TAG"
@@ -88,15 +126,25 @@ jobs:
 
       - name: Create and inspect the single release artifact
         env:
+          DRY_RUN: ${{ inputs.dry_run }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          node scripts/release-validation.mjs pack \
-            --tag "$RELEASE_TAG" \
-            --directory release \
-            --manifest release/manifest.json \
-            --report release/pack-report.json
+          set -euo pipefail
+          if [ "$DRY_RUN" = true ]; then
+            node scripts/release-validation.mjs pack --source head \
+              --directory release \
+              --manifest release/manifest.json \
+              --report release/pack-report.json
+          else
+            node scripts/release-validation.mjs pack \
+              --tag "$RELEASE_TAG" \
+              --directory release \
+              --manifest release/manifest.json \
+              --report release/pack-report.json
+          fi
 
       - name: Verify the committed changelog and generate release notes
+        if: ${{ inputs.dry_run != true }}
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
@@ -108,14 +156,12 @@ jobs:
             --notes release/release-notes.md \
             --repository "$GITHUB_REPOSITORY"
 
+      - name: Write dry-run notes instead of a GitHub Release body
+        if: ${{ inputs.dry_run == true }}
+        run: printf '%s\n' 'Dry-run; not a GitHub Release.' > release/release-notes.md
+
       - name: Run offline packed-bin smoke
-        env:
-          RELEASE_TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          RELEASE_VERSION="${RELEASE_TAG#v}"
-          TARBALL="./release/dsh-auth-${RELEASE_VERSION}.tgz"
-          node scripts/pack-smoke.mjs "$TARBALL"
+        run: node scripts/pack-smoke.mjs "./release/${{ steps.identity.outputs.tarball }}"
 
       - name: Upload the verified release artifact and manifest
         uses: actions/upload-artifact@v7
@@ -135,10 +181,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Check out the exact release tag
+      - name: Check out the packed source
         uses: actions/checkout@v7
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: ${{ needs.preflight.outputs.ref }}
           fetch-depth: 0
           persist-credentials: false
       - name: Set up Node 24 without a package cache
@@ -163,8 +209,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          RELEASE_VERSION="${RELEASE_TAG#v}"
-          node scripts/installer-e2e.mjs "release/dsh-auth-${RELEASE_VERSION}.tgz"
+          node scripts/installer-e2e.mjs "release/${{ needs.preflight.outputs.tarball }}"
 
   e2e:
     needs: preflight
@@ -173,10 +218,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Check out the exact release tag
+      - name: Check out the packed source
         uses: actions/checkout@v7
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: ${{ needs.preflight.outputs.ref }}
           fetch-depth: 0
           persist-credentials: false
       - name: Set up Node 24 without a package cache
@@ -199,8 +244,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          RELEASE_VERSION="${RELEASE_TAG#v}"
-          pnpm run test:e2e -- "release/dsh-auth-${RELEASE_VERSION}.tgz"
+          pnpm run test:e2e -- "release/${{ needs.preflight.outputs.tarball }}"
 
   e2e-behind-tls-proxy:
     needs: preflight
@@ -209,10 +253,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Check out the exact release tag
+      - name: Check out the packed source
         uses: actions/checkout@v7
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: ${{ needs.preflight.outputs.ref }}
           fetch-depth: 0
           persist-credentials: false
       - name: Set up Node 24 without a package cache
@@ -235,8 +279,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          RELEASE_VERSION="${RELEASE_TAG#v}"
-          pnpm run test:e2e:behind-tls-proxy -- "release/dsh-auth-${RELEASE_VERSION}.tgz"
+          pnpm run test:e2e:behind-tls-proxy -- "release/${{ needs.preflight.outputs.tarball }}"
 
   e2e-lifecycle:
     needs: preflight
@@ -245,10 +288,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Check out the exact release tag
+      - name: Check out the packed source
         uses: actions/checkout@v7
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: ${{ needs.preflight.outputs.ref }}
           fetch-depth: 0
           persist-credentials: false
       - name: Download the preflight artifact
@@ -258,17 +301,20 @@ jobs:
           path: release
       - name: Revalidate the packed artifact
         env:
+          DRY_RUN: ${{ inputs.dry_run }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          node scripts/release-validation.mjs artifact-verify \
-            --tag "$RELEASE_TAG" --directory release --manifest release/manifest.json
-      - id: packed
-        env:
-          RELEASE_TAG: ${{ inputs.tag }}
-        run: echo "tarball=release/dsh-auth-${RELEASE_TAG#v}.tgz" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          if [ "$DRY_RUN" = true ]; then
+            node scripts/release-validation.mjs artifact-verify --source head \
+              --directory release --manifest release/manifest.json
+          else
+            node scripts/release-validation.mjs artifact-verify --tag "$RELEASE_TAG" \
+              --directory release --manifest release/manifest.json
+          fi
       - uses: ./.github/actions/systemd-lifecycle-e2e
         with:
-          tarball: ${{ steps.packed.outputs.tarball }}
+          tarball: release/${{ needs.preflight.outputs.tarball }}
 
   e2e-latest-dsh:
     needs: preflight
@@ -277,10 +323,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Check out the exact release tag
+      - name: Check out the packed source
         uses: actions/checkout@v7
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: ${{ needs.preflight.outputs.ref }}
           fetch-depth: 0
           persist-credentials: false
       - name: Set up Node 24 without a package cache
@@ -303,10 +349,41 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          RELEASE_VERSION="${RELEASE_TAG#v}"
-          pnpm run test:e2e:latest-dsh -- "release/dsh-auth-${RELEASE_VERSION}.tgz"
+          pnpm run test:e2e:latest-dsh -- "release/${{ needs.preflight.outputs.tarball }}"
+
+  dry-run:
+    if: ${{ inputs.dry_run == true && !cancelled() }}
+    needs:
+      - preflight
+      - e2e-installer
+      - e2e
+      - e2e-behind-tls-proxy
+      - e2e-lifecycle
+      - e2e-latest-dsh
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Confirm packed checks without publishing
+        env:
+          PREFLIGHT: ${{ needs.preflight.result }}
+          E2E_INSTALLER: ${{ needs.e2e-installer.result }}
+          E2E: ${{ needs.e2e.result }}
+          E2E_BEHIND_TLS_PROXY: ${{ needs.e2e-behind-tls-proxy.result }}
+          E2E_LIFECYCLE: ${{ needs.e2e-lifecycle.result }}
+          E2E_LATEST_DSH: ${{ needs.e2e-latest-dsh.result }}
+        run: |
+          set -euo pipefail
+          failed=0
+          for name in PREFLIGHT E2E_INSTALLER E2E E2E_BEHIND_TLS_PROXY E2E_LIFECYCLE E2E_LATEST_DSH; do
+            eval "result=\${$name}"
+            printf '%s=%s\n' "$name" "$result"
+            if [ "$result" != success ]; then failed=1; fi
+          done
+          if [ "$failed" -ne 0 ]; then exit 1; fi
+          echo 'Release dry-run passed; npm was not published.'
 
   publish:
+    if: ${{ inputs.dry_run != true }}
     needs:
       - preflight
       - e2e-installer
@@ -322,10 +399,10 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Check out the exact release tag
+      - name: Check out the packed source
         uses: actions/checkout@v7
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: ${{ needs.preflight.outputs.ref }}
           fetch-depth: 0
           persist-credentials: false
 

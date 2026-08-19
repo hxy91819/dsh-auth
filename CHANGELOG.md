@@ -7,6 +7,7 @@
 - docs: describe the pull-request release path and stop extra local packed checks.
 - test: reject oversized login bodies at the outer TLS proxy so 413 is deterministic.
 - ci: run packed installer, browser, and lifecycle tests in parallel from one tarball checkpoint.
+- ci: add a Release dry-run that packs HEAD and skips npm publish.
 
 ## v0.2.3
 
