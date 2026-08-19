@@ -190,7 +190,7 @@ sudo dsh-auth issue-login-token \
 
 Setup can replace the built-in failure page text. Configure Chinese and English independently; an omitted language keeps its built-in copy. Each value is 1–500 Unicode characters of plain text. Control characters are rejected, and HTML is shown as text rather than markup. The installer refuses these flags when `--login-token` is `disabled`.
 
-Malformed, expired, already-used, and unknown tokens all return the same HTTP 401 page with that text. The page does not identify which of those cases occurred.
+Malformed, expired, already-used, and unknown tokens all return the same HTTP 401 page with that text. The page does not identify which of those cases occurred. A token POST that fails the Origin or CSRF check returns a different HTTP 403 page: it asks the user to reopen the latest console link or check the public access address, does not use the 401 text, and does not consume the token.
 
 ```sh
 sudo dsh-auth setup \

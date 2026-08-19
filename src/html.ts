@@ -40,6 +40,7 @@ interface UiCopy {
   readonly tokenLede: string
   readonly tokenNoscript: string
   readonly tokenFailure: string
+  readonly tokenDenied: string
   readonly setupTitle: string
   readonly setupLede: string
   readonly setupSave: string
@@ -84,6 +85,7 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     tokenLede: '正在完成一次性登录…',
     tokenNoscript: '此登录链接需要启用 JavaScript。请回到云控制台，在允许 JavaScript 的浏览器中重新打开该链接。',
     tokenFailure: '登录链接无效、已过期或已被使用。请回到云控制台重新获取链接。',
+    tokenDenied: '登录请求的安全校验失败。请从云控制台重新打开最新链接；若仍失败，请检查公网访问地址或联系管理员。',
     setupTitle: '设置管理员账户',
     setupLede: '为此实例设置管理员用户名和密码，或选择稍后进入 Harness。',
     setupSave: '保存',
@@ -126,6 +128,7 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     tokenLede: 'Completing one-time sign-in…',
     tokenNoscript: 'This sign-in link requires JavaScript. Return to your cloud console and reopen the link in a browser with JavaScript enabled.',
     tokenFailure: 'The sign-in link is invalid, expired, or already used. Request a new link from your cloud console.',
+    tokenDenied: 'The sign-in request failed a security check. Reopen the latest link from your cloud console. If it still fails, check the public access address or contact an administrator.',
     setupTitle: 'Set up the administrator account',
     setupLede: 'Set an administrator username and password for this instance, or continue to Harness later.',
     setupSave: 'Save',
@@ -426,22 +429,27 @@ export function tokenBridgePage(
 `)
 }
 
-/** Render the unified token failure page used for every redemption denial. */
-export function tokenFailurePage(preferences: UiPreferences, failures: TokenFailureMessages): string {
+function tokenNoticePage(preferences: UiPreferences, notice: string): string {
   const copy = COPY[preferences.language]
   return document(copy.tokenTitle, `<section class="content">
     <h1>${escapeHtml(copy.tokenTitle)}</h1>
-    <p class="notice" role="alert">${escapeHtml(tokenFailureMessage(preferences, failures))}</p>
+    <p class="notice" role="alert">${escapeHtml(notice)}</p>
   </section>`, preferences)
+}
+
+/** Render the unified token failure page used for every redemption denial. */
+export function tokenFailurePage(preferences: UiPreferences, failures: TokenFailureMessages): string {
+  return tokenNoticePage(preferences, tokenFailureMessage(preferences, failures))
+}
+
+/** Render the pre-claim Origin/CSRF denial without implying token state. */
+export function tokenDeniedPage(preferences: UiPreferences): string {
+  return tokenNoticePage(preferences, COPY[preferences.language].tokenDenied)
 }
 
 /** Render the token flow rate-limit page without revealing token state. */
 export function tokenRateLimitedPage(preferences: UiPreferences): string {
-  const copy = COPY[preferences.language]
-  return document(copy.tokenTitle, `<section class="content">
-    <h1>${escapeHtml(copy.tokenTitle)}</h1>
-    <p class="notice" role="alert">${escapeHtml(copy.rateLimited)}</p>
-  </section>`, preferences)
+  return tokenNoticePage(preferences, COPY[preferences.language].rateLimited)
 }
 
 /** Render the first-time administrator setup form for a login-token session. */

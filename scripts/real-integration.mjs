@@ -486,31 +486,81 @@ async function signOutFromSettings(browser, readyLabel, redirectLabel) {
   await waitForBrowser(browser.evaluate, 'location.pathname === "/auth/login"', redirectLabel)
 }
 
-async function completeTokenOnboarding(httpsPort, chromePort, authStateFile, username, password) {
-  const origin = `https://localhost:${String(httpsPort)}`
-  const loginPage = await request(httpsPort, '/auth/login')
-  const loginHtml = loginPage.body.toString('utf8')
-  assert(loginPage.status === 200 && !loginHtml.includes('name="password"'), 'unset administrator still rendered a password form')
-  const bridge = await request(httpsPort, '/auth/token')
-  const bridgeHtml = bridge.body.toString('utf8')
-  assert(bridge.status === 200 && bridgeHtml.includes('token-bootstrap.js'), 'token bridge page was not public')
-  const probe = issueLoginToken(authStateFile, origin)
-  const probeCsrf = cookiePair(bridge.headers['set-cookie'], '__Host-dsh_auth_csrf')
-  const probeToken = /<meta name="dsh-auth-csrf" content="([^"]*)">/u.exec(bridgeHtml)?.[1]
-  assert(probeToken !== undefined, 'token bridge CSRF meta was missing')
-  const redeemed = await request(httpsPort, '/auth/token', {
+function tokenCsrfMeta(html) {
+  const token = /<meta name="dsh-auth-csrf" content="([^"]*)">/u.exec(html)?.[1]
+  assert(token !== undefined, 'token bridge CSRF meta was missing')
+  return token.replaceAll('&amp;', '&')
+}
+
+function postLoginToken(httpsPort, token, { origin, cookie, csrf }) {
+  return request(httpsPort, '/auth/token', {
     method: 'POST',
     headers: {
       origin,
       'content-type': 'application/x-www-form-urlencoded',
-      cookie: probeCsrf.pair,
+      cookie,
     },
-    body: form({ csrf: probeToken.replaceAll('&amp;', '&'), token: probe.token }),
+    body: form({ csrf, token }),
   })
+}
+
+function assertTokenDeniedHtml(response, token) {
+  const body = response.body.toString('utf8')
+  assert(response.status === 403, `token authenticity denial was ${String(response.status)}`)
+  assert(String(response.headers['content-type'] ?? '').includes('text/html'), 'token authenticity denial was not HTML')
+  assert(body.includes('failed a security check'), 'token authenticity denial did not use the security-check copy')
+  assert(!body.includes('invalid, expired, or already used'), 'token authenticity denial reused the 401 copy')
+  assert(!body.includes(token), 'token authenticity denial echoed the bearer token')
+  assert(!body.includes('cross-origin') && !body.includes('CSRF'), 'token authenticity denial named the check class')
+  return body
+}
+
+async function proveTokenAuthenticityDenial(httpsPort, authStateFile, innerPort) {
+  const origin = `https://localhost:${String(httpsPort)}`
+  const issued = issueLoginToken(authStateFile, origin)
+  const bridge = await request(httpsPort, '/auth/token')
+  const bridgeHtml = bridge.body.toString('utf8')
+  assert(bridge.status === 200 && bridgeHtml.includes('token-bootstrap.js'), 'token bridge page was not public')
+  const csrf = tokenCsrfMeta(bridgeHtml)
+  const cookie = cookiePair(bridge.headers['set-cookie'], '__Host-dsh_auth_csrf').pair
+
+  const originDenied = await postLoginToken(httpsPort, issued.token, { origin: 'https://evil.example', cookie, csrf })
+  const originBody = assertTokenDeniedHtml(originDenied, issued.token)
+  assert(!originBody.includes('evil.example'), 'token authenticity denial echoed Origin')
+
+  const csrfDenied = await postLoginToken(httpsPort, issued.token, { origin, cookie, csrf: 'wrong' })
+  assert(csrfDenied.body.toString('utf8') === originBody, 'CSRF denial used a different page from Origin denial')
+
+  if (innerPort !== undefined) {
+    // Outer proxies that drop the public HTTPS port from X-Forwarded-Host must not consume the token.
+    const truncated = await requestHttp(innerPort, '/auth/token', {
+      method: 'POST',
+      headers: {
+        origin,
+        'content-type': 'application/x-www-form-urlencoded',
+        cookie,
+        'x-forwarded-host': 'localhost',
+        'x-forwarded-proto': 'https',
+        'x-real-ip': '127.0.0.1',
+      },
+      body: form({ csrf, token: issued.token }),
+    })
+    assertTokenDeniedHtml(truncated, issued.token)
+  }
+
+  const redeemed = await postLoginToken(httpsPort, issued.token, { origin, cookie, csrf })
   assert(
     redeemed.status === 303 && redeemed.headers.location === '/auth/admin/setup?returnTo=%2F',
-    `container-issued token did not redeem (${String(redeemed.status)} ${String(redeemed.headers.location)} ${redeemed.body.toString('utf8').slice(0, 180)})`,
+    `token remaining after authenticity denials did not redeem (${String(redeemed.status)} ${String(redeemed.headers.location)} ${redeemed.body.toString('utf8').slice(0, 180)})`,
   )
+}
+
+async function completeTokenOnboarding(httpsPort, chromePort, authStateFile, username, password, innerPort) {
+  const origin = `https://localhost:${String(httpsPort)}`
+  const loginPage = await request(httpsPort, '/auth/login')
+  const loginHtml = loginPage.body.toString('utf8')
+  assert(loginPage.status === 200 && !loginHtml.includes('name="password"'), 'unset administrator still rendered a password form')
+  await proveTokenAuthenticityDenial(httpsPort, authStateFile, innerPort)
   const first = issueLoginToken(authStateFile, origin)
   const browser = await openBrowser(chromePort, `${origin}/auth/login`)
   try {
@@ -791,7 +841,14 @@ async function main() {
   assert(oversizedLogin.status === 413, 'Caddy did not reject an oversized authentication body')
 
   if (bootstrap === 'login-token') {
-    await completeTokenOnboarding(httpsPort, chromePort, layout.authStateFile, username, password)
+    await completeTokenOnboarding(
+      httpsPort,
+      chromePort,
+      layout.authStateFile,
+      username,
+      password,
+      topology === 'behind-tls-proxy' ? innerPort : undefined,
+    )
   }
 
   const login = await request(httpsPort, '/auth/login?returnTo=%2Fworkspace', {
@@ -993,7 +1050,11 @@ async function main() {
     tamperedCookie: 401,
     dshBind: '127.0.0.1',
     ...(topology === 'behind-tls-proxy' ? { innerEdge: 'loopback HTTP, forwarded HTTPS required' } : {}),
-    ...(bootstrap === 'login-token' ? { tokenOnboarding: 'later then setup', containerTokenIssue: 'json v2' } : {}),
+    ...(bootstrap === 'login-token' ? {
+      tokenOnboarding: 'later then setup',
+      containerTokenIssue: 'json v2',
+      tokenAuthenticityDenial: '403 HTML then redeem',
+    } : {}),
   }, undefined, 2) + '\n')
 }
 
