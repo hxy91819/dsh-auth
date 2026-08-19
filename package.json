@@ -42,6 +42,7 @@
     "docs/installer.md",
     "CHANGELOG.md",
     "README.md",
+    "README.zh-CN.md",
     "SECURITY.md",
     "LICENSE",
     "vendor/caddy/manifest.json",

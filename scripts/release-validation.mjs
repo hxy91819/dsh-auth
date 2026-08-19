@@ -50,6 +50,7 @@ const POST_PUBLISH_DELAY_MS = 5_000
 export const REQUIRED_PACKAGE_FILES = Object.freeze([
   'package.json',
   'README.md',
+  'README.zh-CN.md',
   'CHANGELOG.md',
   'SECURITY.md',
   'LICENSE',
