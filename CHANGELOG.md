@@ -10,6 +10,7 @@ Changes since [v0.1.15](https://github.com/hxy91819/dsh-auth/compare/v0.1.15...v
 
 ### Changes
 
+- docs: remove password reset screenshots (`19697f5`). Thanks masonxhuang.
 - docs: derive token-login progress from execution cards ([#14](https://github.com/hxy91819/dsh-auth/pull/14)). Thanks @hxy91819.
 - feat: reset the administrator password from Settings ([#13](https://github.com/hxy91819/dsh-auth/pull/13)). Thanks @hxy91819.
 - docs: require every PR review comment to be adopted or rejected before land (`109a099`). Thanks masonxhuang.
