@@ -1,5 +1,5 @@
 import { resolveCliPackageIdentity } from './build-identity.js'
-import { inspectProfilePackage } from './profile-package.js'
+import { inspectProfilePackage, offlinePluginAddFlags } from './profile-package.js'
 import { dirname, isAbsolute, join } from 'node:path'
 import { InstallerError } from './errors.js'
 import { persistentRequest, renderEnvironmentFile, renderSystemdDropIn, requestFingerprint } from './config-files.js'
@@ -379,7 +379,6 @@ function profileInstallAction(
       profilePackage: inspection.facts,
     }
   }
-  const offline = isAbsolute(request.packageSource)
   return {
     action: {
       id: 'install-profile-package',
@@ -387,7 +386,7 @@ function profileInstallAction(
       description: `Install the pinned dsh-auth bundle into profile ${request.profile}.`,
       command: {
         executable: service.dshExecutable,
-        args: ['plugin', '--profile', request.profile, 'add', ...(offline ? ['--offline', '--config.auto-install-peers=false'] : []), request.packageSource],
+        args: ['plugin', '--profile', request.profile, 'add', ...offlinePluginAddFlags(request.packageSource), request.packageSource],
       },
     },
   }

@@ -124,6 +124,37 @@ describe('managed upgrade', () => {
     await expect(runCli(['doctor', '--json'], new FakeCliIo(false), host)).resolves.toBe(0)
   }, 30_000)
 
+  it('restores a file: package spec offline when a tarball upgrade fails', async () => {
+    const host = readyHost()
+    const tarball = '/root/dsh-auth-candidate.tgz'
+    host.addFile(tarball, 'tarball bytes\n', 0o644)
+    await runCli(['setup', ...SYSTEM_ARGS, '--package', tarball, '--password-stdin'], new FakeCliIo(false, [], [], PASSWORD), host)
+    expect(stateOf(host).profilePackageSpec).toBe(`file:${tarball}`)
+    // The setup tarball captured this build; a later plugin add of the file:
+    // spec must resolve the same bytes offline.
+    host.stashCliSnapshot()
+    host.promoteCliPackage('0.3.0')
+    const prior = host.commandHandler
+    host.commandHandler = command => {
+      const result = prior(command)
+      if (command.executable === '/opt/dsh/bin/dsh' && command.args.includes('add') && command.args.at(-1) === 'dsh-auth@0.3.0') {
+        host.addFile(`${BUNDLE_ROOT}/lib/foreign-build.txt`, 'not this build\n')
+      }
+      return result
+    }
+
+    const io = new FakeCliIo(false)
+    await expect(runCli([...UPGRADE_ARGS], io, host)).resolves.toBe(6)
+
+    // The recorded file: spec must restore with the same offline flags as the
+    // original absolute-path install, not as a registry resolution.
+    const restore = host.commands.find(command => command.args.includes('add') && command.args.at(-1) === `file:${tarball}`)
+    expect(restore?.args).toContain('--offline')
+    expect(restore?.args).toContain('--config.auto-install-peers=false')
+    expect(stateOf(host).status).toBe('installed')
+    await expect(runCli(['doctor', '--json'], new FakeCliIo(false), host)).resolves.toBe(0)
+  }, 30_000)
+
   it('rolls the bundle, binary, environment, and record back when Caddy validation fails', async () => {
     const host = readyHost()
     await setupInstalled(host)

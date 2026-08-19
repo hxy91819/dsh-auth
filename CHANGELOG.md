@@ -5,6 +5,7 @@
 ### Changes
 
 - ci: stop installing Nginx and maintaining leftover Nginx checks in daily CI and E2E.
+- fix: restore offline tarball installs when rolling back a `file:` profile spec.
 
 ## v0.2.2
 
