@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { runCli } from '../src/cli.js'
 import { verifyPassword } from '../src/password.js'
-import { FakeCliIo, FakeInstallerHost } from './installer-helpers.js'
+import { FakeCliIo, FakeInstallerHost, REPOSITORY_VERSION } from './installer-helpers.js'
 
 const PASSWORD = 'sufficient-system-password'
 const PACKAGE_VERSION = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { readonly version: string }).version
@@ -520,7 +520,7 @@ describe('trusted adoption of a pre-installed profile bundle', () => {
     expect(state.profilePackageInstalledByDshAuth).toBe(false)
     expect(state.profilePackageOrigin).toBe('external')
     expect(state.profilePackageSpec).toBe('^0.2.0')
-    expect(state.profilePackageVersion).toBe('0.2.0')
+    expect(state.profilePackageVersion).toBe(REPOSITORY_VERSION)
     expect(state.profilePackageBuildIdentity).toMatch(/^[0-9a-f]{64}$/u)
     expect(state.profilePackagePath).toBe(BUNDLE_ROOT)
     const doctorIo = new FakeCliIo(false)

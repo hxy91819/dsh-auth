@@ -1,7 +1,13 @@
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { CommandResult, CommandSpec, InstallerHost } from '../src/installer/types.js'
 import { CADDY_VERSION } from '../src/installer/caddy.js'
+
+/** The fake global CLI tracks the repository release so defaults stay in sync after version bumps. */
+export const REPOSITORY_VERSION
+  = (JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')) as { readonly version: string }).version
 
 interface FakeEntry {
   content: Buffer
@@ -84,7 +90,7 @@ export class FakeInstallerHost implements InstallerHost {
   }
 
   /** Install the CLI's own package tree the global anchor resolves to. */
-  installCliPackage(version = '0.2.0'): void {
+  installCliPackage(version = REPOSITORY_VERSION): void {
     this.addDirectory('/usr/lib/node_modules/dsh-auth/lib')
     this.addFile('/usr/lib/node_modules/dsh-auth/package.json', `${JSON.stringify({ name: 'dsh-auth', version }, null, 2)}\n`, 0o644)
     this.addFile('/usr/lib/node_modules/dsh-auth/lib/cli.js', 'export {}\n', 0o644)
@@ -213,6 +219,12 @@ export class FakeInstallerHost implements InstallerHost {
         if (this.fileExists(bundleRoot)) this.removeTreeEntries(bundleRoot)
         this.addDirectory(`${profileRoot}/node_modules`)
         this.installTreeCopy('/usr/lib/node_modules/dsh-auth', bundleRoot, requestedVersion)
+        // A registry add of dsh-auth@X resolves the published X build, so the
+        // copied tree reports that version even when the local CLI differs.
+        if (requestedVersion !== undefined) {
+          const bundleManifest = JSON.parse(this.readFile(`${bundleRoot}/package.json`)) as { version: string }
+          this.addFile(`${bundleRoot}/package.json`, `${JSON.stringify({ ...bundleManifest, version: requestedVersion }, null, 2)}\n`)
+        }
       } else if (verb === 'remove') {
         this.addFile(manifestPath, `${JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } } }, null, 2)}\n`)
         const bundleRoot = `${profileRoot}/node_modules/dsh-auth`
