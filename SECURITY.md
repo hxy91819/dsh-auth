@@ -97,7 +97,9 @@ System `setup`, `reset-password`, and `uninstall` run with root authority. The i
 
 Review `dsh-auth plan` before authorizing setup. Caddy is installed only from the exact binaries already bundled in the installed `dsh-auth` package. Setup never downloads a binary and never probes, reloads, or reuses a user Caddy or Nginx service.
 
-The installer owns only paths recorded in its validated state. Existing files or packages that it cannot prove ownership of are conflicts. Do not edit managed files in place or fabricate an ownership record. Use `--output-dir` when building images or generating artifacts without granting service-manager or host-filesystem authority.
+The installer owns only paths recorded in its validated state. Existing files or packages that it cannot prove ownership of are conflicts; a pre-installed profile bundle is adopted only when its package name, version, and content build identity equal the running global CLI's, and adopted bundles keep external ownership through rollback and uninstall. Do not edit managed files in place or fabricate an ownership record. Use `--output-dir` when building images or generating artifacts without granting service-manager or host-filesystem authority.
+
+`upgrade` is the only supported way to move a managed installation to a new build. It refuses unhealthy, drifted, same-version, and downgrade targets, journals each transaction phase in the ownership record, and restores the recorded build on failure. The managed environment file pins the installed bundle version: after an unmanaged `dsh plugin` update the Web service fails closed on boot instead of running an unverified build behind the authentication edge. Recover with the `doctor` remediation order: restore the recorded bundle, confirm doctor is healthy, then upgrade.
 
 Installer safety does not protect against a malicious package artifact, compromised package registry, compromised operating-system repository, or already-compromised root environment. Pin and verify the package source appropriate to the deployment's supply-chain policy.
 

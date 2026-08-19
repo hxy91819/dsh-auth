@@ -25,6 +25,12 @@ sudo dsh-auth setup
 sudo npm install -g dsh-auth@0.2.0
 ```
 
+### Plugin pre-install is not enabled authentication
+
+`dsh plugin --profile web add dsh-auth` (or a local tarball) only adds the bundle to the Web profile. With both core environment variables absent the bundle stays dormant: Web keeps booting normally, no authentication routes or settings UI appear, and nothing is exposed. A partially supplied configuration still fails loudly instead of booting. Enabling authentication always requires the globally installed CLI and `sudo dsh-auth setup`; the plugin command never creates secrets, installs Caddy, or protects anything.
+
+When setup finds a pre-installed bundle whose package name, version, and build content exactly match the running CLI, it adopts it: no package is reinstalled, and the bundle keeps external ownership. Any other pre-installed build is refused before the host changes. Rollback and uninstall leave an adopted bundle in place; without managed configuration it simply returns to dormancy.
+
 The interactive installer asks for the exact DSH service, administrator initialization method, HTTPS hostname, and TLS mode; shows a secret-free plan; and changes the system only after you type the exact confirmation. It installs the pinned bundle into the selected DSH profile, copies a checksum-verified Caddy binary bundled in the same package, writes permission-restricted authentication state, and enables an independent `dsh-auth-caddy.service`. It never stores a plaintext password and never downloads Caddy at setup time.
 
 Normal deployment requires Linux x64 or ARM64, systemd, Node.js 24.7 or newer, and DSH Web 0.1.0-rc.7. Automatic TLS is the HTTPS default. Manual TLS requires an existing certificate and key.
@@ -140,6 +146,7 @@ Other commands accept a smaller frozen flag set:
 |---|---|---|
 | `plan` | Same setup flags, without a password source | `--json`, `--non-interactive` |
 | `doctor` | | `--json` |
+| `upgrade` | `--authorize-upgrade` | `--package`, `--json`, `--non-interactive`, `--dry-run` |
 | `reset-password` | `--password-file` or `--password-stdin`; `--authorize-password-reset` | `--json`, `--non-interactive` |
 | `uninstall` | `--authorize-uninstall` | `--json`, `--non-interactive`, `--dry-run` |
 | `issue-login-token` | `--authorize-login-token-issue` when not prompting | `--ttl-seconds`, `--auth-state-file` with `--public-origin`, `--json` |
@@ -241,7 +248,7 @@ sudo dsh-auth doctor
 sudo dsh-auth doctor --json
 ```
 
-`uninstall --dry-run` lists only files and profile changes proven by the ownership record. Interactive uninstall requires typing `uninstall`; automation requires the exact `--authorize-uninstall` flag. The independent Caddy unit is removed; a user-installed Caddy or Nginx is never touched.
+`uninstall --dry-run` lists only files and profile changes proven by the ownership record. Interactive uninstall requires typing `uninstall`; automation requires the exact `--authorize-uninstall` flag. The independent Caddy unit is removed; a user-installed Caddy or Nginx is never touched. An adopted, externally pre-installed bundle is preserved and simply becomes dormant again.
 
 ```sh
 sudo dsh-auth uninstall --dry-run
@@ -249,6 +256,27 @@ sudo dsh-auth uninstall
 ```
 
 schema v1 ownership records, old Nginx flags, and old plugin identity fields are refused with a reinstall diagnosis. There is no automatic migration. Old sessions become invalid after uninstall and a new setup.
+
+## Managed upgrades
+
+`upgrade` moves a healthy v2 installation to the build of the currently installed global CLI. Install the newer CLI first, then run:
+
+```sh
+sudo npm install -g dsh-auth@0.2.1
+sudo dsh-auth upgrade
+```
+
+The profile bundle, bundled Caddy binary, environment marker, ownership record, and both services move together; administrator credentials, the session secret, and existing sessions survive. Any failing step rolls everything back to the recorded build. Same-version reinstalls and downgrades are refused, and `--package /path/dsh-auth-VERSION.tgz` pins an offline source. Interactive upgrade requires typing `upgrade`; automation requires `--non-interactive --authorize-upgrade`.
+
+Updating the profile bundle through plain `dsh plugin` (instead of `dsh-auth upgrade`) creates version drift. The Web service then fails closed on restart instead of running an unverified build behind the authentication edge. `doctor` reports the drift with a fixed recovery order:
+
+```sh
+dsh plugin --profile web add <recorded-package-spec>   # restore the recorded build
+sudo dsh-auth doctor                                   # must report healthy again
+sudo dsh-auth upgrade                                  # only then upgrade
+```
+
+If the old artifact is no longer available or restores to a different build, doctor keeps failing: pin the recorded version from your trusted source, or uninstall and set up again.
 
 ## Exit codes
 

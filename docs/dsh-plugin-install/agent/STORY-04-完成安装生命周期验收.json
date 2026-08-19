@@ -3,12 +3,12 @@
   "schema_version": 1,
   "story": "STORY-04",
   "intent_version": 2,
-  "status": "todo",
-  "owner": "待领取",
+  "status": "done",
+  "owner": "opencode",
   "blocker": "无",
   "status_updated": "2026-08-19",
-  "refreshed": "待领取",
-  "code_baseline": "待领取",
+  "refreshed": "2026-08-19",
+  "code_baseline": "792c552",
   "owns": [
     "LIFECYCLE_ACCEPTANCE"
   ],
@@ -24,32 +24,32 @@
   "claim_checks": "确认 STORY-03 已完成且无 blocker；intent_version=2；固定最新 DSH、Node、Caddy、Chrome、systemd 和打包基线；检查工作区与远端 acceptance commit。",
   "checklist": [
     {
-      "done": false,
+      "done": true,
       "text": "固定完整生命周期场景和发布门禁分母。"
     },
     {
-      "done": false,
+      "done": true,
       "text": "完成真实 DSH、Caddy、systemd 和浏览器验收。"
     },
     {
-      "done": false,
+      "done": true,
       "text": "验证升级、漂移恢复、回滚、卸载和再次休眠。"
     },
     {
-      "done": false,
+      "done": true,
       "text": "更新公共安装、安全、升级和修复文档。"
     },
     {
-      "done": false,
+      "done": true,
       "text": "检查发布包、秘密、Git 元数据和差异。"
     },
     {
-      "done": false,
+      "done": true,
       "text": "记录最终证据并形成发布结论。"
     }
   ],
   "steps": "先冻结验收矩阵；构建唯一候选；依次执行预安装、休眠、接管、认证、升级、漂移、恢复旧 bundle、doctor 复检、再次升级、卸载和再启动；更新文档；最后执行全部发布检查。",
-  "verification": "至少包含 check、check:caddy、test:e2e、installer E2E、npm pack dry-run、pack smoke、版本漂移恢复链、秘密扫描和 git diff --check；记录候选 checksum 与固定分母。",
+  "verification": "真实生命周期 E2E（scripts/lifecycle-e2e.mjs，特权 systemd 容器 ubuntu24-systemd，DSH 0.1.0-rc.7 + 内置 Caddy + 真实 systemd 单元）全部通过：官方 dsh plugin 预安装→休眠启动（无 roster/无路由）；同构建 setup 接管（未重装、状态 origin=external、doctor 健康、Caddy 边缘登录成功）；受管升级 0.2.0→0.2.1（bundle/Caddy/记录/服务一致、DSH_AUTH_EXPECTED_VERSION 重写、会话跨重启存活、doctor 健康）；外部漂移（service 重启失败关闭、doctor 退出码 8 且 remediation 指向记录 spec 的 dsh plugin 恢复命令、upgrade 拒绝）；按固定顺序恢复→doctor 恢复健康→再升级 0.2.2 成功；旧版 CLI 降级退出码 4；uninstall 保留外部 bundle 且 Web 回到休眠；自装生命周期（setup --package 自装、卸载移除 bundle、Web 回到休眠）。候选 sha256 见 STORY-04-candidate-sha256.txt。发布检查：pnpm run check 19 文件 188 测试、check:caddy、test:e2e、pack-smoke、installer-e2e、npm pack --dry-run（109 文件，双架构 Caddy 齐全）、秘密扫描（tracked 文件无凭据）、git diff --check 全部退出码 0。注意：宿主机存在活跃生产 dsh-auth 安装，system 模式验收全部在隔离容器完成，未触碰宿主 /etc/dsh-auth 与生产端口；并行会话的其他功能改动未纳入本提交。",
   "stop_conditions": "最新 DSH 改变插件或 Loader 契约；验收需要修改 DSH 上游；Caddy 或认证边界变化；发布物不再是单包时停止并请求确认。",
-  "handoff": "记录 Epic 的起止版本、候选身份、全部门禁、外部副作用、清理、残余风险和公开发布结论。"
+  "handoff": "Epic 起止：99e29cf..本提交，四个 Story 全部 done。候选身份：dsh-auth-0.2.0/0.2.1/0.2.2 tarball（sha256 见证据）。公共文档已区分“已预安装”与“认证已启用”（README Plugin pre-install 节），新增 Managed upgrades 与漂移三步恢复说明，SECURITY/installer/releasing 同步。环境事实：DSH rc.7 的 web profile 在容器内需要 node --expose-internals（HMR 服务要求），一次性单元已带上；宿主 check:caddy/test:e2e 不能与特权 docker 容器同时运行（容器网络干扰宿主 loopback 校验）。残留风险：上游 Loader/dsh plugin 行为变化需刷新基线（风险登记已列）；本 worktree 有并行会话的 --behind-tls-proxy 功能改动，保持未提交，未受影响。发布结论：RELEASE 门禁满足，dsh-plugin-install 全部能力（安全预安装、可信接管、受管升级、生命周期验收）已在真实 DSH+Caddy+systemd 上闭环验证。"
 }

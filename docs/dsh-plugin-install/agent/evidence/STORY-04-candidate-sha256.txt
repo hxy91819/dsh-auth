@@ -1,0 +1,3 @@
+8748247d07cb756ba3a4c0e06a493eec87740d52bd7281f75e1faa41908043ec  /tmp/opencode/s04/artifacts/dsh-auth-0.2.0.tgz
+ab3755df59c92e3d6ff301f016b250bdd7d574b0a36961762fe8607aae8b2f6f  /tmp/opencode/s04/artifacts/dsh-auth-0.2.1.tgz
+e55b7169a7598d4b45ca0306f5d5b8ea3fba90f4eb2ff40591f20710fb6b4120  /tmp/opencode/s04/artifacts/dsh-auth-0.2.2.tgz
