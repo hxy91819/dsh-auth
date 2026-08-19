@@ -137,6 +137,41 @@ jobs:
           TARBALL="release/dsh-auth-${RELEASE_VERSION}.tgz"
           pnpm run test:e2e -- "$TARBALL"
 
+      - name: Run packed authentication E2E behind an outer TLS proxy
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          RELEASE_VERSION="${RELEASE_TAG#v}"
+          TARBALL="release/dsh-auth-${RELEASE_VERSION}.tgz"
+          pnpm run test:e2e:behind-tls-proxy -- "$TARBALL"
+
+      - name: Run packed managed lifecycle E2E in systemd
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          RELEASE_VERSION="${RELEASE_TAG#v}"
+          IMAGE="dsh-auth-systemd-e2e:${GITHUB_SHA}"
+          CONTAINER="dsh-auth-systemd-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker build --file .github/systemd-e2e.Dockerfile --tag "$IMAGE" .github
+          docker run --detach --init=false --privileged --security-opt label=disable \
+            --name "$CONTAINER" --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
+            --volume "$PWD:/source:ro" "$IMAGE"
+          cleanup() { docker rm --force "$CONTAINER" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          for attempt in {1..30}; do
+            STATE="$(docker exec "$CONTAINER" systemctl is-system-running 2>/dev/null || true)"
+            if [ "$STATE" = running ] || [ "$STATE" = degraded ]; then break; fi
+            sleep 1
+          done
+          [[ "$STATE" == "running" || "$STATE" == "degraded" ]]
+          docker exec "$CONTAINER" bash -lc 'mkdir /checkout && cp -a /source/. /checkout/'
+          docker exec --env "LIFECYCLE_TARBALL_BASE=/checkout/release/dsh-auth-${RELEASE_VERSION}.tgz" \
+            "$CONTAINER" bash -lc 'cd /checkout && corepack pnpm run test:e2e:lifecycle'
+          node scripts/release-validation.mjs artifact-verify \
+            --tag "$RELEASE_TAG" --directory release --manifest release/manifest.json
+
       - name: Require and test the current npm latest Harness
         env:
           RELEASE_TAG: ${{ inputs.tag }}

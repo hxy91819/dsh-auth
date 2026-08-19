@@ -15,6 +15,7 @@ import http2 from 'node:http2'
 import WebSocket from 'ws'
 import { renderCaddyfile } from './caddy-config.mjs'
 import { prepareCaddyRelease } from './caddy-release.mjs'
+import { renderCaddyfile as renderInstallerCaddyfile } from '../lib/installer/caddy.js'
 
 const checkout = resolve(import.meta.dirname, '..')
 const HELP = `Usage:
@@ -38,6 +39,7 @@ Environment:
   DSH_E2E_CADDY_BIN   Absolute Caddy executable (default: verified test binary).
   DSH_E2E_CADDY_TLS   manual or internal (default: manual).
   DSH_E2E_BOOTSTRAP   password or login-token (default: login-token).
+  DSH_E2E_TOPOLOGY    direct or behind-tls-proxy (default: direct).
 
 Outputs:
   Writes a JSON behavior summary to stdout and exits 0 on success. Failures
@@ -102,6 +104,13 @@ const bootstrap = process.env.DSH_E2E_BOOTSTRAP ?? 'login-token'
 if (bootstrap !== 'password' && bootstrap !== 'login-token') {
   throw new Error('DSH_E2E_BOOTSTRAP must be password or login-token')
 }
+const topology = process.env.DSH_E2E_TOPOLOGY ?? 'direct'
+if (topology !== 'direct' && topology !== 'behind-tls-proxy') {
+  throw new Error('DSH_E2E_TOPOLOGY must be direct or behind-tls-proxy')
+}
+if (topology === 'behind-tls-proxy' && edgeRuntime !== 'caddy') {
+  throw new Error('DSH_E2E_TOPOLOGY=behind-tls-proxy requires DSH_E2E_EDGE=caddy')
+}
 const root = mkdtempSync(join(tmpdir(), 'dsh-auth-real-integration-'))
 const home = join(root, 'dsh-home')
 const secrets = join(root, 'managed')
@@ -113,6 +122,7 @@ mkdirSync(nginxRoot, { recursive: true })
 
 let dshProcess
 let edgeProcess
+let innerEdgeProcess
 let chromeProcess
 let caddyExecutable
 
@@ -170,6 +180,34 @@ function checked(command, args, options = {}) {
   if (result.error !== undefined) throw result.error
   if (result.status !== 0) throw new Error(`${command} failed\n${result.stdout}${result.stderr}`)
   return result.stdout
+}
+
+function outerTlsProxyConfig(httpPort, httpsPort, innerPort, certificate, key) {
+  return `{
+\tadmin off
+\tauto_https off
+}
+
+http://localhost:${String(httpPort)}, http://:${String(httpPort)} {
+\tbind 127.0.0.1
+\t@invalid_host not host localhost
+\trespond @invalid_host 421
+\tredir https://localhost:${String(httpsPort)}{uri} 308
+}
+
+https://localhost:${String(httpsPort)}, https://:${String(httpsPort)} {
+\tbind 127.0.0.1
+\ttls ${JSON.stringify(certificate)} ${JSON.stringify(key)}
+\t@invalid_host not host localhost
+\trespond @invalid_host 421
+\treverse_proxy 127.0.0.1:${String(innerPort)} {
+\t\theader_up Host {upstream_hostport}
+\t\theader_up X-Forwarded-Host localhost:${String(httpsPort)}
+\t\theader_up X-Forwarded-Proto https
+\t\theader_up X-Real-IP {remote_host}
+\t}
+}
+`
 }
 
 function packageTarball() {
@@ -566,7 +604,7 @@ async function verifyDormantPreinstall(authStateFile) {
   return { dormantBoot: 'web usable without auth surface', partialConfig: `exit ${String(partialExit)}` }
 }
 
-// eslint-disable-next-line max-lines-per-function, max-statements -- 真实 E2E 按部署→令牌或密码登录→受保护资源→重启→浏览器的时间顺序编排；STORY-06 将契约改为 v2 authStateFile 与默认 Caddy。
+// eslint-disable-next-line complexity, max-lines-per-function, max-statements -- 真实 E2E 按拓扑部署→令牌或密码登录→受保护资源→重启→浏览器的时间顺序编排，拆散会隐藏跨层状态关系。
 async function main() {
   const tarball = packageTarball()
   const harnessVersion = checked(dshExecutable, ['--version']).trim()
@@ -591,6 +629,7 @@ async function main() {
   const dshPort = await availablePort()
   const httpPort = await availablePort()
   const httpsPort = await availablePort()
+  const innerPort = await availablePort()
   const chromePort = await availablePort()
   const dshEnvironment = {
     ...process.env,
@@ -600,6 +639,7 @@ async function main() {
     DSH_AUTH_LOGIN_TOKEN_ENABLED: 'true',
     DSH_AUTH_LOGIN_TOKEN_DIRECTORY: layout.tokenDirectory,
     DSH_AUTH_TRUSTED_PROXY_ADDRESSES: edgeRuntime === 'nginx' ? '127.0.0.2' : '127.0.0.1,::1',
+    DSH_AUTH_SECURE_COOKIES: 'true',
     DSH_AUTH_SESSION_RENEWAL_SECONDS: '1',
   }
   dshProcess = child(dshExecutable, ['web', '--port', String(dshPort)], { cwd: launchCwd, env: dshEnvironment })
@@ -614,7 +654,53 @@ async function main() {
     'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
     '-subj', '/CN=localhost', '-keyout', key, '-out', certificate,
   ])
-  if (edgeRuntime === 'nginx') {
+  if (topology === 'behind-tls-proxy') {
+    const innerConfig = join(nginxRoot, 'Caddyfile.inner')
+    writeFileSync(innerConfig, renderInstallerCaddyfile({
+      mode: 'http', behindTlsProxy: true, profile: 'web', packageSource: tarball,
+      adminBootstrap: bootstrap, loginTokenEnabled: true,
+      upstream: `127.0.0.1:${String(dshPort)}`, listenAddress: '127.0.0.1',
+      httpPort: innerPort, httpsPort: 443,
+    }, false, nginxRoot))
+    const innerEnvironment = {
+      ...process.env,
+      XDG_DATA_HOME: join(nginxRoot, 'inner-data'),
+      XDG_CONFIG_HOME: join(nginxRoot, 'inner-config'),
+    }
+    checked(caddyExecutable, ['validate', '--config', innerConfig, '--adapter', 'caddyfile'], { env: innerEnvironment })
+    innerEdgeProcess = child(caddyExecutable, ['run', '--config', innerConfig, '--adapter', 'caddyfile'], {
+      cwd: checkout,
+      env: innerEnvironment,
+    })
+    await waitUntil(async () => (await requestHttp(innerPort, '/')).status === 421, 'inner HTTP edge', [
+      { name: 'DSH', process: dshProcess },
+      { name: 'inner Caddy', process: innerEdgeProcess },
+    ])
+    const invalidForwarding = await requestHttp(innerPort, '/', {
+      headers: {
+        'x-forwarded-host': `localhost:${String(httpsPort)}`,
+        'x-forwarded-proto': 'http',
+        'x-real-ip': '127.0.0.1',
+      },
+    })
+    assert(invalidForwarding.status === 421, 'inner HTTP edge accepted a non-HTTPS forwarded protocol')
+
+    const outerConfig = join(nginxRoot, 'Caddyfile.outer')
+    const formattedOuter = checked(caddyExecutable, ['fmt', '-'], {
+      input: outerTlsProxyConfig(httpPort, httpsPort, innerPort, certificate, key),
+    })
+    writeFileSync(outerConfig, formattedOuter)
+    const outerEnvironment = {
+      ...process.env,
+      XDG_DATA_HOME: join(nginxRoot, 'outer-data'),
+      XDG_CONFIG_HOME: join(nginxRoot, 'outer-config'),
+    }
+    checked(caddyExecutable, ['validate', '--config', outerConfig, '--adapter', 'caddyfile'], { env: outerEnvironment })
+    edgeProcess = child(caddyExecutable, ['run', '--config', outerConfig, '--adapter', 'caddyfile'], {
+      cwd: checkout,
+      env: outerEnvironment,
+    })
+  } else if (edgeRuntime === 'nginx') {
     const replacements = new Map([
       ['${DSH_UPSTREAM}', `127.0.0.1:${String(dshPort)}`],
       ['${DSH_HTTP_LISTEN}', `127.0.0.1:${String(httpPort)}`],
@@ -660,6 +746,7 @@ async function main() {
   }
   await waitUntil(async () => (await request(httpsPort, '/auth/login')).status === 200, edgeRuntime, [
     { name: 'DSH', process: dshProcess },
+    ...(innerEdgeProcess === undefined ? [] : [{ name: 'inner Caddy', process: innerEdgeProcess }]),
     { name: edgeRuntime, process: edgeProcess },
   ])
 
@@ -670,6 +757,7 @@ async function main() {
   ], { cwd: checkout })
   await waitUntil(async () => (await fetch(`http://127.0.0.1:${String(chromePort)}/json/version`)).ok, 'Chrome', [
     { name: 'DSH', process: dshProcess },
+    ...(innerEdgeProcess === undefined ? [] : [{ name: 'inner Caddy', process: innerEdgeProcess }]),
     { name: edgeRuntime, process: edgeProcess },
     { name: 'Chrome', process: chromeProcess },
   ])
@@ -715,6 +803,10 @@ async function main() {
       && loginRedirect.searchParams.get('returnTo') === '/',
     `page redirect did not preserve a safe same-origin path (${String(pageDenied.headers.location)})`,
   )
+  if (topology === 'behind-tls-proxy') {
+    assert(pageDenied.headers.location === '/auth/login?returnTo=%2F', 'proxied login redirect was not relative')
+    assert(pageDenied.headers['strict-transport-security'] === 'max-age=31536000', 'inner edge did not emit HSTS through the TLS proxy')
+  }
   assert((await request(httpsPort, '/api/host.describe')).status === 401, 'unauthenticated API was not 401')
   assert((await request(httpsPort, '/auth/verify')).status === 404, 'verify route was public')
   assert((await request(httpsPort, '/auth/browser-bootstrap.js')).status === 404, 'HTTP compatibility script was served in HTTPS mode')
@@ -735,9 +827,16 @@ async function main() {
     await completeTokenOnboarding(httpsPort, chromePort, layout.authStateFile, username, password)
   }
 
-  const login = await request(httpsPort, '/auth/login?returnTo=%2Fworkspace')
+  const login = await request(httpsPort, '/auth/login?returnTo=%2Fworkspace', {
+    headers: topology === 'behind-tls-proxy'
+      ? { 'x-forwarded-host': 'attacker.invalid', 'x-forwarded-proto': 'http', 'x-real-ip': '203.0.113.9' }
+      : {},
+  })
   const loginHtml = login.body.toString('utf8')
   const csrf = cookiePair(login.headers['set-cookie'], '__Host-dsh_auth_csrf')
+  for (const attribute of ['Secure', 'SameSite=Lax', 'Path=/']) {
+    assert(csrf.field.includes(attribute), `CSRF cookie omitted ${attribute}`)
+  }
   const commonPostHeaders = {
     origin: `https://localhost:${String(httpsPort)}`,
     'content-type': 'application/x-www-form-urlencoded',
@@ -901,6 +1000,7 @@ async function main() {
     preinstall: preinstall.dormantBoot,
     partialPreinstall: preinstall.partialConfig,
     edgeRuntime,
+    topology,
     bootstrap,
     http2: 200,
     harnessUiSettings: 'live locale/theme sync',
@@ -925,6 +1025,7 @@ async function main() {
     logoutRevocation: 401,
     tamperedCookie: 401,
     dshBind: '127.0.0.1',
+    ...(topology === 'behind-tls-proxy' ? { innerEdge: 'loopback HTTP, forwarded HTTPS required' } : {}),
     ...(bootstrap === 'login-token' ? { tokenOnboarding: 'later then setup', containerTokenIssue: 'json v2' } : {}),
   }, undefined, 2) + '\n')
 }
@@ -933,6 +1034,7 @@ try {
   await main()
 } finally {
   await terminate(edgeProcess)
+  await terminate(innerEdgeProcess)
   await terminate(dshProcess)
   await terminate(chromeProcess)
   rmSync(root, { recursive: true, force: true })

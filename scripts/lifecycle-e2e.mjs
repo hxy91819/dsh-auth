@@ -18,14 +18,14 @@ const HELP = `Usage:
   node scripts/lifecycle-e2e.mjs
 
 Description:
-  Build three release candidates (0.2.0 base plus two bumped builds), then
+  Build the current release candidate plus two patch-bumped builds, then
   prove the full installation lifecycle on real DSH, systemd, and the bundled
   Caddy edge. Requires root, systemd, npm, and the local dsh dependency.
 
 Environment:
   LIFECYCLE_KEEP_ON_FAILURE  Set to any value to keep the disposable root
                              for inspection when the run fails.
-  LIFECYCLE_TARBALL_BASE     Optional prebuilt base tarball (0.2.0) used
+  LIFECYCLE_TARBALL_BASE     Optional prebuilt current-version tarball used
                              instead of packing in-process.
   LIFECYCLE_TARBALL_UPGRADE  Optional prebuilt first upgrade tarball.
   LIFECYCLE_TARBALL_RECOVER  Optional prebuilt second upgrade tarball.
@@ -111,6 +111,11 @@ function bumpedPatch(manifestPath, offset) {
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
   const [major, minor, patch] = manifest.version.split('.').map(Number)
   return `${String(major)}.${String(minor)}.${String(patch + offset)}`
+}
+
+function candidateVersions(manifestPath) {
+  const base = JSON.parse(readFileSync(manifestPath, 'utf8')).version
+  return { base, upgrade: bumpedPatch(manifestPath, 1), recover: bumpedPatch(manifestPath, 2) }
 }
 
 function packVersion(version) {
@@ -213,6 +218,51 @@ async function login(edgePort, username, password) {
   return (response.headers.getSetCookie?.() ?? []).find(field => field.startsWith('dsh_auth_session='))?.split(';')[0]
 }
 
+function forwardedHeaders(origin) {
+  const authority = new URL(origin).host
+  return {
+    'x-forwarded-host': authority,
+    'x-forwarded-proto': 'https',
+    'x-real-ip': '127.0.0.1',
+  }
+}
+
+async function waitProxiedEdge(port, origin) {
+  const deadline = Date.now() + 45_000
+  let lastError
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${String(port)}/auth/token`, { headers: forwardedHeaders(origin) })
+      if (response.status === 200) return
+    } catch (error) {
+      lastError = error
+    }
+    await new Promise(resolveTimeout => setTimeout(resolveTimeout, 250))
+  }
+  throw new Error(`proxied edge did not become ready: ${lastError instanceof Error ? lastError.message : String(lastError)}`)
+}
+
+async function redeemSystemLoginToken(edgePort, origin, token) {
+  const bridge = await fetch(`http://127.0.0.1:${String(edgePort)}/auth/token`, { headers: forwardedHeaders(origin) })
+  const html = await bridge.text()
+  const cookie = (bridge.headers.getSetCookie?.() ?? []).find(field => field.startsWith('__Host-dsh_auth_csrf='))
+  const csrf = /<meta name="dsh-auth-csrf" content="([^"]*)">/u.exec(html)?.[1]?.replaceAll('&amp;', '&')
+  assert(bridge.status === 200 && cookie !== undefined && csrf !== undefined, 'proxied token bridge did not provide CSRF state')
+  assert(cookie.includes('Secure') && cookie.includes('Path=/'), 'proxied token bridge did not emit a Secure __Host- cookie')
+  const response = await fetch(`http://127.0.0.1:${String(edgePort)}/auth/token`, {
+    method: 'POST',
+    headers: {
+      ...forwardedHeaders(origin),
+      origin,
+      cookie: cookie.split(';', 1)[0],
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({ csrf, token }).toString(),
+    redirect: 'manual',
+  })
+  assert(response.status === 303 && response.headers.get('location') === '/auth/admin/setup?returnTo=%2F', 'system-issued token did not redeem through the proxied edge')
+}
+
 function readState() {
   return JSON.parse(readFileSync('/etc/dsh-auth/install-state.json', 'utf8'))
 }
@@ -221,12 +271,62 @@ function cli(command, args) {
   return allowFailure(join(globalPrefix, 'bin', 'dsh-auth'), [command, '--json', ...args], { cwd: root })
 }
 
+async function verifyProxiedSystemLifecycle(tarball) {
+  cleanupUnit()
+  const home = join(root, 'dsh-proxied-home')
+  mkdirSync(join(home, 'profiles'), { mode: 0o700, recursive: true })
+  const webPort = await availablePort()
+  const edgePort = await availablePort()
+  const unit = await createService(home, webPort)
+  const setup = cli('setup', [
+    '--non-interactive', '--dsh-service', unit, '--dsh-executable', dshWrapper,
+    '--mode', 'http', '--listen-address', '127.0.0.1', '--behind-tls-proxy',
+    '--http-port', String(edgePort), '--upstream', `127.0.0.1:${String(webPort)}`,
+    '--admin-bootstrap', 'login-token', '--login-token', 'enabled', '--package', tarball,
+  ])
+  assert(setup.status === 0, `proxied setup failed\n${setup.stdout}${setup.stderr}`)
+  const firstOriginPort = await availablePort()
+  let secondOriginPort = await availablePort()
+  while (secondOriginPort === firstOriginPort) secondOriginPort = await availablePort()
+  const firstOrigin = `https://localhost:${String(firstOriginPort)}`
+  const secondOrigin = `https://localhost:${String(secondOriginPort)}`
+  await waitProxiedEdge(edgePort, firstOrigin)
+  assert((await fetch(`http://127.0.0.1:${String(edgePort)}/`)).status === 421, 'proxied inner edge accepted missing forwarding metadata')
+  assert(readFileSync('/etc/dsh-auth/dsh-auth.env', 'utf8').includes('DSH_AUTH_SECURE_COOKIES=true'), 'proxied system install disabled Secure cookies')
+
+  const stateBeforeIssue = readFileSync('/etc/dsh-auth/install-state.json', 'utf8')
+  assert(!stateBeforeIssue.includes(firstOrigin) && !stateBeforeIssue.includes(secondOrigin), 'setup state contained a dynamic public origin')
+  assert(cli('issue-login-token', ['--non-interactive', '--authorize-login-token-issue']).status === 2, 'proxied system issue accepted a missing public origin')
+  assert(cli('issue-login-token', [
+    '--non-interactive', '--authorize-login-token-issue', '--public-origin', `http://127.0.0.1:${String(firstOriginPort)}`,
+  ]).status === 2, 'proxied system issue accepted a plain HTTP public origin')
+
+  const issue = origin => {
+    const result = cli('issue-login-token', [
+      '--non-interactive', '--authorize-login-token-issue', '--public-origin', origin,
+    ])
+    assert(result.status === 0, `proxied system token issue failed for ${origin}`)
+    const document = JSON.parse(result.stdout)
+    assert(document.loginUrl === `${origin}/auth/token#token=${document.token}`, 'proxied system token URL used the wrong public origin')
+    return document
+  }
+  const firstIssue = issue(firstOrigin)
+  await redeemSystemLoginToken(edgePort, firstOrigin, firstIssue.token)
+  const secondIssue = issue(secondOrigin)
+  await redeemSystemLoginToken(edgePort, secondOrigin, secondIssue.token)
+  assert(readFileSync('/etc/dsh-auth/install-state.json', 'utf8') === stateBeforeIssue, 'dynamic public-origin token issue changed setup state or fingerprint')
+  assert(cli('doctor', []).status === 0, 'doctor rejected the proxied system installation after origin changes')
+  const uninstall = cli('uninstall', ['--non-interactive', '--authorize-uninstall'])
+  assert(uninstall.status === 0, `proxied uninstall failed\n${uninstall.stdout}${uninstall.stderr}`)
+  checked('/usr/bin/systemctl', ['restart', unit])
+  await dormantAssertions(webPort, 'proxied post-uninstall')
+  return 'system issue at two dynamic HTTPS origins, both redeemed, setup state unchanged'
+}
+
 async function main() {
   mkdirSync(join(root, 'artifacts'), { recursive: true })
   const manifestPath = join(checkout, 'package.json')
-  const baseVersion = JSON.parse(readFileSync(manifestPath, 'utf8')).version
-  const upgradeVersion = bumpedPatch(manifestPath, 1)
-  const recoverVersion = bumpedPatch(manifestPath, 2)
+  const { base: baseVersion, upgrade: upgradeVersion, recover: recoverVersion } = candidateVersions(manifestPath)
   const tarballA = prebuiltOrPack('LIFECYCLE_TARBALL_BASE')
   const tarballB = prebuiltOrPack('LIFECYCLE_TARBALL_UPGRADE', upgradeVersion)
   const tarballC = prebuiltOrPack('LIFECYCLE_TARBALL_RECOVER', recoverVersion)
@@ -389,6 +489,9 @@ async function main() {
   checked('/usr/bin/systemctl', ['restart', selfUnit])
   await dormantAssertions(selfPort, 'self post-uninstall')
   summary.selfInstall = 'setup installs and owns the bundle, uninstall removes it'
+
+  // 9. A proxied system install takes each public HTTPS origin only when issuing a token.
+  summary.behindTlsProxy = await verifyProxiedSystemLifecycle(tarballC)
   summary.harness = checked(dshCli, ['--version']).trim()
 
   process.stdout.write(`${JSON.stringify(summary, undefined, 2)}\n`)
