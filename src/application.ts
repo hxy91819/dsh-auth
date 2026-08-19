@@ -11,6 +11,7 @@ import {
   adminSetupPage,
   loginPage,
   tokenBridgePage,
+  tokenDeniedPage,
   tokenFailurePage,
   tokenRateLimitedPage,
   type AuthMessage,
@@ -157,14 +158,19 @@ export class AuthApplication {
       write(res, 404, 'not found')
     } catch (error) {
       if (error instanceof HttpError) {
+        const reason = this.httpErrorReason(error)
         this.logger.warn({
           event: 'auth.request.denied',
           route,
           method: req.method ?? 'UNKNOWN',
           clientId: this.clientId(req),
           status: error.status,
-          reason: this.httpErrorReason(error),
+          reason,
         })
+        if (route === '/token' && (reason === 'origin_denied' || reason === 'csrf_denied')) {
+          writeTokenHtml(res, error.status, tokenDeniedPage(resolveUiPreferences(req, this.readHarnessUiSettings())))
+          return
+        }
         write(res, error.status, error.message, { 'cache-control': 'no-store' })
         return
       }

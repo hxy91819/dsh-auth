@@ -83,6 +83,7 @@ async function redeem(baseUrl: string, token: string, overrides: {
   readonly csrf?: string
   readonly origin?: string | false
   readonly fetchSite?: string
+  readonly acceptLanguage?: string
 } = {}): Promise<Response> {
   const { cookie, csrf } = await bridgePage(baseUrl)
   const headers: Record<string, string> = {
@@ -93,6 +94,7 @@ async function redeem(baseUrl: string, token: string, overrides: {
   if (overrides.origin === false) delete headers.origin
   else if (overrides.origin !== undefined) headers.origin = overrides.origin
   if (overrides.fetchSite !== undefined) headers['sec-fetch-site'] = overrides.fetchSite
+  if (overrides.acceptLanguage !== undefined) headers['accept-language'] = overrides.acceptLanguage
   return await fetch(`${baseUrl}/auth/token`, {
     method: 'POST',
     redirect: 'manual',
@@ -166,6 +168,58 @@ describe('token bridge page', () => {
       headers: { ...proxyHeaders(), 'content-type': 'application/x-www-form-urlencoded' },
       body: 'csrf=x&token=y',
     })).status).toBe(404)
+  })
+})
+
+describe('token authenticity denials', () => {
+  it('renders a shared security-check page for Origin and CSRF denials without consuming the token', async () => {
+    const credentials = await testCredentials()
+    const harness = await tokenHarness(credentials, {
+      config: { loginTokenFailureMessageEn: 'Custom unavailable token message' },
+    })
+    const issued = harness.store.issue({ ttlSeconds: 300 })
+
+    const originDenied = await redeem(harness.baseUrl, issued.token, { origin: 'https://evil.example' })
+    expect(originDenied.status).toBe(403)
+    expect(originDenied.headers.get('cache-control')).toBe('no-store, max-age=0')
+    expect(originDenied.headers.get('content-type')).toContain('text/html')
+    const originBody = await originDenied.text()
+    expect(originBody).toContain('failed a security check')
+    expect(originBody).toContain('public access address')
+    expect(originBody).not.toContain('invalid, expired, or already used')
+    expect(originBody).not.toContain('Custom unavailable token message')
+    expect(originBody).not.toContain('cross-origin')
+    expect(originBody).not.toContain('CSRF')
+    expect(originBody).not.toContain(issued.token)
+    expect(originBody).not.toContain('evil.example')
+
+    const csrfPage = await bridgePage(harness.baseUrl)
+    const csrfDenied = await fetch(`${harness.baseUrl}/auth/token`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: {
+        ...proxyHeaders(),
+        'content-type': 'application/x-www-form-urlencoded',
+        cookie: csrfPage.cookie,
+      },
+      body: new URLSearchParams({ csrf: 'wrong', token: issued.token }).toString(),
+    })
+    expect(csrfDenied.status).toBe(403)
+    expect(await csrfDenied.text()).toBe(originBody)
+
+    const zhDenied = await redeem(harness.baseUrl, issued.token, {
+      origin: 'https://evil.example',
+      acceptLanguage: 'zh-CN',
+    })
+    expect(zhDenied.status).toBe(403)
+    const zhBody = await zhDenied.text()
+    expect(zhBody).toContain('安全校验失败')
+    expect(zhBody).toContain('公网访问地址')
+    expect(zhBody).not.toContain('无效、已过期或已被使用')
+    expect(zhBody).not.toContain(issued.token)
+
+    expect(readdirSync(harness.directory)).toHaveLength(1)
+    expect((await redeem(harness.baseUrl, issued.token)).status).toBe(303)
   })
 })
 

@@ -6,6 +6,8 @@
 
 - ci: stop installing Nginx and maintaining leftover Nginx checks in daily CI and E2E.
 - fix: restore offline tarball installs when rolling back a `file:` profile spec.
+- fix: show a distinct login-token page when Origin or CSRF checks fail.
+- test: prove Origin/CSRF token denials through the real TLS edge.
 
 ## v0.2.2
 
