@@ -1,5 +1,5 @@
 import { once } from 'node:events'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createAuthEventLogger } from '../src/logging.js'
 import type { AuthEventLogger, AuthLogRecord } from '../src/logging.js'
 import { CSRF_COOKIE, SESSION_COOKIE } from '../src/cookies.js'
@@ -59,6 +59,38 @@ describe('runtime authentication logs', () => {
     expect(JSON.parse(lines[0] ?? '')).toEqual({
       level: 'warn', logger: 'dsh-auth', event: 'auth.login.failed', reason: 'invalid_credentials',
     })
+  })
+
+  it('bounds diagnostic events while preserving informational state changes', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-19T00:00:00Z'))
+    try {
+      const records: CapturedRecord[] = []
+      const budgeted = createAuthEventLogger({
+        info: record => { records.push({ level: 'info', record }) },
+        warn: record => { records.push({ level: 'warn', record }) },
+        error: record => { records.push({ level: 'error', record }) },
+      }, () => true, () => undefined)
+
+      for (let index = 0; index < 61; index += 1) budgeted.warn({ event: 'auth.login.failed' })
+      budgeted.error({ event: 'auth.request.error' })
+      budgeted.info({ event: 'auth.login.succeeded' })
+
+      expect(records.filter(entry => entry.level === 'warn')).toHaveLength(60)
+      expect(records.some(entry => entry.record.event === 'auth.request.error')).toBe(false)
+      expect(records.some(entry => entry.record.event === 'auth.login.succeeded')).toBe(true)
+
+      vi.advanceTimersByTime(60_000)
+      budgeted.info({ event: 'auth.runtime.ready' })
+      budgeted.error({ event: 'auth.request.error' })
+
+      expect(records.find(entry => entry.record.event === 'auth.logging.suppressed')?.record).toEqual({
+        event: 'auth.logging.suppressed', count: 2, maxEvents: 60, windowSeconds: 60,
+      })
+      expect(records.at(-1)).toEqual({ level: 'error', record: { event: 'auth.request.error' } })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('records useful outcomes without retaining submitted secrets or network addresses', async () => {

@@ -14,7 +14,12 @@ https://{{PUBLIC_HOST}}:{{HTTPS_PORT}}, https://:{{HTTPS_PORT}} {
 	bind {{LISTEN_ADDRESS}}
 	{{TLS_DIRECTIVE}}
 	log {
-		output stderr
+		output file {{ACCESS_LOG_FILE}} {
+			mode 0600
+			roll_size 10MiB
+			roll_keep 3
+			roll_keep_for 168h
+		}
 		format filter {
 			request>headers delete
 			resp_headers delete

@@ -138,7 +138,7 @@ function validateConfigs(caddy, root, ports, certificate, key) {
   for (const tls of [{ mode: 'manual', certificate, key }, { mode: 'internal' }, { mode: 'automatic' }]) {
     const rendered = renderCaddyfile({
       publicHost: 'localhost', listenAddress: '127.0.0.1', upstream: `127.0.0.1:${String(ports.upstream)}`,
-      httpPort: ports.http, httpsPort: ports.https, tls,
+      httpPort: ports.http, httpsPort: ports.https, tls, accessLogFile: join(root, `access-${tls.mode}.log`),
     })
     const formatted = checked(caddy, ['fmt', '-'], { input: rendered })
     if (formatted !== rendered) throw new Error(`rendered ${tls.mode} Caddy config is not formatted`)
@@ -217,17 +217,15 @@ async function verifyProtocol(caddy, root, ports, certificate, key) {
   upstream.listen(ports.upstream, '127.0.0.1')
   await once(upstream, 'listening')
   const config = join(root, 'Caddyfile.protocol')
+  const accessLogFile = join(root, 'access-protocol.log')
   writeFileSync(config, renderCaddyfile({
     publicHost: 'localhost', listenAddress: '127.0.0.1', upstream: `127.0.0.1:${String(ports.upstream)}`,
-    httpPort: ports.http, httpsPort: ports.https, tls: { mode: 'manual', certificate, key },
+    httpPort: ports.http, httpsPort: ports.https, tls: { mode: 'manual', certificate, key }, accessLogFile,
   }))
   const edge = spawn(caddy, ['run', '--config', config, '--adapter', 'caddyfile'], {
-    stdio: ['ignore', 'ignore', 'pipe'],
+    stdio: 'ignore',
     env: { ...process.env, XDG_DATA_HOME: join(root, 'protocol-data'), XDG_CONFIG_HOME: join(root, 'protocol-config') },
   })
-  let edgeLogs = ''
-  edge.stderr.setEncoding('utf8')
-  edge.stderr.on('data', chunk => { edgeLogs += chunk })
   try {
     await waitForEdge(ports.https, edge)
     const page = await request(ports.https, '/')
@@ -285,9 +283,10 @@ async function verifyProtocol(caddy, root, ports, certificate, key) {
       headers: { cookie: accessLogSecret, authorization: `Bearer ${accessLogSecret}` },
     })).status !== 200) throw new Error('access-log redaction probe did not reach the auth edge')
     await new Promise(resolveTimeout => setTimeout(resolveTimeout, 100))
-    if (!edgeLogs.includes('/auth/login')) throw new Error('Caddy auth access log was not emitted to stderr')
-    if (edgeLogs.includes('/api/access-log-check')) throw new Error('Caddy logged routine protected traffic')
-    if (edgeLogs.includes(accessLogSecret)) throw new Error('Caddy access log exposed a credential header')
+    const accessLogs = readFileSync(accessLogFile, 'utf8')
+    if (!accessLogs.includes('/auth/login')) throw new Error('Caddy auth access log was not emitted to its bounded file')
+    if (accessLogs.includes('/api/access-log-check')) throw new Error('Caddy logged routine protected traffic')
+    if (accessLogs.includes(accessLogSecret)) throw new Error('Caddy access log exposed a credential header')
   } finally {
     await terminate(edge)
     upstream.close()

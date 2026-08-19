@@ -132,7 +132,7 @@ function caddyValidationConfig(host: InstallerHost, state: InstallState): { read
   // enable, so setup validates the same Caddyfile rendered against the source certificate files.
   const path = join(state.paths.configDirectory, 'Caddyfile.validate')
   if (host.fileExists(path)) host.removeFile(path)
-  host.writeNewFile(path, renderCaddyfile(state.request, false), 0o600)
+  host.writeNewFile(path, renderCaddyfile(state.request, false, state.paths.caddyStateDirectory), 0o600)
   host.chmod(path, 0o600)
   return { path, temporary: true }
 }
@@ -329,7 +329,7 @@ function writeManagedConfiguration(
   state = writeOwnedFile(host, state, paths.sessionSecretFile, `${material.sessionSecret}\n`, secretMode, context.configUid, context.configGid)
   state = writeAuthState(host, prepared, paths, context, material, state)
   state = writeOwnedFile(host, state, paths.environmentFile, renderEnvironmentFile(prepared.request, paths), secretMode, context.configUid, context.configGid)
-  state = writeOwnedFile(host, state, paths.caddyfile, renderCaddyfile(prepared.request, system), 0o644, context.configUid, system ? 0 : context.configGid)
+  state = writeOwnedFile(host, state, paths.caddyfile, renderCaddyfile(prepared.request, system, paths.caddyStateDirectory), 0o644, context.configUid, system ? 0 : context.configGid)
   if (!system) {
     return writeOwnedFile(host, state, paths.caddyUnitFile, renderCaddyUnit(prepared.request, paths), 0o644, context.configUid, context.configGid)
   }

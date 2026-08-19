@@ -241,14 +241,18 @@ sudo dsh-auth doctor
 sudo dsh-auth doctor --json
 ```
 
-Runtime authentication events use the Cordis logger name `dsh-auth`, while the managed Caddy service writes JSON access logs to stderr. Under the standard systemd installation, collect both journals together with the read-only health report:
+Runtime authentication events use the Cordis logger name `dsh-auth`. The managed Caddy service writes security-sensitive access events to `/var/lib/dsh-auth-caddy/access.log`. Collect the application journal, restricted access-log files, and read-only health report:
 
 ```sh
-sudo journalctl -u dsh-web.service -u dsh-auth-caddy.service --since '1 hour ago'
+sudo journalctl -u dsh-web.service --since '1 hour ago'
+sudo ls -lh /var/lib/dsh-auth-caddy/access.log*
+sudo tail -n 200 /var/lib/dsh-auth-caddy/access.log
 sudo dsh-auth doctor --json
 ```
 
-Authentication logs contain fixed event names, outcomes, authentication methods, and a deployment-scoped irreversible client identifier. They do not contain submitted usernames, passwords, hashes, raw login tokens, cookies, CSRF values, session identifiers, request bodies, or complete request URLs. Caddy access logs only security-sensitive login, token, logout, administrator, and public-verify paths; routine SPA and API traffic is skipped, and request and response headers are omitted. Operators must still treat these concise logs as sensitive because they contain client addresses and request paths. Apply an appropriate journal retention policy and redact private hosts, paths, addresses, and account information before sharing a support bundle.
+Authentication logs contain fixed event names, outcomes, authentication methods, and a deployment-scoped irreversible client identifier. They do not contain submitted usernames, passwords, hashes, raw login tokens, cookies, CSRF values, session identifiers, request bodies, or complete request URLs. Application warnings and errors have a shared budget of 60 events per minute; excess events are suppressed and summarized as `auth.logging.suppressed` when logging resumes in the next window. Successful state changes and startup events are not sampled.
+
+Caddy access logs only security-sensitive login, token, logout, administrator, and public-verify paths; routine SPA and API traffic is skipped, and request and response headers are omitted. The active file rolls after 10 MiB; at most three gzip-compressed archives are retained for up to seven days, bounding nominal uncompressed storage near 40 MiB. Operators must still treat these files as sensitive because they contain client addresses and request paths. Keep journald globally bounded as well, and redact private hosts, paths, addresses, and account information before sharing a support bundle.
 
 `uninstall --dry-run` lists only files and profile changes proven by the ownership record. Interactive uninstall requires typing `uninstall`; automation requires the exact `--authorize-uninstall` flag. The independent Caddy unit is removed; a user-installed Caddy or Nginx is never touched.
 
