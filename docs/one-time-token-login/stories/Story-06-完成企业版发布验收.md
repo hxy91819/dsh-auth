@@ -3,11 +3,8 @@ kind: story
 id: STORY-06
 epic: EPIC-ONE-TIME-TOKEN-LOGIN
 title: 完成企业版发布验收
-status: done
 gate: RELEASE
-owner: Cursor
 depends_on: [STORY-05]
-blocker: 无
 updated: 2026-08-18
 intent_version: 4
 ---

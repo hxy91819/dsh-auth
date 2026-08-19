@@ -1,6 +1,10 @@
 ---
 story: STORY-04
 intent_version: 1
+status: done
+owner: opencode
+blocker: 无
+status_updated: 2026-08-18
 refreshed: 2026-08-18
 code_baseline: f5d8bf8aa5a364cf1c6a2971d1e40314b42bfaf9
 owns: [TOKEN_REDEMPTION]
@@ -9,7 +13,6 @@ verifies: [AUTH_STATE, TOKEN_ISSUANCE]
 
 # STORY-04 交付一次性令牌兑换执行卡
 
-- 状态：done（2026-08-18，opencode，feature/story-04-token-redemption）
 - 对应：[STORY-04 交付一次性令牌兑换](../stories/Story-04-交付一次性令牌兑换.md)
 
 ## 目标与完成信号
@@ -43,6 +46,14 @@ POST 先校验 method、content type、20 KiB、trusted proxy client IP、独立
 ## 领取检查
 
 确认 STORY-03 done，使用实际文件系统复核 consume 原子语义；确认 npm latest 等于锁定 Harness，DSH WebServer 和浏览器扩展仍与 rc.7 基线一致。创建专用 worktree，记录 HEAD/status/worktrees，更新本卡并保存 token route 的首个失败测试。
+
+## 执行清单
+
+- [x] 实现安全的 fragment 桥接页面和无脚本降级提示。
+- [x] 实现 CSRF、同源、请求上限和独立 IP 限流。
+- [x] 实现原子消费、过期判定、失败清理和正常会话签发。
+- [x] 实现内置及可选中英文纯文本失败文案。
+- [x] 覆盖预取、并发兑换、重放、日志泄漏和开放跳转测试。
 
 ## 执行步骤
 

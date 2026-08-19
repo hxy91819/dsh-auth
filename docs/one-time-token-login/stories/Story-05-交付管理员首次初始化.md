@@ -3,11 +3,8 @@ kind: story
 id: STORY-05
 epic: EPIC-ONE-TIME-TOKEN-LOGIN
 title: 交付管理员首次初始化
-status: done
 gate: COMPONENT
-owner: Cursor
 depends_on: [STORY-04]
-blocker: 无
 updated: 2026-08-18
 intent_version: 1
 ---
@@ -29,14 +26,6 @@ intent_version: 1
 - 首次设置在认证状态内原子完成，只有一个并发请求成功。
 - 设置成功后保留当前会话并撤销其他启动会话。
 
-## TODO
-
-- [x] 实现管理员未设置、提示、Later 和重定向流程。
-- [x] 实现用户名规范化、密码策略、二次确认和 Argon2id 写入。
-- [x] 实现并发首次设置和已完成后的友好结果。
-- [x] 保留当前会话并撤销其他启动会话。
-- [x] 覆盖两种 setup 模式、后续密码登录和重启恢复。
-
 ## 验收标准
 
 - 用户名经 NFC 后为 1–64 字符，区分大小写，拒绝控制字符和首尾空白。
@@ -44,9 +33,3 @@ intent_version: 1
 - Later 不写延期状态，直接进入安全 returnTo；下次令牌登录再次提示。
 - 并发提交只有第一个建立凭据，其他请求不能覆盖并获得友好结果。
 - 凭据建立后当前会话继续有效、用户名立即更新，其他启动会话失效，密码登录可用。
-
-## 交付证据
-
-- 聚焦测试 17/17 通过（password、auth-http、admin-onboarding）；`check:code-health`、`typecheck`、`check:caddy`（setupRoute 公开代理）与 `git diff --check` 通过。
-- GET 四种结果、Later 两次 token、用户名/密码边界、并发双 POST、三会话撤销与重启后密码登录均由 HTTP 行为证明。
-- 未配置登录页不再渲染密码表单；Caddy `/auth/*` 直通 `/auth/admin/setup`。

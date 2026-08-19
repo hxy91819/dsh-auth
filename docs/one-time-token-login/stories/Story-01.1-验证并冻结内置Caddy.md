@@ -3,11 +3,8 @@ kind: story
 id: STORY-01.1
 epic: EPIC-ONE-TIME-TOKEN-LOGIN
 title: 验证并冻结内置 Caddy
-status: done
 gate: COMPONENT
-owner: Codex
 depends_on: [STORY-01]
-blocker: 无
 updated: 2026-08-18
 intent_version: 1
 ---
@@ -29,14 +26,6 @@ intent_version: 1
 - TS 继续负责登录、会话、CSRF、Origin、限流和身份结果。
 - 配置无法满足安全边界时保持阻塞，只评估最小项目模块。
 
-## TODO
-
-- [x] 固定 Caddy 版本、来源、许可证、校验和与可复现临时运行入口。
-- [x] 用最终 verify 协议通过 HTTP、实时连接、下载和安全矩阵。
-- [x] 验证 automatic 与 manual TLS、HTTP/2 和续期 Cookie 转发。
-- [x] 与同机 Nginx 比较吞吐、p95、5xx、SSE 和 WebSocket 稳定性。
-- [x] 记录标准配置能力缺口并冻结正式安装所需配置契约。
-
 ## 验收标准
 
 - Caddy `v2.11.4` 的来源、SHA-256、许可证和配置可复现，Admin API 关闭。
@@ -44,9 +33,3 @@ intent_version: 1
 - TLS、HTTP/2、WebSocket、SSE、下载、续期 Cookie、Host/Origin 和伪造身份 Header 全部符合认证边界。
 - 同机吞吐不低于 Nginx 的 80%，p95 恶化不超过 25%，无异常 5xx、SSE 中断或 WebSocket 断连。
 - 标准配置若不能满足任一安全边界，本 Story 保持 blocked，不直接恢复完整 Go Gateway。
-
-## 交付证据
-
-- [x] 官方 Caddy `v2.11.4` 的固定来源、双平台校验值、许可证和独立检查入口已冻结。
-- [x] 手工证书与本地自动签发均通过 Harness rc.7 的真实浏览器、HTTP/2、SSE、WebSocket 和下载验证。
-- [x] [同机性能原始结果](../agent/evidence/edge-benchmark-2026-08-18T062356-259Z.json)达到门槛；标准 Caddy 无需自定义模块。

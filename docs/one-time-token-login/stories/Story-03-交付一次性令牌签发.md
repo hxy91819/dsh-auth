@@ -3,11 +3,8 @@ kind: story
 id: STORY-03
 epic: EPIC-ONE-TIME-TOKEN-LOGIN
 title: 交付一次性令牌签发
-status: done
 gate: COMPONENT
-owner: opencode
 depends_on: [STORY-02]
-blocker: 无
 updated: 2026-08-18
 intent_version: 1
 ---
@@ -29,14 +26,6 @@ intent_version: 1
 - 默认有效期五分钟，可缩短；最多保留 32 个未过期令牌。
 - stdout 返回登录 URL，JSON 明确标记唯一的 bearer secret 输出例外。
 
-## TODO
-
-- [x] 实现令牌格式、摘要元数据、原子创建和过期清理。
-- [x] 实现 systemd 与容器两种受限的状态和 public origin 解析。
-- [x] 实现 TTL、容量、所有者、权限和授权校验。
-- [x] 冻结人读输出、JSON v2 和失败诊断。
-- [x] 验证并发签发、随机冲突、输出失败和恶意路径。
-
 ## 验收标准
 
 - TTL 默认 300 秒，只允许 60–300 秒；第 33 个有效令牌被拒绝。
@@ -44,9 +33,3 @@ intent_version: 1
 - systemd 仅 root 可签发；容器仅 root 或认证状态唯一所有者可签发。
 - 容器必须同时提供安全的认证状态文件和单一 public origin；路径、符号链接或权限异常时失败关闭。
 - 并发签发不会覆盖已有令牌，清理只删除严格匹配且已过期的受管文件。
-
-## 交付证据
-
-- 全量 117 项测试通过，含新增 token store 11 项与 issue-login-token CLI 13 项行为测试；`check`、`check:caddy`、`typecheck` 与 `git diff --check` 通过。
-- TTL 固定 60–300、容量固定 32、随机冲突重试固定 8 次；所有失败输出扫描不含令牌前缀。
-- 原始令牌只出现在成功 stdout/JSON；磁盘只有 SHA-256 摘要文件、0600、属主与服务一致。
