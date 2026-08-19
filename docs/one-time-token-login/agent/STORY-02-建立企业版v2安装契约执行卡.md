@@ -1,6 +1,10 @@
 ---
 story: STORY-02
 intent_version: 3
+status: done
+owner: Cursor
+blocker: 无
+status_updated: 2026-08-18
 refreshed: 2026-08-18
 code_baseline: 4a0fe68b0fabfe74d37f1148fb6e78a05b3a2076
 owns: [INSTALLER_V2]
@@ -9,7 +13,6 @@ verifies: [AUTH_STATE]
 
 # STORY-02 建立企业版 v2 安装契约执行卡
 
-- 状态：已完成实现与聚焦验证，主工作区 `main` 未提交 @ `4a0fe68b0fabfe74d37f1148fb6e78a05b3a2076`
 - 对应：[STORY-02 建立企业版 v2 安装契约](../stories/Story-02-建立企业版v2安装契约.md)
 
 ## 目标与完成信号
@@ -49,9 +52,17 @@ installer 用 STORY-01 的 schema 创建 auth-state。automatic TLS 由 Caddy �
 
 ## 领取检查
 
-确认 STORY-01.1 done，Caddy 版本、checksum、标准配置和性能结论可复现；再次确认 npm latest 等于锁定 Harness。记录分支、HEAD、origin、工作树和 worktree；从 STORY-01.1 acceptance commit 创建专用 worktree。更新本卡和 Story 状态，运行 installer/config/plugin 现有测试保存首次失败。
+确认 STORY-01.1 done，Caddy 版本、checksum、标准配置和性能结论可复现；再次确认 npm latest 等于锁定 Harness。记录分支、HEAD、origin、工作树和 worktree；从 STORY-01.1 acceptance commit 创建专用 worktree。更新本卡状态字段，运行 installer/config/plugin 现有测试保存首次失败。
 
 领取记录（2026-08-18）：STORY-01.1 已完成；npm latest 与锁定 Harness 均为 `0.1.0-rc.7`；分支 `main`，HEAD `4a0fe68b0fabfe74d37f1148fb6e78a05b3a2076`，origin `git@github.com:hxy91819/dsh-auth.git`，工作区干净，仅主 worktree `/data/code/dsh-auth`。按操作者要求直接在主工作区开发，不另建 worktree。
+
+## 执行清单
+
+- [x] 落地 v2 setup、plan、帮助文本、参数解析和条件校验。
+- [x] 更新 Cordis 配置、环境变量和固定 `/auth` 路由契约。
+- [x] 实现 Caddy 内容校验、配置、TLS、systemd 和端口冲突契约。
+- [x] 更新受管路径、doctor、回滚、uninstall 和旧 schema 拒绝行为。
+- [x] 冻结 JSON schema v2、退出码和参数行为测试。
 
 ## 执行步骤
 
@@ -59,31 +70,31 @@ installer 用 STORY-01 的 schema 创建 auth-state。automatic TLS 由 Caddy �
 
 用表驱动参数声明实现完整 flag 集、全局位置、`--name=value`、条件必填和冲突。完成条件：帮助文本与测试从同一声明核对，未知/重复/旧参数均退出 2。
 
-- [x] 完成。`FLAG_DECLARATIONS` 驱动 parser 与帮助文本；旧 Nginx/身份参数退出 2。
+完成结果：`FLAG_DECLARATIONS` 驱动 parser 与帮助文本；旧 Nginx/身份参数退出 2。
 
 ### 2. 切换 Cordis 和环境契约
 
 固定 `/auth`，只接受 v2 文件路径和策略，删除静态用户、hash、literal secret 和 sessionStore。完成条件：patch/overlay 等价且互斥，未知/旧字段失败，路径与文案严格验证。
 
-- [x] 完成。`cordis.patch.yml` / `cordis.overlay.yml` 映射 v2 env；未知/旧字段失败。
+完成结果：`cordis.patch.yml` / `cordis.overlay.yml` 映射 v2 env；未知/旧字段失败。
 
 ### 3. 实现 Caddy 平台分发与服务
 
 建立 x64/ARM64 精确包、checksum/license/manifest 校验，生成 automatic/manual 配置、credentials 和 DynamicUser unit。完成条件：安装不下载二进制，缺包/篡改/端口冲突失败关闭，Admin API 不可用。
 
-- [x] 完成。FakeHost 覆盖两平台、缺包、篡改和许可证；真实安装从不下载二进制。
+完成结果：FakeHost 覆盖两平台、缺包、篡改和许可证；真实安装从不下载二进制。
 
 ### 4. 更新计划、运维与回滚
 
 创建 v2 auth-state、secret、token 目录和 env；doctor 校验 Caddy 版本、checksum、配置、服务、端口与 Harness loopback；rollback/uninstall 精确恢复或删除拥有的边缘资产。完成条件：幂等、升级、活动/非活动和失败恢复有固定测试。
 
-- [x] 完成。system/output 路径、token 目录、v1 拒绝、rollback 与 uninstall 已有测试。
+完成结果：system/output 路径、token 目录、v1 拒绝、rollback 与 uninstall 已有测试。
 
 ### 5. 固化 JSON v2 和交接
 
 更新所有非签发命令成功/错误 JSON、帮助和 installer 文档内部说明，运行聚焦和质量检查。公开 README 更新留给 STORY-06。
 
-- [x] 完成。JSON `schemaVersion` 为 2；`docs/installer.md` 已改为 v2 内部说明。
+完成结果：JSON `schemaVersion` 为 2；`docs/installer.md` 已改为 v2 内部说明。
 
 ## 验证与证据
 

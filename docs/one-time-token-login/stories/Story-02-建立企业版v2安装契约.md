@@ -3,11 +3,8 @@ kind: story
 id: STORY-02
 epic: EPIC-ONE-TIME-TOKEN-LOGIN
 title: 建立企业版 v2 安装契约
-status: done
 gate: COMPONENT
-owner: Cursor
 depends_on: [STORY-01.1]
-blocker: 无
 updated: 2026-08-18
 intent_version: 3
 ---
@@ -30,14 +27,6 @@ intent_version: 3
 - 独立 Caddy 服务使用 automatic 或 manual TLS，并与 Harness 状态分权运行。
 - 全部公开 JSON 和安装状态升级为 v2，旧状态只给出重装诊断。
 
-## TODO
-
-- [x] 落地 v2 setup、plan、帮助文本、参数解析和条件校验。
-- [x] 更新 Cordis 配置、环境变量和固定 `/auth` 路由契约。
-- [x] 实现 Caddy 内容校验、配置、TLS、systemd 和端口冲突契约。
-- [x] 更新受管路径、doctor、回滚、uninstall 和旧 schema 拒绝行为。
-- [x] 冻结 JSON schema v2、退出码和参数行为测试。
-
 ## 验收标准
 
 - `password` 初始化只接受管理员用户名和一个安全密码来源；`login-token` 初始化拒绝它们并要求启用令牌。
@@ -47,10 +36,3 @@ intent_version: 3
 - Caddy 使用独立 DynamicUser 服务、关闭 Admin API；端口冲突不接管用户服务。
 - automatic TLS 拒绝证书参数；manual TLS 要求证书和私钥，两种模式都可回滚。
 - schema v1 不自动迁移或覆盖，只返回明确的卸载、重装和会话失效说明。
-
-## 交付证据
-
-- [x] 表驱动 v2 CLI、password/login-token 两种 setup、secret-free JSON v2 和旧 Nginx/身份 flag 拒绝已有测试。
-- [x] Cordis 只接受 v2 路径与策略；Caddy 内容校验、automatic/manual TLS、端口冲突和 DynamicUser unit 已覆盖。
-- [x] doctor、rollback、uninstall、v1 拒绝和 installer 内部说明已更新；聚焦测试、`check:caddy`、code-health、typecheck 退出 0。
-- 原“独立平台包”分发证据已撤销；主包自包含、双架构选择和离线归档由 STORY-06 在发布候选上重新验收。

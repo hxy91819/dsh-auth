@@ -1,6 +1,10 @@
 ---
 story: STORY-01
 intent_version: 1
+status: done
+owner: Codex
+blocker: 无
+status_updated: 2026-08-18
 refreshed: 2026-08-18
 code_baseline: 5bb2c219b8422c35735e4fb73036710ae61b04e8
 owns: [AUTH_STATE]
@@ -9,7 +13,6 @@ verifies: []
 
 # STORY-01 建立统一管理员认证状态执行卡
 
-- 状态：已完成
 - 对应：[STORY-01 建立统一管理员认证状态](../stories/Story-01-建立统一管理员认证状态.md)
 
 ## 目标与完成信号
@@ -43,7 +46,15 @@ verifies: []
 
 ## 领取检查
 
-确认 STORY-01 `intent_version: 1`；再次读取 npm latest 并要求它等于仓库精确锁定 Harness；复核最新主线没有重叠的未提交改动。记录当前 branch、HEAD、origin、`git status --short` 和 `git worktree list`。从领取时的最新已提交基线创建同级专用 worktree，更新本卡 `refreshed`、`code_baseline`、Story owner/status，并运行现有 session/auth 聚焦测试保存基线结果。
+确认 STORY-01 `intent_version: 1`；再次读取 npm latest 并要求它等于仓库精确锁定 Harness；复核最新主线没有重叠的未提交改动。记录当前 branch、HEAD、origin、`git status --short` 和 `git worktree list`。从领取时的最新已提交基线创建同级专用 worktree，更新本卡的状态、领取日期和代码基线，并运行现有 session/auth 聚焦测试保存基线结果。
+
+## 执行清单
+
+- [x] 定义并验证 v2 认证状态及固定管理员身份。
+- [x] 把会话创建、续期、撤销和持久化迁入统一状态。
+- [x] 支持管理员凭据未设置、首次原子设置和动态身份读取。
+- [x] 保留当前 Cookie、72 小时滚动续期、容量和撤销行为。
+- [x] 为状态损坏、写入失败、并发设置和重启恢复增加行为测试。
 
 ## 执行步骤
 

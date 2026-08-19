@@ -2,8 +2,6 @@
 kind: epic
 id: EPIC-ONE-TIME-TOKEN-LOGIN
 title: 一次性令牌登录与企业版 v2
-status: done
-owner: dsh-auth 产品与工程团队
 updated: 2026-08-18
 coverage: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPTION, ADMIN_ONBOARDING, RELEASE_ACCEPTANCE]
 ---
@@ -18,7 +16,11 @@ coverage: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPT
 
 ## 全局设计
 
-用户只管理一个 `dsh-auth` 发布物。维护者先从固定官方输入制作自包含候选，再将同一份候选用于 npm、GitHub Release、私有镜像和离线归档。setup 不下载 Caddy；它在修改主机前选择并校验当前架构的内置二进制。
+本 Epic 包含两个独立交付目标。它们共享 dsh-auth 的认证边界和最终发布验收，但一个目标不是另一个目标的实现步骤。
+
+**能力一：用项目内置 Caddy 取代对用户 Nginx 的依赖。**
+
+用户只管理一个 `dsh-auth` 发布物。维护者从固定官方输入制作自包含候选，并将同一份候选用于 npm、GitHub Release、私有镜像和离线归档。setup 不下载 Caddy，也不探测或接管用户已有网关。
 
 ```mermaid
 %%{init: {"securityLevel": "strict", "htmlLabels": false}}%%
@@ -26,15 +28,34 @@ flowchart LR
     M["维护者：固定并校验官方 Caddy"] --> R["单一 dsh-auth 候选：插件与 x64/ARM64 Caddy"]
     R --> D["npm、GitHub Release、私有镜像与离线归档"]
     D --> I["setup：本地选择并校验当前架构"]
-    B["浏览器或云控制台"] --> C["受管 Caddy：唯一公网入口"]
     I --> C
     I --> H["Harness 与 dsh-auth 插件：仅监听 loopback"]
+    B["浏览器"] --> C["受管 Caddy：唯一公网入口"]
     C -->|"内部 forward_auth"| H
     C -->|"认证后的 HTTP、下载、SSE 与 WebSocket"| H
-    H --> S["认证状态：管理员、会话与一次性令牌"]
 ```
 
-Caddy 由项目固定版本并独占管理，不探测或复用用户已有网关。它负责 TLS、公网请求边界、反向代理和实时连接。dsh-auth 插件运行在 Harness 内，负责登录、会话、CSRF 和一次性令牌。Harness 只监听 loopback，绕过 Caddy 的公网路径不在支持边界内。
+Caddy 负责 TLS、公网请求边界、反向代理和实时连接。dsh-auth 插件继续负责认证策略。Harness 只监听 loopback，绕过 Caddy 的公网路径不在支持边界内。
+
+**能力二：增加一次性令牌登录。**
+
+云平台确认用户有权访问实例后，通过实例内命令签发短期链接。浏览器只把令牌放在 URL fragment 中，再通过同源 POST 原子兑换正常管理员会话。这个能力不要求云平台保存实例密码。
+
+```mermaid
+%%{init: {"securityLevel": "strict", "htmlLabels": false}}%%
+flowchart LR
+    P["云平台或管理员"] -->|"实例内签发命令"| I["一次性令牌签发"]
+    I --> T["令牌目录：只保存摘要和期限"]
+    I --> U["短期登录链接：令牌位于 fragment"]
+    U --> B["用户浏览器"]
+    B -->|"同源 POST"| E["公网认证入口"]
+    E --> A["dsh-auth 令牌兑换"]
+    A -->|"原子消费"| T
+    A --> S["认证状态：创建管理员会话"]
+    S -->|"安全会话 Cookie"| B
+```
+
+令牌签发、兑换和会话状态由 dsh-auth 负责。公网认证入口只转发请求，不读取令牌目录，也不决定令牌是否有效。
 
 ## 成功标准
 

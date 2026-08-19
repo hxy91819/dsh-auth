@@ -1,6 +1,10 @@
 ---
 story: STORY-01.1
 intent_version: 1
+status: done
+owner: Codex
+blocker: 无
+status_updated: 2026-08-18
 refreshed: 2026-08-18
 code_baseline: 88ca83ee462aab9c12afe6fd78c91e281a00c7b3
 owns: [EDGE_RUNTIME]
@@ -9,7 +13,6 @@ verifies: [AUTH_STATE]
 
 # STORY-01.1 验证并冻结内置 Caddy 执行卡
 
-- 状态：已完成
 - 对应：[STORY-01.1 验证并冻结内置 Caddy](../stories/Story-01.1-验证并冻结内置Caddy.md)
 
 ## 目标与完成信号
@@ -43,6 +46,14 @@ verifies: [AUTH_STATE]
 ## 领取检查
 
 确认 STORY-01 done 且 verify 协议有行为测试；再次读取 npm latest，确认等于精确锁定 Harness。确认 Caddy `v2.11.4` 官方发布来源、许可证和各平台 checksum 可获取。从 STORY-01 acceptance commit 创建同级专用 worktree，记录 HEAD/status/worktrees，更新本卡并保存 Caddy 首次失败证据。
+
+## 执行清单
+
+- [x] 固定 Caddy 版本、来源、许可证、校验和与可复现临时运行入口。
+- [x] 用最终 verify 协议通过 HTTP、实时连接、下载和安全矩阵。
+- [x] 验证 automatic 与 manual TLS、HTTP/2 和续期 Cookie 转发。
+- [x] 与同机 Nginx 比较吞吐、p95、5xx、SSE 和 WebSocket 稳定性。
+- [x] 记录标准配置能力缺口并冻结正式安装所需配置契约。
 
 ## 执行步骤
 

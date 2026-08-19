@@ -1,6 +1,10 @@
 ---
 story: STORY-06
 intent_version: 4
+status: done
+owner: Cursor
+blocker: 无
+status_updated: 2026-08-18
 refreshed: 2026-08-18
 code_baseline: 4b26ad2621c0e8696cb3257a6fa73acb968731f9
 owns: [RELEASE_ACCEPTANCE]
@@ -9,7 +13,6 @@ verifies: [AUTH_STATE, EDGE_RUNTIME, INSTALLER_V2, TOKEN_ISSUANCE, TOKEN_REDEMPT
 
 # STORY-06 完成企业版发布验收执行卡
 
-- 状态：已完成（2026-08-18，Cursor，`v0.1.15` / `ecd5704`）
 - 对应：[STORY-06 完成企业版发布验收](../stories/Story-06-完成企业版发布验收.md)
 
 ## 目标与完成信号

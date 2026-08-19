@@ -1,6 +1,10 @@
 ---
 story: STORY-05
 intent_version: 1
+status: done
+owner: Cursor
+blocker: 无
+status_updated: 2026-08-18
 refreshed: 2026-08-18
 code_baseline: c33511181deb866bccd9a7d1bec73ac4894ee7ac
 owns: [ADMIN_ONBOARDING]
@@ -9,7 +13,6 @@ verifies: [AUTH_STATE, TOKEN_REDEMPTION]
 
 # STORY-05 交付管理员首次初始化执行卡
 
-- 状态：done（2026-08-18，Cursor，feature/story-05-admin-onboarding）
 - 对应：[STORY-05 交付管理员首次初始化](../stories/Story-05-交付管理员首次初始化.md)
 
 ## 目标与完成信号
@@ -52,6 +55,14 @@ POST 校验同源、CSRF、表单大小和 safe returnTo。用户名 trim 只用
 - npm latest `@deepseek-ai/dsh` = `0.1.0-rc.7`，与锁定 Harness 一致；Caddy 仍为 `v2.11.4`。
 - 未配置 token 兑换已稳定 303 `/auth/admin/setup?returnTo=%2F`，session `authenticationMethod=login-token`。
 - 工作树 `/data/code/dsh-auth-story-05`，分支 `feature/story-05-admin-onboarding`；主工作区 `main` 干净，无重叠改动。
+
+## 执行清单
+
+- [x] 实现管理员未设置、提示、Later 和重定向流程。
+- [x] 实现用户名规范化、密码策略、二次确认和 Argon2id 写入。
+- [x] 实现并发首次设置和已完成后的友好结果。
+- [x] 保留当前会话并撤销其他启动会话。
+- [x] 覆盖两种 setup 模式、后续密码登录和重启恢复。
 
 ## 执行步骤
 

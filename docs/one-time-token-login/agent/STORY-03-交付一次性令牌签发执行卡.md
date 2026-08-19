@@ -1,6 +1,10 @@
 ---
 story: STORY-03
 intent_version: 1
+status: done
+owner: opencode
+blocker: 无
+status_updated: 2026-08-18
 refreshed: 2026-08-18
 code_baseline: c7075123eb52cca412d1b2152eb65ac3bdc91849
 owns: [TOKEN_ISSUANCE]
@@ -9,7 +13,6 @@ verifies: [INSTALLER_V2]
 
 # STORY-03 交付一次性令牌签发执行卡
 
-- 状态：done（2026-08-18，opencode，feature/story-03-login-token-issuance）
 - 对应：[STORY-03 交付一次性令牌签发](../stories/Story-03-交付一次性令牌签发.md)
 
 ## 目标与完成信号
@@ -42,6 +45,14 @@ verifies: [INSTALLER_V2]
 ## 领取检查
 
 确认 STORY-02 done、v2 JSON/Caddy/路径提交可复现，npm latest 等于锁定 Harness，且主工作区无重叠 token 改动。创建同级专用 worktree，记录基线并更新本卡。先写失败测试覆盖格式、TTL、容量、system/container 权限和 redaction。
+
+## 执行清单
+
+- [x] 实现令牌格式、摘要元数据、原子创建和过期清理。
+- [x] 实现 systemd 与容器两种受限的状态和 public origin 解析。
+- [x] 实现 TTL、容量、所有者、权限和授权校验。
+- [x] 冻结人读输出、JSON v2 和失败诊断。
+- [x] 验证并发签发、随机冲突、输出失败和恶意路径。
 
 ## 执行步骤
 
