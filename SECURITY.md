@@ -83,7 +83,7 @@ Logout revokes the stored session and clears browser cookies. Rotating the sessi
 
 Passwords may enter setup only through hidden interactive input, stdin, or a caller-managed secret file. They must not appear in command arguments, environment configuration, plans, logs, fixtures, support bundles, or repository content. `dsh-auth` persists only the Argon2id hash.
 
-Runtime security events intentionally exclude submitted usernames, password hashes, raw login tokens, cookies, CSRF values, session identifiers, request bodies, and complete request URLs. Application events use an irreversible deployment-scoped client identifier; Caddy access logs still contain network addresses and paths and therefore require restricted journal access, bounded retention, and redaction before external sharing.
+Runtime security events intentionally exclude submitted usernames, password hashes, raw login tokens, cookies, CSRF values, session identifiers, request bodies, and complete request URLs. Application events use an irreversible deployment-scoped client identifier. Caddy skips routine SPA and API access logs, logs only security-sensitive authentication paths, and omits request and response headers; the remaining network addresses and paths still require restricted journal access, bounded retention, and redaction before external sharing.
 
 System setup stores the password hash and random session secret in separate root-owned, DSH-service-group-readable `0640` files below `/etc/dsh-auth`. Runtime credential-file sources must be regular files rather than symbolic links. On POSIX systems they may be group-readable for the service account, but must not be group-writable or accessible by others.
 

@@ -7,8 +7,16 @@ http://{{PUBLIC_HOST}}:{{HTTP_PORT}}, http://:{{HTTP_PORT}} {
 	bind {{LISTEN_ADDRESS}}
 	log {
 		output stderr
-		format json
+		format filter {
+			request>headers delete
+			resp_headers delete
+			wrap json
+		}
 	}
+	@skip_access_log {
+		not path /auth/login /auth/token /auth/logout /auth/admin/* /auth/verify
+	}
+	log_skip @skip_access_log
 
 	header {
 		X-Content-Type-Options "nosniff"

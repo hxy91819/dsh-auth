@@ -5,10 +5,6 @@
 
 http://{{PUBLIC_HOST}}:{{HTTP_PORT}}, http://:{{HTTP_PORT}} {
 	bind {{LISTEN_ADDRESS}}
-	log {
-		output stderr
-		format json
-	}
 	@invalid_host not host {{PUBLIC_HOST}}
 	respond @invalid_host 421
 	redir https://{{PUBLIC_AUTHORITY}}{uri} 308
@@ -19,8 +15,16 @@ https://{{PUBLIC_HOST}}:{{HTTPS_PORT}}, https://:{{HTTPS_PORT}} {
 	{{TLS_DIRECTIVE}}
 	log {
 		output stderr
-		format json
+		format filter {
+			request>headers delete
+			resp_headers delete
+			wrap json
+		}
 	}
+	@skip_access_log {
+		not path /auth/login /auth/token /auth/logout /auth/admin/* /auth/verify
+	}
+	log_skip @skip_access_log
 
 	header {
 		Strict-Transport-Security "max-age=31536000"
