@@ -24,7 +24,7 @@ sudo dsh-auth setup
 `npm install -g dsh-auth` installs the current stable CLI, and the installer pins that same version in the selected DSH profile. For controlled production rollout, install the exact version approved by your supply-chain policy:
 
 ```sh
-sudo npm install -g dsh-auth@0.2.0
+sudo npm install -g dsh-auth@0.2.1
 ```
 
 The interactive installer asks for the exact DSH service, administrator initialization method, HTTPS hostname, and TLS mode; shows a secret-free plan; and changes the system only after you type the exact confirmation. It installs the pinned bundle into the selected DSH profile, copies a checksum-verified Caddy binary bundled in the same package, writes permission-restricted authentication state, and enables an independent `dsh-auth-caddy.service`. It never stores a plaintext password and never downloads Caddy at setup time.
@@ -149,18 +149,6 @@ Other commands accept a smaller frozen flag set:
 | `secret` | | |
 
 Passwords are accepted only through hidden interactive input, `--password-stdin`, or `--password-file`. There is no inline password flag. Command output, JSON, plans, subprocess argv, and installer errors never contain password or session-secret values. `issue-login-token` is the only command whose successful stdout or JSON may contain a bearer login token.
-
-## Preview
-
-Unauthenticated visitors see a responsive login page styled to match DeepSeek Harness:
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/hxy91819/dsh-auth/main/docs/images/login.png" alt="dsh-auth login page for DeepSeek Harness" width="720">
-</p>
-
-After sign-in, users enter the real Harness Web app with its normal sessions, tools, model selection, and workspace navigation. The authentication plugin adds password-reset and sign-out rows in Settings → General:
-
-![Authenticated DeepSeek Harness Web app after dsh-auth sign-in](https://raw.githubusercontent.com/hxy91819/dsh-auth/main/docs/images/authenticated-harness.png)
 
 ## Issue a one-time login link
 

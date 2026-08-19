@@ -24,7 +24,7 @@ sudo dsh-auth setup
 `npm install -g dsh-auth` 安装当前稳定版 CLI，安装器会把同一版本钉死到所选 DSH profile。若需按供应链策略做受控生产发布，请安装已批准的精确版本：
 
 ```sh
-sudo npm install -g dsh-auth@0.2.0
+sudo npm install -g dsh-auth@0.2.1
 ```
 
 交互式安装器会询问精确的 DSH 服务、管理员初始化方式、HTTPS 主机名和 TLS 模式；展示一份不含密钥的计划；只有在你输入精确确认词后才会改动系统。它会把钉死的包安装进所选 DSH profile，复制同包内经过校验和验证的 Caddy 二进制，写入权限受限的认证状态，并启用独立的 `dsh-auth-caddy.service`。它从不存储明文密码，安装时也从不下载 Caddy。
@@ -149,18 +149,6 @@ sudo dsh-auth setup \
 | `secret` | | |
 
 密码只能通过隐藏的交互输入、`--password-stdin` 或 `--password-file` 提供。没有内联密码参数。命令输出、JSON、计划、子进程 argv 和安装器错误从不包含密码或会话密钥。`issue-login-token` 是唯一允许在成功的 stdout 或 JSON 中包含持有者登录令牌的命令。
-
-## 预览
-
-未认证访问者会看到与 DeepSeek Harness 风格一致的响应式登录页：
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/hxy91819/dsh-auth/main/docs/images/login.png" alt="DeepSeek Harness 的 dsh-auth 登录页" width="720">
-</p>
-
-登录后进入真实的 Harness Web 应用，会话、工具、模型选择和工作区导航保持原样。认证插件会在侧栏加入原生退出登录，并在「设置 → 通用」中增加重置密码一项：
-
-![带 dsh-auth 退出登录操作的已认证 DeepSeek Harness Web 应用](https://raw.githubusercontent.com/hxy91819/dsh-auth/main/docs/images/authenticated-harness.png)
 
 ## 签发一次性登录链接
 
