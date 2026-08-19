@@ -422,6 +422,10 @@ export function createReleaseArtifact(repositoryRoot, identity, directory, repor
  * @param {string} manifestPath
  */
 export function verifyReleaseArtifact(repositoryRoot, identity, directory, manifestPath) {
+  const headCommit = gitOutput(['rev-parse', '--verify', 'HEAD'], repositoryRoot)
+  if (headCommit !== identity.commit) {
+    throw new ReleaseValidationError('HEAD does not match the packed commit')
+  }
   const tarball = findTarball(directory, identity.version)
   const manifest = validateReleaseManifest(readJson(manifestPath), identity)
   const digest = sha256File(tarball)

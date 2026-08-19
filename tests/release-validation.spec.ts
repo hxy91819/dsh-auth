@@ -18,6 +18,7 @@ import {
   validatePackReport,
   validateReleaseManifest,
   validateReleaseSource,
+  verifyReleaseArtifact,
 } from '../scripts/release-validation.mjs'
 
 const temporaryRepositories: string[] = []
@@ -109,6 +110,10 @@ describe('release validation', () => {
     ], { encoding: 'utf8' })
     expect(result.status).not.toBe(0)
     expect(result.stderr).toMatch(/--tag is not valid with --source head/u)
+  })
+
+  it('refuses artifact verification when HEAD is not the packed commit', () => {
+    expect(() => verifyReleaseArtifact(process.cwd(), identity, 'missing', 'missing')).toThrow(/packed commit/u)
   })
 
   it('accepts a complete manifest only when every identity field matches', () => {

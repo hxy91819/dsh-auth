@@ -37,5 +37,6 @@ runs:
         done
         [[ "$STATE" == "running" || "$STATE" == "degraded" ]]
         docker exec "$CONTAINER" bash -lc 'mkdir /checkout && cp -a /source/. /checkout/'
+        docker exec "$CONTAINER" bash -lc 'cd /checkout && corepack pnpm install --frozen-lockfile'
         docker exec --env "LIFECYCLE_TARBALL_BASE=/checkout/${TARBALL_REL}" \
           "$CONTAINER" bash -lc 'cd /checkout && corepack pnpm run test:e2e:lifecycle'

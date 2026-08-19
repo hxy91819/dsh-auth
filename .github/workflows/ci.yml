@@ -137,6 +137,8 @@ jobs:
           node-version: 24.15.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Compile gitignored lib for the checkout E2E helper
+        run: pnpm run build
       - uses: actions/download-artifact@v7
         with:
           name: packed-tarball
@@ -157,6 +159,8 @@ jobs:
           node-version: 24.15.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Compile gitignored lib for the checkout E2E helper
+        run: pnpm run build
       - uses: actions/download-artifact@v7
         with:
           name: packed-tarball

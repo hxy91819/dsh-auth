@@ -234,6 +234,8 @@ jobs:
           version: ${{ env.PNPM_VERSION }}
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Compile gitignored lib for the checkout E2E helper
+        run: pnpm run build
       - name: Download the preflight artifact
         uses: actions/download-artifact@v8
         with:
@@ -269,6 +271,8 @@ jobs:
           version: ${{ env.PNPM_VERSION }}
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Compile gitignored lib for the checkout E2E helper
+        run: pnpm run build
       - name: Download the preflight artifact
         uses: actions/download-artifact@v8
         with:
@@ -339,6 +343,8 @@ jobs:
           version: ${{ env.PNPM_VERSION }}
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Compile gitignored lib for the checkout E2E helper
+        run: pnpm run build
       - name: Download the preflight artifact
         uses: actions/download-artifact@v8
         with:

@@ -24,5 +24,7 @@ jobs:
           node-version: 24.15.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Compile gitignored lib for the checkout E2E helper
+        run: pnpm run build
       - name: Verify npm latest Harness through the canonical E2E
         run: pnpm run test:e2e:latest-dsh
