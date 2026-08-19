@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.2.0
+
+Changes since [v0.1.15](https://github.com/hxy91819/dsh-auth/compare/v0.1.15...v0.2.0).
+
+### Breaking changes
+
+- release!: require v1 uninstall before 0.2.0 setup (`fd1741a`). Thanks masonxhuang.
+
+### Changes
+
+- docs: derive token-login progress from execution cards ([#14](https://github.com/hxy91819/dsh-auth/pull/14)). Thanks @hxy91819.
+- feat: reset the administrator password from Settings ([#13](https://github.com/hxy91819/dsh-auth/pull/13)). Thanks @hxy91819.
+- docs: require every PR review comment to be adopted or rejected before land (`109a099`). Thanks masonxhuang.
+- ci: run Actions once per PR and cancel superseded runs (`80f2061`). Thanks masonxhuang.
+- fix: restore exact token Origin checks and cross-process issue capacity ([#9](https://github.com/hxy91819/dsh-auth/pull/9)). Thanks @hxy91819.
+- docs: require autoreview and green CI before landing a PR ([#12](https://github.com/hxy91819/dsh-auth/pull/12)). Thanks @hxy91819.
+- docs: document custom login-token failure messages ([#11](https://github.com/hxy91819/dsh-auth/pull/11)). Thanks @hxy91819.
+- fix: fail closed on unsafe login-token directories and files ([#10](https://github.com/hxy91819/dsh-auth/pull/10)). Thanks @hxy91819.
+- docs: close the one-time token login epic after 0.1.15 ([#8](https://github.com/hxy91819/dsh-auth/pull/8)). Thanks @hxy91819.
+- docs: mark the token-login epic complete in the topic README (`0aa1e61`). Thanks masonxhuang.
+- docs: close STORY-06 after publishing dsh-auth 0.1.15 (`04c717b`). Thanks masonxhuang.
+- fix: vendor Caddy before ignore-scripts release pack (`30ab723`). Thanks masonxhuang.
+
+### Contributors
+
+Thanks masonxhuang and @hxy91819 for this release.
+
 ## v0.1.15
 
 Changes since [v0.1.14](https://github.com/hxy91819/dsh-auth/compare/v0.1.14...v0.1.15).
