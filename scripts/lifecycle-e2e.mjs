@@ -27,8 +27,8 @@ Environment:
                              for inspection when the run fails.
   LIFECYCLE_TARBALL_BASE     Optional prebuilt base tarball (0.2.0) used
                              instead of packing in-process.
-  LIFECYCLE_TARBALL_UPGRADE  Optional prebuilt first upgrade tarball (0.2.1).
-  LIFECYCLE_TARBALL_RECOVER  Optional prebuilt second upgrade tarball (0.2.2).
+  LIFECYCLE_TARBALL_UPGRADE  Optional prebuilt first upgrade tarball.
+  LIFECYCLE_TARBALL_RECOVER  Optional prebuilt second upgrade tarball.
 
 Outputs:
   One JSON summary on stdout and exit 0 on success. All units, prefixes,
@@ -104,6 +104,13 @@ function cleanupUnit() {
   }
   allowFailure('/usr/bin/systemctl', ['daemon-reload'])
   currentUnit = undefined
+}
+
+/** Bump the manifest's patch version so the merged build is a higher release. */
+function bumpedPatch(manifestPath, offset) {
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  const [major, minor, patch] = manifest.version.split('.').map(Number)
+  return `${String(major)}.${String(minor)}.${String(patch + offset)}`
 }
 
 function packVersion(version) {
@@ -216,9 +223,13 @@ function cli(command, args) {
 
 async function main() {
   mkdirSync(join(root, 'artifacts'), { recursive: true })
+  const manifestPath = join(checkout, 'package.json')
+  const baseVersion = JSON.parse(readFileSync(manifestPath, 'utf8')).version
+  const upgradeVersion = bumpedPatch(manifestPath, 1)
+  const recoverVersion = bumpedPatch(manifestPath, 2)
   const tarballA = prebuiltOrPack('LIFECYCLE_TARBALL_BASE')
-  const tarballB = prebuiltOrPack('LIFECYCLE_TARBALL_UPGRADE', '0.2.1')
-  const tarballC = prebuiltOrPack('LIFECYCLE_TARBALL_RECOVER', '0.2.2')
+  const tarballB = prebuiltOrPack('LIFECYCLE_TARBALL_UPGRADE', upgradeVersion)
+  const tarballC = prebuiltOrPack('LIFECYCLE_TARBALL_RECOVER', recoverVersion)
   summary.candidates = {
     base: `${readFileSync(tarballA).length}b`,
     upgraded: `${readFileSync(tarballB).length}b`,
@@ -266,7 +277,7 @@ async function main() {
   assert(setup.status === 0, `adoption setup failed\n${setup.stdout}${setup.stderr}`)
   const adopted = readState()
   assert(adopted.profilePackageOrigin === 'external', 'setup did not adopt the pre-installed bundle')
-  assert(adopted.profilePackageVersion === '0.2.0', 'adopted version was not the CLI build')
+  assert(adopted.profilePackageVersion === baseVersion, 'adopted version was not the CLI build')
   await waitWeb(edgePort, 'adopted edge')
   const session = await login(edgePort, 'lifecycle-admin', password)
   assert(session !== undefined, 'adoption login produced no session cookie')
@@ -278,11 +289,11 @@ async function main() {
   const upgraded = cli('upgrade', ['--non-interactive', '--authorize-upgrade', '--package', tarballB])
   assert(upgraded.status === 0, `upgrade failed\n${upgraded.stdout}${upgraded.stderr}`)
   const upgradedState = readState()
-  assert(upgradedState.profilePackageVersion === '0.2.1', 'upgrade did not record the new version')
+  assert(upgradedState.profilePackageVersion === upgradeVersion, 'upgrade did not record the new version')
   const environment = readFileSync('/etc/dsh-auth/dsh-auth.env', 'utf8')
-  assert(environment.includes('DSH_AUTH_EXPECTED_VERSION="0.2.1"'), 'environment marker was not rewritten')
+  assert(environment.includes(`DSH_AUTH_EXPECTED_VERSION="${upgradeVersion}"`), 'environment marker was not rewritten')
   const bundleManifest = JSON.parse(readFileSync(join(home, 'profiles', 'web', 'node_modules', 'dsh-auth', 'package.json'), 'utf8'))
-  assert(bundleManifest.version === '0.2.1', 'profile bundle was not upgraded')
+  assert(bundleManifest.version === upgradeVersion, 'profile bundle was not upgraded')
   let sessionView
   for (let attempt = 0; attempt < 40; attempt += 1) {
     try {
@@ -293,7 +304,7 @@ async function main() {
   }
   assert(sessionView?.status === 200, 'existing session did not survive the managed upgrade restart')
   assert(cli('doctor', []).status === 0, 'doctor rejected the upgraded installation')
-  summary.upgrade = 'bundle+Caddy+record+services at 0.2.1, session preserved'
+  summary.upgrade = `bundle+Caddy+record+services at ${upgradeVersion} (base ${baseVersion}), session preserved`
 
   // 4. External drift through plain dsh plugin: runtime fails closed, upgrade refuses.
   checked(dshCli, ['plugin', '--profile', 'web', 'add', '--offline', '--config.auto-install-peers=false', tarballA], {
@@ -331,8 +342,8 @@ async function main() {
   installGlobalCli(tarballC)
   const recovered = cli('upgrade', ['--non-interactive', '--authorize-upgrade', '--package', tarballC])
   assert(recovered.status === 0, `re-covered upgrade failed\n${recovered.stdout}${recovered.stderr}`)
-  assert(readState().profilePackageVersion === '0.2.2', 'recovery upgrade did not reach the newer build')
-  summary.recovery = 'restore recorded build, doctor healthy, upgrade to 0.2.2'
+  assert(readState().profilePackageVersion === recoverVersion, 'recovery upgrade did not reach the newer build')
+  summary.recovery = `restore recorded build, doctor healthy, upgrade to ${recoverVersion}`
 
   // 6. Downgrade refusal with an older CLI.
   installGlobalCli(tarballB)
