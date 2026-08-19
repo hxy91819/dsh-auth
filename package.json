@@ -185,10 +185,15 @@
   },
   "keywords": [
     "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "dsh-auth",
+    "dsh-security",
     "cordis",
     "caddy",
     "authentication",
-    "argon2id"
+    "argon2id",
+    "forward-auth"
   ],
   "license": "MIT",
   "packageManager": "pnpm@10.14.0"

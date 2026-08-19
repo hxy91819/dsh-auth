@@ -4,7 +4,7 @@
 [![CI](https://github.com/hxy91819/dsh-auth/actions/workflows/ci.yml/badge.svg)](https://github.com/hxy91819/dsh-auth/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/dsh-auth.svg)](LICENSE)
 
-Add a secure administrator login to the DeepSeek Harness Web app. `dsh-auth` keeps Harness on loopback and installs a project-owned Caddy `forward_auth` edge for pages, APIs, downloads, SSE, and WebSockets.
+Unofficial community plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). Add a secure administrator login to the DeepSeek Harness Web app. `dsh-auth` keeps Harness on loopback and installs a project-owned Caddy `forward_auth` edge for pages, APIs, downloads, SSE, and WebSockets.
 
 Version 0.2.0 is a breaking upgrade from legacy v1 deployments. Previous installer flags, Nginx-managed installations, and old sessions are not migrated. Uninstall the previous installation, then run `setup` again.
 
