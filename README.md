@@ -116,6 +116,7 @@ sudo dsh-auth setup \
 | `--non-interactive` | on a TTY | | Disable prompts. |
 | `--json` | no | | Emit one JSON document. Does not disable prompts. |
 | `--mode` | no | `https` | `https` or `http`. |
+| `--behind-tls-proxy` | no | disabled | Keep the managed HTTP edge on loopback, require trusted HTTPS forwarding headers, and issue Secure cookies. |
 | `--admin-bootstrap` | when not prompting | | `password` or `login-token`. |
 | `--admin-username` | password setup | | Initial administrator login name. |
 | `--login-token` | when not prompting | | `enabled` or `disabled`. Token initialization requires `enabled`. |
@@ -149,7 +150,7 @@ Other commands accept a smaller frozen flag set:
 | `upgrade` | `--authorize-upgrade` | `--package`, `--json`, `--non-interactive`, `--dry-run` |
 | `reset-password` | `--password-file` or `--password-stdin`; `--authorize-password-reset` | `--json`, `--non-interactive` |
 | `uninstall` | `--authorize-uninstall` | `--json`, `--non-interactive`, `--dry-run` |
-| `issue-login-token` | `--authorize-login-token-issue` when not prompting | `--ttl-seconds`, `--auth-state-file` with `--public-origin`, `--json` |
+| `issue-login-token` | `--authorize-login-token-issue` when not prompting | `--ttl-seconds`, `--public-origin`, `--auth-state-file` with `--public-origin`, `--json` |
 | `hash` | | `--password-stdin` |
 | `secret` | | |
 
@@ -186,6 +187,15 @@ dsh-auth issue-login-token \
   --json \
   --auth-state-file /export/dsh-auth/state/auth-state.json \
   --public-origin https://harness.example.com
+```
+
+A system installation created with `--behind-tls-proxy` also takes the current public HTTPS origin at issue time. The value is not stored by setup, so changing an outer proxy address or port does not require reinstalling dsh-auth:
+
+```sh
+sudo dsh-auth issue-login-token \
+  --non-interactive \
+  --authorize-login-token-issue \
+  --public-origin https://203.0.113.10:49152
 ```
 
 Setup can replace the built-in failure page text. Configure Chinese and English independently; an omitted language keeps its built-in copy. Each value is 1–500 Unicode characters of plain text. Control characters are rejected, and HTML is shown as text rather than markup. The installer refuses these flags when `--login-token` is `disabled`.
@@ -238,6 +248,24 @@ sudo dsh-auth setup \
 ```
 
 Do not use this mode on an untrusted network. HTTPS is the production default.
+
+## TLS terminated by an outer reverse proxy
+
+Operators may keep certificates and public TLS in a same-host or same-network-namespace ingress, load balancer, or reverse proxy while retaining the managed dsh-auth Caddy as the only authentication edge that can reach DSH:
+
+```sh
+sudo dsh-auth setup \
+  --admin-bootstrap login-token \
+  --login-token enabled \
+  --mode http \
+  --listen-address 127.0.0.1 \
+  --http-port 8080 \
+  --behind-tls-proxy
+```
+
+This mode accepts only a loopback listener. The outer proxy must connect to that listener from loopback and must overwrite `X-Forwarded-Host`, `X-Forwarded-Proto`, and `X-Real-IP`; the forwarded protocol must be `https`. Missing forwarding metadata is rejected. dsh-auth preserves the public authority for exact Origin checks, uses relative login redirects, and emits `Secure`, `__Host-` cookies even though its inner hop is HTTP.
+
+The outer proxy, its certificates, public address, and port remain operator-owned. Setup does not discover, reload, or modify them, and their changing public origin is not part of the setup fingerprint. Do not expose the inner listener, use a path prefix as an authentication secret, or let the outer proxy append client-supplied forwarding headers.
 
 ## Doctor, uninstall, and v1 reinstall
 

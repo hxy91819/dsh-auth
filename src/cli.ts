@@ -245,6 +245,7 @@ async function setupRequest(parsed: ParsedArguments, io: CliIo, interactive: boo
   const failureEn = values.get('--login-token-error-message-en')
   return validateSetupRequest({
     mode: inputs.mode,
+    ...(parsed.flags.has('--behind-tls-proxy') ? { behindTlsProxy: true } : {}),
     ...(outputDirectory === undefined ? {} : { outputDirectory }),
     ...(inputs.dshService === undefined ? {} : { dshService: inputs.dshService }),
     ...(dshHome === undefined ? {} : { dshHome }),
@@ -518,12 +519,13 @@ async function runIssueLoginToken(parsed: ParsedArguments, io: CliIo, host: Inst
   )
   const authStateFile = parsed.values.get('--auth-state-file')
   const publicOrigin = parsed.values.get('--public-origin')
-  if ((authStateFile === undefined) !== (publicOrigin === undefined)) {
-    throw new InstallerError('--auth-state-file and --public-origin must be provided together', ExitCode.usage)
+  let context
+  if (authStateFile === undefined) {
+    context = resolveSystemdLoginTokenContext(host, publicOrigin)
+  } else {
+    if (publicOrigin === undefined) throw new InstallerError('--auth-state-file requires --public-origin', ExitCode.usage)
+    context = resolveContainerLoginTokenContext(host, authStateFile, publicOrigin)
   }
-  const context = authStateFile === undefined || publicOrigin === undefined
-    ? resolveSystemdLoginTokenContext(host)
-    : resolveContainerLoginTokenContext(host, authStateFile, publicOrigin)
   if (!await authorizeLoginTokenIssue(parsed, io)) return ExitCode.cancelled
   let issued
   try {

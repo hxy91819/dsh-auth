@@ -3,10 +3,11 @@
 	auto_https off
 }
 
-http://{{PUBLIC_HOST}}:{{HTTP_PORT}}, http://:{{HTTP_PORT}} {
+http://{{SITE_HOST}}:{{HTTP_PORT}}, http://:{{HTTP_PORT}} {
 	bind {{LISTEN_ADDRESS}}
 
 	header {
+		{{STRICT_TRANSPORT_SECURITY}}
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		?Referrer-Policy "same-origin"
@@ -14,8 +15,7 @@ http://{{PUBLIC_HOST}}:{{HTTP_PORT}}, http://:{{HTTP_PORT}} {
 	}
 
 	route {
-		@invalid_host not host {{PUBLIC_HOST}}
-		respond @invalid_host 421
+		{{FORWARDED_GUARD}}
 
 		@public_verify path /auth/verify
 		respond @public_verify 404
@@ -27,9 +27,9 @@ http://{{PUBLIC_HOST}}:{{HTTP_PORT}}, http://:{{HTTP_PORT}} {
 			}
 			reverse_proxy {{UPSTREAM}} {
 				header_up Host {upstream_hostport}
-				header_up X-Forwarded-Host {{PUBLIC_AUTHORITY}}
-				header_up X-Forwarded-Proto {scheme}
-				header_up X-Real-IP {remote_host}
+				header_up X-Forwarded-Host {{FORWARDED_HOST}}
+				header_up X-Forwarded-Proto {{FORWARDED_PROTO}}
+				header_up X-Real-IP {{REAL_IP}}
 			}
 		}
 
@@ -45,7 +45,7 @@ http://{{PUBLIC_HOST}}:{{HTTP_PORT}}, http://:{{HTTP_PORT}} {
 			handle_response @auth_denied {
 				@interactive not path /api /api/* /plugins/events
 				handle @interactive {
-					header Location http://{{PUBLIC_AUTHORITY}}{resp.header.X-Dsh-Auth-Login}
+					header Location {resp.header.X-Dsh-Auth-Login}
 					respond 303
 				}
 			}
@@ -55,10 +55,7 @@ http://{{PUBLIC_HOST}}:{{HTTP_PORT}}, http://:{{HTTP_PORT}} {
 		request_header -X-Dsh-Auth-Username
 		request_header -X-Dsh-Auth-Roles
 		request_header -X-Dsh-Auth-Renewal
-		request_header -X-Forwarded-For
-		request_header -X-Forwarded-Host
-		request_header -X-Forwarded-Proto
-		request_header -X-Real-IP
+		{{CLEAR_FORWARDED_HEADERS}}
 		request_header -X-Original-Method
 		request_header -X-Original-URI
 		request_header -X-Original-Upgrade
@@ -75,9 +72,9 @@ http://{{PUBLIC_HOST}}:{{HTTP_PORT}}, http://:{{HTTP_PORT}} {
 			header_up -Connection
 			header_up -Upgrade
 			header_up Host {upstream_hostport}
-			header_up X-Forwarded-Host {{PUBLIC_AUTHORITY}}
-			header_up X-Forwarded-Proto {scheme}
-			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Host {{FORWARDED_HOST}}
+			header_up X-Forwarded-Proto {{FORWARDED_PROTO}}
+			header_up X-Real-IP {{REAL_IP}}
 			header_up X-Original-URI {header.X-Dsh-Auth-Original-URI}
 			header_up X-Original-Method {header.X-Dsh-Auth-Original-Method}
 			header_up X-Original-Upgrade {header.X-Dsh-Auth-Original-Upgrade}
@@ -94,6 +91,9 @@ http://{{PUBLIC_HOST}}:{{HTTP_PORT}}, http://:{{HTTP_PORT}} {
 		reverse_proxy {{UPSTREAM}} {
 			flush_interval -1
 			header_up Host {upstream_hostport}
+			header_up X-Forwarded-Host {{FORWARDED_HOST}}
+			header_up X-Forwarded-Proto {{FORWARDED_PROTO}}
+			header_up X-Real-IP {{REAL_IP}}
 			header_up Origin http://{upstream_hostport}
 		}
 	}

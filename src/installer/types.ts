@@ -45,6 +45,7 @@ export interface HostDiscovery {
 /** Validated setup input shared by interactive and non-interactive callers. */
 export interface SetupRequest {
   readonly mode: EdgeMode
+  readonly behindTlsProxy?: boolean
   readonly outputDirectory?: string
   readonly dshService?: string
   readonly dshHome?: string

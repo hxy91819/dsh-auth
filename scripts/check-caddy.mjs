@@ -5,13 +5,14 @@ import { createHash, randomBytes } from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import { accessSync, constants, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import https from 'node:https'
-import { createServer as createHttpServer } from 'node:http'
+import http, { createServer as createHttpServer } from 'node:http'
 import { createServer as createTcpServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { once } from 'node:events'
 import { renderCaddyfile } from './caddy-config.mjs'
 import { caddyReleaseManifest, currentCaddyPlatform, prepareCaddyRelease } from './caddy-release.mjs'
+import { renderCaddyfile as renderInstallerCaddyfile } from '../lib/installer/caddy.js'
 
 const HELP = `Usage:
   node scripts/check-caddy.mjs [--caddy ABSOLUTE_PATH]
@@ -95,6 +96,22 @@ function request(port, path, options = {}) {
   })
 }
 
+function requestHttp(port, path, headers = {}) {
+  return new Promise((resolveRequest, rejectRequest) => {
+    const outgoing = http.request({ hostname: '127.0.0.1', port, path, headers }, response => {
+      const chunks = []
+      response.on('data', chunk => { chunks.push(Buffer.from(chunk)) })
+      response.on('end', () => resolveRequest({
+        status: response.statusCode,
+        headers: response.headers,
+        body: Buffer.concat(chunks).toString('utf8'),
+      }))
+    })
+    outgoing.once('error', rejectRequest)
+    outgoing.end()
+  })
+}
+
 async function waitForEdge(port, process) {
   const deadline = Date.now() + 10_000
   while (Date.now() < deadline) {
@@ -148,6 +165,17 @@ function validateConfigs(caddy, root, ports, certificate, key) {
     const adapted = JSON.parse(checked(caddy, ['adapt', '--config', path, '--adapter', 'caddyfile']))
     if (adapted.admin?.disabled !== true) throw new Error('Caddy Admin API is not disabled')
   }
+  const proxied = renderInstallerCaddyfile({
+    mode: 'http', behindTlsProxy: true, profile: 'web', packageSource: 'dsh-auth@0.2.0',
+    adminBootstrap: 'login-token', loginTokenEnabled: true,
+    upstream: `127.0.0.1:${String(ports.upstream)}`, listenAddress: '127.0.0.1',
+    httpPort: ports.behind, httpsPort: 443,
+  }, true)
+  const formatted = checked(caddy, ['fmt', '-'], { input: proxied })
+  if (formatted !== proxied) throw new Error('rendered behind-TLS-proxy Caddy config is not formatted')
+  const path = join(root, 'Caddyfile.behind-tls-proxy')
+  writeFileSync(path, proxied)
+  checked(caddy, ['validate', '--config', path, '--adapter', 'caddyfile'], { env: environment })
 }
 
 function mockUpstream() {
@@ -228,7 +256,7 @@ async function verifyProtocol(caddy, root, ports, certificate, key) {
   try {
     await waitForEdge(ports.https, edge)
     const page = await request(ports.https, '/')
-    if (page.status !== 303 || page.headers.location !== `https://localhost:${String(ports.https)}/auth/login?returnTo=%2F`) {
+    if (page.status !== 303 || page.headers.location !== '/auth/login?returnTo=%2F') {
       throw new Error('Caddy did not map an interactive denial to the canonical 303')
     }
     if ((await request(ports.https, '/api/example')).status !== 401) throw new Error('Caddy did not preserve API 401')
@@ -281,6 +309,57 @@ async function verifyProtocol(caddy, root, ports, certificate, key) {
   }
 }
 
+async function verifyBehindTlsProxy(caddy, root, ports) {
+  const upstream = mockUpstream()
+  upstream.listen(ports.upstream, '127.0.0.1')
+  await once(upstream, 'listening')
+  const config = join(root, 'Caddyfile.behind-tls-proxy')
+  const edge = spawn(caddy, ['run', '--config', config, '--adapter', 'caddyfile'], {
+    stdio: ['ignore', 'ignore', 'pipe'],
+    env: { ...process.env, XDG_DATA_HOME: join(root, 'behind-data'), XDG_CONFIG_HOME: join(root, 'behind-config') },
+  })
+  const forwarded = {
+    host: '203.0.113.10:49152',
+    'x-forwarded-host': '203.0.113.10:49152',
+    'x-forwarded-proto': 'https',
+    'x-real-ip': '198.51.100.20',
+  }
+  try {
+    const deadline = Date.now() + 10_000
+    let ready = false
+    while (Date.now() < deadline) {
+      if (edge.exitCode !== null) throw new Error(`behind-TLS-proxy Caddy exited early with ${String(edge.exitCode)}`)
+      try {
+        if ((await requestHttp(ports.behind, '/auth/login', forwarded)).status === 200) {
+          ready = true
+          break
+        }
+      } catch {
+        await new Promise(resolveTimeout => setTimeout(resolveTimeout, 50))
+      }
+    }
+    if (!ready) throw new Error('behind-TLS-proxy Caddy did not become ready')
+    if ((await requestHttp(ports.behind, '/')).status !== 421) throw new Error('proxy mode accepted a request without trusted forwarding metadata')
+    const denied = await requestHttp(ports.behind, '/', forwarded)
+    if (denied.status !== 303 || denied.headers.location !== '/auth/login?returnTo=%2F') {
+      throw new Error('proxy mode did not use a relative interactive redirect')
+    }
+    const echoed = JSON.parse((await requestHttp(ports.behind, '/auth/echo', forwarded)).body)
+    const protectedEcho = JSON.parse((await requestHttp(ports.behind, '/echo', { ...forwarded, cookie: 'session=valid' })).body)
+    for (const seen of [echoed, protectedEcho]) {
+      if (seen['x-forwarded-host'] !== forwarded['x-forwarded-host']
+        || seen['x-forwarded-proto'] !== forwarded['x-forwarded-proto']
+        || seen['x-real-ip'] !== forwarded['x-real-ip']) {
+        throw new Error('proxy mode did not preserve the trusted public origin and client address')
+      }
+    }
+  } finally {
+    await terminate(edge)
+    upstream.close()
+    await once(upstream, 'close')
+  }
+}
+
 const root = mkdtempSync(join(tmpdir(), 'dsh-auth-check-caddy-'))
 let caddy
 try {
@@ -300,14 +379,16 @@ try {
     'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
     '-subj', `/CN=localhost-${randomBytes(4).toString('hex')}`, '-keyout', key, '-out', certificate,
   ])
-  const ports = { upstream: await availablePort(), http: await availablePort(), https: await availablePort() }
+  const ports = { upstream: await availablePort(), http: await availablePort(), https: await availablePort(), behind: await availablePort() }
   validateConfigs(caddy, root, ports, certificate, key)
   await verifyProtocol(caddy, root, ports, certificate, key)
+  await verifyBehindTlsProxy(caddy, root, ports)
   process.stdout.write(`${JSON.stringify({
     version, platform, binarySha256: manifest.platforms[platform].binarySha256,
     manifestPlatforms: Object.keys(manifest.platforms).sort(), tlsModes: ['automatic', 'internal', 'manual'],
     adminApi: 'disabled', publicVerify: 404, interactive: 303, api: 401, tokenRoutes: 'public proxied', setupRoute: 'public proxied', passwordRoute: 'public proxied',
-    identityHeaders: 'verified values replaced forgeries', renewalCookie: true, cleanup: true,
+    identityHeaders: 'verified values replaced forgeries', renewalCookie: true,
+    behindTlsProxy: 'loopback guards, relative redirect, forwarded origin preserved', cleanup: true,
   }, undefined, 2)}\n`)
 } finally {
   rmSync(root, { recursive: true, force: true })

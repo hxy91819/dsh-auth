@@ -707,7 +707,7 @@ async function main() {
     pageDenied.status === 303,
     `unauthenticated page did not redirect (status ${String(pageDenied.status)}, location ${String(pageDenied.headers.location)})`,
   )
-  const loginRedirect = new URL(pageDenied.headers.location)
+  const loginRedirect = new URL(pageDenied.headers.location, `https://localhost:${String(httpsPort)}`)
   assert(
     loginRedirect.origin === `https://localhost:${String(httpsPort)}`
       && loginRedirect.pathname === '/auth/login'

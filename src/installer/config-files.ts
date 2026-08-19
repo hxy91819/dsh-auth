@@ -12,7 +12,7 @@ export function renderEnvironmentFile(request: SetupRequest, paths: ManagedPaths
     `DSH_AUTH_STATE_FILE=${quoteEnvironment(paths.authStateFile)}`,
     `DSH_AUTH_SESSION_SECRET_FILE=${quoteEnvironment(paths.sessionSecretFile)}`,
     `DSH_AUTH_LOGIN_TOKEN_ENABLED=${request.loginTokenEnabled ? 'true' : 'false'}`,
-    `DSH_AUTH_SECURE_COOKIES=${request.mode === 'https' ? 'true' : 'false'}`,
+    `DSH_AUTH_SECURE_COOKIES=${request.mode === 'https' || request.behindTlsProxy === true ? 'true' : 'false'}`,
     'DSH_AUTH_TRUSTED_PROXY_ADDRESSES="127.0.0.1,::1"',
   ]
   if (expectedVersion !== undefined) {
@@ -45,6 +45,7 @@ export function renderSystemdDropIn(paths: ManagedPaths): string {
 export function persistentRequest(request: SetupRequest): InstallState['request'] {
   return {
     mode: request.mode,
+    ...(request.behindTlsProxy === true ? { behindTlsProxy: true } : {}),
     ...(request.outputDirectory === undefined ? {} : { outputDirectory: request.outputDirectory }),
     ...(request.dshService === undefined ? {} : { dshService: request.dshService }),
     ...(request.dshHome === undefined ? {} : { dshHome: request.dshHome }),

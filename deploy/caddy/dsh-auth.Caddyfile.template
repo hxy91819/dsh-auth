@@ -54,7 +54,7 @@ https://{{PUBLIC_HOST}}:{{HTTPS_PORT}}, https://:{{HTTPS_PORT}} {
 			handle_response @auth_denied {
 				@interactive not path /api /api/* /plugins/events
 				handle @interactive {
-					header Location https://{{PUBLIC_AUTHORITY}}{resp.header.X-Dsh-Auth-Login}
+					header Location {resp.header.X-Dsh-Auth-Login}
 					respond 303
 				}
 			}

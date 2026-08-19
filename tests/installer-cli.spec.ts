@@ -277,6 +277,30 @@ describe('installer CLI', () => {
     expect(await runCli(['plan', '--json', '--json'], duplicate, host)).toBe(2)
   })
 
+  it('renders secure loopback HTTP only for an explicit TLS proxy deployment', async () => {
+    const host = outputHost()
+    const io = new FakeCliIo(false)
+    const args = [
+      'setup', '--non-interactive', '--json', '--output-dir', '/export/proxied',
+      '--mode', 'http', '--listen-address', '127.0.0.1', '--behind-tls-proxy',
+      '--admin-bootstrap', 'login-token', '--login-token', 'enabled',
+    ]
+
+    expect(await runCli(args, io, host)).toBe(0)
+    expect(host.readFile('/export/proxied/dsh-auth.env')).toContain('DSH_AUTH_SECURE_COOKIES=true')
+    expect(host.readFile('/export/proxied/Caddyfile')).toContain('@invalid_forwarded not header X-Forwarded-Proto https')
+    const state = JSON.parse(host.readFile('/export/proxied/install-state.json')) as { request: Record<string, unknown>; fingerprint: string }
+    expect(state.request).toMatchObject({ mode: 'http', behindTlsProxy: true, listenAddress: '127.0.0.1' })
+    expect(JSON.stringify(state)).not.toContain('auth.example.test')
+
+    for (const invalid of [
+      [...args, '--server-name', 'auth.example.test'],
+      args.map(value => value === '127.0.0.1' ? '10.0.0.20' : value),
+    ]) {
+      expect(await runCli(invalid, new FakeCliIo(false), outputHost())).toBe(2)
+    }
+  })
+
   it('keeps issue-login-token options out of setup and plan', async () => {
     const io = new FakeCliIo(false)
     expect(await runCli(['plan', ...OUTPUT_ARGS, '--ttl-seconds', '60'], io, outputHost())).toBe(2)
@@ -356,6 +380,27 @@ describe('issue-login-token CLI', () => {
     expect(Number.isSafeInteger(metadata.expiresAt)).toBe(true)
     expect(host.readFile(path)).not.toContain(token)
     expect(host.stat(path)).toMatchObject({ uid: 0, gid: 0, mode: 0o600 })
+  }, 30_000)
+
+  it('requires a runtime HTTPS origin for a proxied system installation', async () => {
+    const host = tokenSystemHost()
+    const setupArgs = TOKEN_SYSTEM_ARGS
+      .map(value => value === '10.0.0.20' ? '127.0.0.1' : value)
+    expect(await runCli(['setup', ...setupArgs, '--behind-tls-proxy'], new FakeCliIo(false), host)).toBe(0)
+
+    const missing = new FakeCliIo(false)
+    expect(await runCli(ISSUE_ARGS, missing, host)).toBe(2)
+    expect(missing.outputs.join('') + missing.errors.join('')).toContain('PUBLIC_ORIGIN_REQUIRED')
+
+    const insecure = new FakeCliIo(false)
+    expect(await runCli([...ISSUE_ARGS, '--public-origin', 'http://127.0.0.1:8080'], insecure, host)).toBe(2)
+
+    const issued = new FakeCliIo(false)
+    expect(await runCli([...ISSUE_ARGS, '--public-origin', 'https://203.0.113.10:49152'], issued, host)).toBe(0)
+    expect(issued.outputs.join('').trim()).toMatch(/^https:\/\/203\.0\.113\.10:49152\/auth\/token#token=dsh_otl_v1_/u)
+    const state = host.readFile('/etc/dsh-auth/install-state.json')
+    expect(state).not.toContain('203.0.113.10')
+    expect(state).not.toContain('49152')
   }, 30_000)
 
   it('emits the JSON v2 success document as the only bearer-secret output', async () => {
@@ -488,7 +533,7 @@ describe('issue-login-token CLI', () => {
     expect(v1Io.outputs.join('') + v1Io.errors.join('')).toContain('SCHEMA_V1_UNSUPPORTED')
   })
 
-  it('rejects unknown flags and half of the container input pair', async () => {
+  it('rejects unknown flags, incomplete container inputs, and system origin overrides without proxy mode', async () => {
     const host = tokenSystemHost()
     await runCli(['setup', ...TOKEN_SYSTEM_ARGS], new FakeCliIo(false), host)
     const io = new FakeCliIo(false)

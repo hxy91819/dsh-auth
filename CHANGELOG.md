@@ -4,6 +4,7 @@
 
 ### Changes
 
+- feat: support a loopback authentication edge behind an operator-managed TLS proxy.
 - feat: move sign-out from the sidebar into Settings → General.
 
 ## v0.2.0
