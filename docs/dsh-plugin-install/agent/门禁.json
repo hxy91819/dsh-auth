@@ -1,0 +1,24 @@
+{
+  "kind": "agent-reference",
+  "schema_version": 1,
+  "id": "gates",
+  "title": "门禁契约",
+  "updated": "2026-08-19",
+  "body": {
+    "READY": {
+      "authorization": "已确认产品形态、安装与升级边界，且真实 DSH 行为可复现后允许领取 STORY-01。",
+      "pass": "4 项产品覆盖均有唯一 owns，用户决策已写入 Story，代码与工具基线可读取。",
+      "revoke": "DSH 插件语义、单包发布、root 信任边界或用户确认发生变化。"
+    },
+    "COMPONENT": {
+      "authorization": "单个工程结果可进入下一 Story。",
+      "pass": "对应执行卡全部清单完成，行为、回滚、质量和交接证据一致。",
+      "revoke": "后续发现该结果破坏认证边界、所有权或前置契约。"
+    },
+    "RELEASE": {
+      "authorization": "完整生命周期可以进入发布决策。",
+      "pass": "唯一候选通过真实 DSH、Caddy、systemd、浏览器、打包、秘密和差异检查。",
+      "revoke": "候选 SHA、依赖基线、发布内容或任何安全相关代码变化。"
+    }
+  }
+}

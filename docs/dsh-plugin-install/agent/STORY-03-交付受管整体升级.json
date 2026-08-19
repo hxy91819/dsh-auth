@@ -1,0 +1,53 @@
+{
+  "kind": "agent-card",
+  "schema_version": 1,
+  "story": "STORY-03",
+  "intent_version": 2,
+  "status": "blocked",
+  "owner": "待领取",
+  "blocker": "STORY-02 未完成",
+  "status_updated": "2026-08-19",
+  "refreshed": "待领取",
+  "code_baseline": "待领取",
+  "owns": [
+    "MANAGED_UPGRADE"
+  ],
+  "verifies": [
+    "TRUSTED_ADOPTION"
+  ],
+  "goal": "独立 upgrade 命令把健康 v2 安装原子升级到与受信任全局 CLI 一致的更高版本构建，并完整恢复失败升级。",
+  "decision_boundary": "只允许升级到包名、版本和构建身份与当前受信任全局 CLI 一致且版本更高的目标；保留凭据、secret、认证状态和会话；不迁移 v1；版本漂移必须先恢复记录中的旧 bundle 并通过 doctor。",
+  "technical_plan": "新增公开 CLI 契约和 typed upgrade plan；校验目标与全局 CLI 身份及版本顺序；记录升级事务；更新 bundle、Caddy、配置与服务；失败逆序恢复；doctor 为漂移状态输出按记录执行 dsh plugin add、复检、再升级的固定步骤。",
+  "authoritative_inputs": "docs/dsh-plugin-install/epics/EPIC-DSH-PLUGIN-INSTALL.md；对应 Story；docs/installer.md；README.md 的 CLI 契约；src/cli.ts；src/installer/cli-parser.ts；src/installer/plan.ts；src/installer/executor.ts；src/installer/doctor.ts；src/installer/types.ts；STORY-02 交接。",
+  "claim_checks": "确认 STORY-02 已完成并读取构建身份与所有权交接；intent_version=2；当前 CLI schema、退出码、状态 parser 和服务回滚基线可复现。",
+  "checklist": [
+    {
+      "done": false,
+      "text": "冻结 upgrade 参数、计划、JSON、退出码和拒绝行为。"
+    },
+    {
+      "done": false,
+      "text": "实现 v2 前进升级事务和服务验证。"
+    },
+    {
+      "done": false,
+      "text": "保持凭据、会话和预装包卸载语义。"
+    },
+    {
+      "done": false,
+      "text": "覆盖每个写入与服务阶段的自动回滚。"
+    },
+    {
+      "done": false,
+      "text": "实现版本漂移失败关闭及 doctor 的三步恢复诊断。"
+    },
+    {
+      "done": false,
+      "text": "完成全量检查和 Story 交接。"
+    }
+  ],
+  "steps": "先写公开契约与失败测试；扩展 parser、types、plan 和 journal；实现逐阶段更新与回滚；增加 runtime/doctor 漂移检查和旧 bundle 恢复诊断；最后跑安装器与真实服务验证。",
+  "verification": "记录成功升级、每阶段失败回滚、v1 拒绝、降级拒绝、目标与全局 CLI 身份不匹配、外部更新漂移、旧 bundle 恢复、doctor 复检、会话延续的固定场景分母及全部退出码。",
+  "stop_conditions": "升级需要改变认证状态格式、使会话失效、允许降级、接受与全局 CLI 身份不一致的目标、在 doctor 恢复健康前升级，或无法恢复旧 Caddy/bundle/service 时停止并请求确认。",
+  "handoff": "完成后记录 CLI 契约、事务阶段、恢复证据、状态兼容与清理，并向 STORY-04 交付完整生命周期入口。"
+}

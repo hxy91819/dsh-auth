@@ -1,0 +1,49 @@
+{
+  "kind": "agent-card",
+  "schema_version": 1,
+  "story": "STORY-02",
+  "intent_version": 1,
+  "status": "todo",
+  "owner": "待领取",
+  "blocker": "无",
+  "status_updated": "2026-08-19",
+  "refreshed": "待领取",
+  "code_baseline": "待领取",
+  "owns": [
+    "TRUSTED_ADOPTION"
+  ],
+  "verifies": [
+    "DORMANT_BUNDLE"
+  ],
+  "goal": "setup 安全接管同一构建的预安装 bundle，并在回滚和卸载时保留外部预装包。",
+  "decision_boundary": "接管必须验证包名、版本、构建身份、bundle 声明和实际解析来源。不得放宽未归属主机文件冲突规则。",
+  "technical_plan": "为发布物建立可稳定比较的构建身份；扩展 package discovery、安装计划、状态所有权、doctor、回滚和 uninstall；状态同时保存可用于恢复旧 bundle 的 package spec 与构建身份；分别覆盖 setup 自装与外部预装。",
+  "authoritative_inputs": "docs/dsh-plugin-install/epics/EPIC-DSH-PLUGIN-INSTALL.md；对应 Story；docs/installer.md；SECURITY.md；src/installer/plan.ts；src/installer/executor.ts；src/installer/doctor.ts；src/installer/uninstall.ts；src/installer/types.ts；package.json；发布打包脚本。",
+  "claim_checks": "确认 STORY-01 已完成并读取交接；intent_version=1；当前 profile manifest、pnpm 安装记录和包解析方式与 DSH 基线一致；发布物可生成稳定构建身份。",
+  "checklist": [
+    {
+      "done": false,
+      "text": "冻结 registry、私有镜像和 tarball 共用的构建身份契约。"
+    },
+    {
+      "done": false,
+      "text": "实现同构建预装包的 setup 接管和状态记录。"
+    },
+    {
+      "done": false,
+      "text": "验证不匹配输入在主机变更前失败。"
+    },
+    {
+      "done": false,
+      "text": "验证回滚与 uninstall 保留预装包。"
+    },
+    {
+      "done": false,
+      "text": "完成安装器测试、打包检查和 Story 交接。"
+    }
+  ],
+  "steps": "先保存现有 PROFILE_PACKAGE_CONFLICT 基线；定义并生成构建身份；扩展发现与计划；实现外部来源状态和清理分支；覆盖成功、拒绝、崩溃恢复、回滚及卸载。",
+  "verification": "固定接管成功与拒绝场景分母；运行 installer 聚焦测试、pack smoke、installer E2E、check、check:caddy 和 git diff --check。",
+  "stop_conditions": "构建身份不能跨受支持发布来源稳定比较；接管需要信任服务用户可写代码；状态变化要求破坏 schema v2 或改变既有卸载语义时停止并请求确认。",
+  "handoff": "完成后记录身份格式、可恢复 package spec、状态兼容、所有权分支、失败清理和命令证据，并向 STORY-03 交付可升级且可恢复健康的安装来源模型。"
+}

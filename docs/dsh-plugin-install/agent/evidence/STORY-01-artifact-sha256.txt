@@ -1,0 +1,1 @@
+429810a30b862288f7821601120f71efccdd95a4eb62ff9447fb8d17c1aa74e3  /tmp/opencode/s01final/dsh-auth-0.2.0.tgz

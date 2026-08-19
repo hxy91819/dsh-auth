@@ -1,8 +1,11 @@
 # Optional overlay for a profile where `dsh-auth` is already resolvable but is
 # intentionally not listed as a bundle. Do not apply this with cordis.patch.yml.
+# Same dormancy rule as cordis.patch.yml: both core file variables absent
+# keeps the row disabled so `dsh plugin add` pre-install never breaks Web.
 - insert:
     - id: dsh-auth
       name: dsh-auth
+      disabled: !!js process.env.DSH_AUTH_STATE_FILE === undefined && process.env.DSH_AUTH_SESSION_SECRET_FILE === undefined
       config:
         authStateFile: !!js process.env.DSH_AUTH_STATE_FILE
         sessionSecretFile: !!js process.env.DSH_AUTH_SESSION_SECRET_FILE

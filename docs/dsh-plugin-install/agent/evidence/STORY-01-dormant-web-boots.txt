@@ -1,0 +1,14 @@
+== dormant web boot log ==
+dsh web: http://127.0.0.1:39104
+== GET / -> status + dsh-auth occurrences in SPA shell ==
+index_status=200
+0
+== boot roster dsh-auth entry ==
+0
+== /auth/login is SPA shell (fallback), not login form ==
+1
+0
+== /auth/csrf JSON ==
+200 <!doctype html>
+<html lang="zh-CN">
+  <head><script>window.__DSH_BOOT__ = {"rev":"cc3bf3294689","entries":[{"id":"@deeps

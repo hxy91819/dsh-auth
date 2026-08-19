@@ -1,0 +1,12 @@
+{
+  "kind": "risk-register",
+  "schema_version": 1,
+  "epic": "EPIC-DSH-PLUGIN-INSTALL",
+  "updated": "2026-08-19",
+  "pending_decisions": [],
+  "watch_items": [
+    "DeepSeek Harness 仍是候选版本；Loader 或 dsh plugin 行为变化时必须刷新真实兼容基线。",
+    "构建身份必须覆盖 registry、私有镜像和本地 tarball；无法稳定比较时停止接管实现。",
+    "Caddy 版本变化时，upgrade 与发布验收必须同时验证运行时协议和失败回滚。"
+  ]
+}

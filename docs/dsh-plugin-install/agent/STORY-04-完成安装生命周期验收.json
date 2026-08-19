@@ -1,0 +1,55 @@
+{
+  "kind": "agent-card",
+  "schema_version": 1,
+  "story": "STORY-04",
+  "intent_version": 2,
+  "status": "blocked",
+  "owner": "待领取",
+  "blocker": "STORY-03 未完成",
+  "status_updated": "2026-08-19",
+  "refreshed": "待领取",
+  "code_baseline": "待领取",
+  "owns": [
+    "LIFECYCLE_ACCEPTANCE"
+  ],
+  "verifies": [
+    "DORMANT_BUNDLE",
+    "TRUSTED_ADOPTION",
+    "MANAGED_UPGRADE"
+  ],
+  "goal": "用发布候选证明官方插件预安装、setup、upgrade、doctor、uninstall 和再次休眠形成安全闭环。",
+  "decision_boundary": "只验证当前项目；保持单 npm 包和内置双架构 Caddy；不得以文档替代真实 DSH、Caddy、systemd 和浏览器证据。",
+  "technical_plan": "扩展打包与真实 E2E 驱动完整生命周期；检查公网和 loopback 边界、会话连续性、失败回滚、所有权清理、发布内容及公开说明。",
+  "authoritative_inputs": "docs/dsh-plugin-install/epics/EPIC-DSH-PLUGIN-INSTALL.md；对应 Story；前三个 Story 交接；README.md；SECURITY.md；docs/installer.md；docs/releasing.md；scripts/real-integration.mjs；scripts/installer-e2e.mjs；发布校验脚本。",
+  "claim_checks": "确认 STORY-03 已完成且无 blocker；intent_version=2；固定最新 DSH、Node、Caddy、Chrome、systemd 和打包基线；检查工作区与远端 acceptance commit。",
+  "checklist": [
+    {
+      "done": false,
+      "text": "固定完整生命周期场景和发布门禁分母。"
+    },
+    {
+      "done": false,
+      "text": "完成真实 DSH、Caddy、systemd 和浏览器验收。"
+    },
+    {
+      "done": false,
+      "text": "验证升级、漂移恢复、回滚、卸载和再次休眠。"
+    },
+    {
+      "done": false,
+      "text": "更新公共安装、安全、升级和修复文档。"
+    },
+    {
+      "done": false,
+      "text": "检查发布包、秘密、Git 元数据和差异。"
+    },
+    {
+      "done": false,
+      "text": "记录最终证据并形成发布结论。"
+    }
+  ],
+  "steps": "先冻结验收矩阵；构建唯一候选；依次执行预安装、休眠、接管、认证、升级、漂移、恢复旧 bundle、doctor 复检、再次升级、卸载和再启动；更新文档；最后执行全部发布检查。",
+  "verification": "至少包含 check、check:caddy、test:e2e、installer E2E、npm pack dry-run、pack smoke、版本漂移恢复链、秘密扫描和 git diff --check；记录候选 checksum 与固定分母。",
+  "stop_conditions": "最新 DSH 改变插件或 Loader 契约；验收需要修改 DSH 上游；Caddy 或认证边界变化；发布物不再是单包时停止并请求确认。",
+  "handoff": "记录 Epic 的起止版本、候选身份、全部门禁、外部副作用、清理、残余风险和公开发布结论。"
+}

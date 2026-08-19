@@ -1,0 +1,43 @@
+{
+  "kind": "agent-card",
+  "schema_version": 1,
+  "story": "STORY-01",
+  "intent_version": 1,
+  "status": "done",
+  "owner": "opencode",
+  "blocker": "无",
+  "status_updated": "2026-08-19",
+  "refreshed": "2026-08-19",
+  "code_baseline": "99e29cf",
+  "owns": [
+    "DORMANT_BUNDLE"
+  ],
+  "verifies": [],
+  "goal": "官方 dsh plugin 安装后，无认证配置的 Web 正常启动且 dsh-auth 完全休眠；部分配置仍失败。",
+  "decision_boundary": "只允许在两个核心变量都不存在时休眠。不得弱化部分配置错误、认证配置校验或 Caddy 唯一公网入口。",
+  "technical_plan": "在 bundle patch 与 overlay 使用 Loader 原生 disabled 条件；先以真实 profile 保存启动失败，再覆盖休眠、部分配置和完整配置三种行为。",
+  "authoritative_inputs": "docs/dsh-plugin-install/epics/EPIC-DSH-PLUGIN-INSTALL.md；对应 Story；AGENTS.md；cordis.patch.yml；cordis.overlay.yml；src/config.ts；src/index.ts；tests/config.spec.ts；tests/plugin.spec.ts；scripts/real-integration.mjs；已安装 DSH rc.7 Loader 源码。",
+  "claim_checks": "确认 intent_version=1；工作区干净；当前 DSH Loader 仍在 init 前跳过 disabled entry；真实 Web profile 的包解析与启动命令可复现。",
+  "checklist": [
+    {
+      "done": true,
+      "text": "保存无变量安装导致启动失败的真实行为基线。"
+    },
+    {
+      "done": true,
+      "text": "实现无变量休眠，并保持部分配置严格失败。"
+    },
+    {
+      "done": true,
+      "text": "验证 Host、首页和客户端均无休眠插件效果。"
+    },
+    {
+      "done": true,
+      "text": "完成聚焦测试、全量检查和 Story 交接。"
+    }
+  ],
+  "steps": "先打包并在临时 DSH_HOME 重现三种配置状态；再修改两个 composition 文件；补充可观察行为测试；最后运行聚焦测试、check、check:caddy、E2E 与差异检查。",
+  "verification": "真实 dsh 0.1.0-rc.7：无变量 plugin add 后 dsh web 退出码 1 且报 invalid config（基线证据 STORY-01-baseline-no-vars-web-fails.log）；修复后无变量 Web 启动且 SPA shell 无 dsh-auth roster/路由/注入（STORY-01-dormant-web-boots.txt）；仅一个核心变量两个方向均退出码 1 并给出明确配置错误（STORY-01-partial-*-fails.log）；完整配置登录表单、client roster 与 meta 注入恢复（STORY-01-full-config-active.txt）。pnpm run check 18 文件 167 测试通过；check:caddy 与 git diff --check 通过；test:e2e 通过且新增 preinstall/partialPreinstall 阶段（STORY-01-e2e-summary.json）。打包产物 dsh-auth-0.2.0.tgz sha256=429810a30b862288f7821601120f71efccdd95a4eb62ff9447fb8d17c1aa74e3，含 cordis.patch.yml 与 cordis.overlay.yml。",
+  "stop_conditions": "Loader 不保证 disabled entry 在导入和校验前停止；休眠 entry 仍进入客户端 roster；实现需要新增启用变量或改变既有部署配置时停止并请求确认。",
+  "handoff": "起止版本：99e29cf..本提交。两个 composition 文件各新增一行 disabled: !!js（两核心变量均未定义才休眠），无代码改动；新增 tests/dormant-composition.spec.ts（6 测试）锁定休眠矩阵与 env 映射；scripts/real-integration.mjs 增加 verifyDormantPreinstall 阶段。副作用：/tmp/opencode/s01* 与一次性 DSH_HOME 已清理策略为自动（E2E 自清理，手工目录留在 /tmp/opencode 不入库）。Git 状态：仅本任务文件与 composition/测试/E2E 变更。blocker 无。STORY-02 输入：休眠契约=仅 DSH_AUTH_STATE_FILE 与 DSH_AUTH_SESSION_SECRET_FILE 都未定义时 loader row disabled（导入前跳过）；一个变量存在即走 resolveConfig 严格失败；setup 接管时必须提供两个变量才能激活 bundle。"
+}
