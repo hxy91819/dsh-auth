@@ -1,10 +1,12 @@
 import { randomBytes } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { runCli } from '../src/cli.js'
 import { verifyPassword } from '../src/password.js'
 import { FakeCliIo, FakeInstallerHost } from './installer-helpers.js'
 
 const PASSWORD = 'sufficient-system-password'
+const PACKAGE_VERSION = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { readonly version: string }).version
 const SYSTEM_ARGS = [
   '--json', '--non-interactive', '--mode', 'http', '--listen-address', '10.0.0.20',
   '--dsh-service', 'dsh-web.service', '--admin-bootstrap', 'password', '--admin-username', 'admin',
@@ -81,6 +83,8 @@ describe('system installer transactions', () => {
     expect(host.readFile('/etc/dsh-auth/dsh-auth.env')).not.toContain(PASSWORD)
     expect(host.readFile('/etc/dsh-auth/dsh-auth.env')).toContain('DSH_AUTH_STATE_FILE=')
     expect(host.readFile('/etc/dsh-auth/Caddyfile')).toContain('admin off')
+    expect(host.readFile('/etc/dsh-auth/Caddyfile')).toContain('output file "/var/lib/dsh-auth-caddy/access.log"')
+    expect(host.readFile('/etc/dsh-auth/Caddyfile')).toContain('log_skip @skip_access_log')
     expect(host.readFile('/etc/systemd/system/dsh-auth-caddy.service')).toContain('DynamicUser=yes')
     const validateIndex = host.commands.findIndex(command => command.executable === '/usr/lib/dsh-auth/caddy' && command.args[0] === 'validate')
     const enableIndex = host.commands.findIndex(command => command.executable === '/usr/bin/systemctl' && command.args[0] === 'enable' && command.args[2] === 'dsh-auth-caddy.service')
@@ -532,7 +536,7 @@ describe('trusted adoption of a pre-installed profile bundle', () => {
     const state = JSON.parse(host.readFile(STATE_FILE)) as RecordedPackageState
     expect(state.profilePackageInstalledByDshAuth).toBe(true)
     expect(state.profilePackageOrigin).toBe('dsh-auth')
-    expect(state.profilePackageSpec).toBe('0.2.0')
+    expect(state.profilePackageSpec).toBe(PACKAGE_VERSION)
     expect(state.profilePackageBuildIdentity).toMatch(/^[0-9a-f]{64}$/u)
     expect(state.profilePackagePath).toBe(BUNDLE_ROOT)
   }, 30_000)

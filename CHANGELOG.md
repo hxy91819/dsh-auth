@@ -5,7 +5,22 @@
 ### Changes
 
 - feat: support a loopback authentication edge behind an operator-managed TLS proxy.
-- feat: move sign-out from the sidebar into Settings → General.
+
+## v0.2.1
+
+Changes since [v0.2.0](https://github.com/hxy91819/dsh-auth/compare/v0.2.0...v0.2.1).
+
+### Changes
+
+- release: prepare v0.2.1 (`87e0d10`). Thanks @hxy91819.
+- docs: add a Chinese README for operator install docs ([#16](https://github.com/hxy91819/dsh-auth/pull/16)). Thanks @hxy91819.
+- feat: add privacy-safe authentication audit logs ([#15](https://github.com/hxy91819/dsh-auth/pull/15)). Thanks @hxy91819.
+- Move sign-out from the sidebar into Settings ([#17](https://github.com/hxy91819/dsh-auth/pull/17)). Thanks @hxy91819.
+- docs: label dsh-auth as unofficial and add marketplace keywords (`98ae8a8`). Thanks @hxy91819.
+
+### Contributors
+
+Thanks @hxy91819 for this release.
 
 ## v0.2.0
 

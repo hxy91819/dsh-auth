@@ -46,6 +46,8 @@ describe('Cordis plugin integration', () => {
     await web
     const auth = context.plugin({ name, inject, apply }, testConfig(credentials, { secureCookies: false }))
     await auth
+    expect(context.logger.buffer.some(message => message.name === 'dsh-auth'
+      && (message.args[0] as { event?: string } | undefined)?.event === 'auth.runtime.ready')).toBe(true)
 
     const index = '<!doctype html><body><div id="root"></div><script type="module">start()</script></body>'
     const bootstrapped = context.webServer.applyIndexTaps(index)

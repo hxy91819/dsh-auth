@@ -53,6 +53,7 @@ export function renderCaddyfile(options) {
     ['{{PUBLIC_AUTHORITY}}', `${publicHost}:${port(options.httpsPort, 'httpsPort')}`],
     ['{{UPSTREAM}}', upstream(options.upstream)],
     ['{{TLS_DIRECTIVE}}', tlsDirective(options.tls)],
+    ['{{ACCESS_LOG_FILE}}', caddyPath(options.accessLogFile, 'accessLogFile')],
   ])
   let rendered = template
   for (const [placeholder, value] of values) rendered = rendered.replaceAll(placeholder, value)

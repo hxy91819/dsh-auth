@@ -286,7 +286,7 @@ function verifyInstalledState(host: InstallerHost, state: InstallState, request:
   const system = !output
   const expectedFiles = new Map<string, string>([
     [state.paths.environmentFile, renderEnvironmentFile(request, state.paths, state.profilePackageVersion)],
-    [state.paths.caddyfile, renderCaddyfile(request, system)],
+    [state.paths.caddyfile, renderCaddyfile(request, system, state.paths.caddyStateDirectory)],
     ...(output ? [] : [
       [state.paths.systemdDropInFile, renderSystemdDropIn(state.paths)] as const,
       [state.paths.caddyUnitFile, renderCaddyUnit(request, state.paths)] as const,

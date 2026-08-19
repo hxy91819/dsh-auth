@@ -1,5 +1,7 @@
 # dsh-auth
 
+English | [简体中文](README.zh-CN.md)
+
 [![npm version](https://img.shields.io/npm/v/dsh-auth.svg)](https://www.npmjs.com/package/dsh-auth)
 [![CI](https://github.com/hxy91819/dsh-auth/actions/workflows/ci.yml/badge.svg)](https://github.com/hxy91819/dsh-auth/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/dsh-auth.svg)](LICENSE)
@@ -22,7 +24,7 @@ sudo dsh-auth setup
 `npm install -g dsh-auth` installs the current stable CLI, and the installer pins that same version in the selected DSH profile. For controlled production rollout, install the exact version approved by your supply-chain policy:
 
 ```sh
-sudo npm install -g dsh-auth@0.2.0
+sudo npm install -g dsh-auth@0.2.1
 ```
 
 ### Plugin pre-install is not enabled authentication
@@ -156,18 +158,6 @@ Other commands accept a smaller frozen flag set:
 
 Passwords are accepted only through hidden interactive input, `--password-stdin`, or `--password-file`. There is no inline password flag. Command output, JSON, plans, subprocess argv, and installer errors never contain password or session-secret values. `issue-login-token` is the only command whose successful stdout or JSON may contain a bearer login token.
 
-## Preview
-
-Unauthenticated visitors see a responsive login page styled to match DeepSeek Harness:
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/hxy91819/dsh-auth/main/docs/images/login.png" alt="dsh-auth login page for DeepSeek Harness" width="720">
-</p>
-
-After sign-in, users enter the real Harness Web app with its normal sessions, tools, model selection, and workspace navigation. The authentication plugin adds password-reset and sign-out rows in Settings → General:
-
-![Authenticated DeepSeek Harness Web app after dsh-auth sign-in](https://raw.githubusercontent.com/hxy91819/dsh-auth/main/docs/images/authenticated-harness.png)
-
 ## Issue a one-time login link
 
 When setup enabled login tokens, a cloud control plane or operator can mint a single-use URL. The raw token appears only in the successful human URL line or the JSON success document:
@@ -275,6 +265,19 @@ The outer proxy, its certificates, public address, and port remain operator-owne
 sudo dsh-auth doctor
 sudo dsh-auth doctor --json
 ```
+
+Runtime authentication events use the Cordis logger name `dsh-auth`. The managed Caddy service writes security-sensitive access events to `/var/lib/dsh-auth-caddy/access.log`. Collect the application journal, restricted access-log files, and read-only health report:
+
+```sh
+sudo journalctl -u dsh-web.service --since '1 hour ago'
+sudo ls -lh /var/lib/dsh-auth-caddy/access.log*
+sudo tail -n 200 /var/lib/dsh-auth-caddy/access.log
+sudo dsh-auth doctor --json
+```
+
+Authentication logs contain fixed event names, outcomes, authentication methods, and a deployment-scoped irreversible client identifier. They do not contain submitted usernames, passwords, hashes, raw login tokens, cookies, CSRF values, session identifiers, request bodies, or complete request URLs. Application warnings and errors have a shared budget of 60 events per minute; excess events are suppressed and summarized as `auth.logging.suppressed` when logging resumes in the next window. Successful state changes and startup events are not sampled.
+
+Caddy access logs only security-sensitive login, token, logout, administrator, and public-verify paths; routine SPA and API traffic is skipped, and request and response headers are omitted. The active file rolls after 10 MiB; at most three gzip-compressed archives are retained for up to seven days, bounding nominal uncompressed storage near 40 MiB. Operators must still treat these files as sensitive because they contain client addresses and request paths. Keep journald globally bounded as well, and redact private hosts, paths, addresses, and account information before sharing a support bundle.
 
 `uninstall --dry-run` lists only files and profile changes proven by the ownership record. Interactive uninstall requires typing `uninstall`; automation requires the exact `--authorize-uninstall` flag. The independent Caddy unit is removed; a user-installed Caddy or Nginx is never touched. An adopted, externally pre-installed bundle is preserved and simply becomes dormant again.
 

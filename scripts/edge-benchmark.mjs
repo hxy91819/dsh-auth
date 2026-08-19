@@ -311,6 +311,7 @@ try {
   writeFileSync(caddyConfig, renderCaddyfile({
     publicHost: 'localhost', listenAddress: '127.0.0.1', upstream: `127.0.0.1:${String(ports.upstream)}`,
     httpPort: ports.caddyHttp, httpsPort: ports.caddyHttps, tls: { mode: 'manual', certificate, key },
+    accessLogFile: join(root, 'caddy-access.log'),
   }))
   caddyProcess = spawn(caddy, ['run', '--config', caddyConfig, '--adapter', 'caddyfile'], {
     stdio: 'ignore', env: { ...process.env, XDG_DATA_HOME: join(root, 'caddy-data'), XDG_CONFIG_HOME: join(root, 'caddy-config') },

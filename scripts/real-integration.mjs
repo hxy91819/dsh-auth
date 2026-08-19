@@ -648,6 +648,7 @@ async function main() {
       publicHost: 'localhost', httpPort, httpsPort, listenAddress: '127.0.0.1',
       upstream: `127.0.0.1:${String(dshPort)}`,
       tls: caddyTls === 'internal' ? { mode: 'internal' } : { mode: 'manual', certificate, key },
+      accessLogFile: join(nginxRoot, 'caddy-access.log'),
     }))
     checked(caddyExecutable, ['validate', '--config', caddyConfig, '--adapter', 'caddyfile'], {
       env: { ...process.env, XDG_DATA_HOME: join(nginxRoot, 'data'), XDG_CONFIG_HOME: join(nginxRoot, 'config') },

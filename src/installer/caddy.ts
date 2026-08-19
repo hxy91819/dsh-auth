@@ -69,7 +69,8 @@ function templateFile(name: string): string {
 }
 
 /** Render the managed Caddyfile for HTTPS or trusted-network HTTP. */
-export function renderCaddyfile(request: SetupRequest, system: boolean): string {
+export function renderCaddyfile(request: SetupRequest, system: boolean, caddyStateDirectory = SYSTEM_CADDY_STATE): string {
+  const accessLogFile = caddyPath(join(caddyStateDirectory, 'access.log'), 'Caddy access log')
   if (request.mode === 'http') {
     const siteHost = request.listenAddress.includes(':') ? `[${request.listenAddress}]` : request.listenAddress
     const authority = `${siteHost}:${String(request.httpPort)}`
@@ -89,6 +90,7 @@ export function renderCaddyfile(request: SetupRequest, system: boolean): string 
       ['{{CLEAR_FORWARDED_HEADERS}}', behindTlsProxy
         ? 'request_header -X-Forwarded-For'
         : 'request_header -X-Forwarded-For\n\t\trequest_header -X-Forwarded-Host\n\t\trequest_header -X-Forwarded-Proto\n\t\trequest_header -X-Real-IP'],
+      ['{{ACCESS_LOG_FILE}}', accessLogFile],
     ]))
   }
   const publicHost = hostname(request.serverName ?? '')
@@ -101,6 +103,7 @@ export function renderCaddyfile(request: SetupRequest, system: boolean): string 
     ['{{PUBLIC_AUTHORITY}}', authority],
     ['{{UPSTREAM}}', request.upstream],
     ['{{TLS_DIRECTIVE}}', tlsDirective(request, system)],
+    ['{{ACCESS_LOG_FILE}}', accessLogFile],
   ]))
 }
 

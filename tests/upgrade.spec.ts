@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { runCli } from '../src/cli.js'
 import { compareVersions } from '../src/installer/upgrade.js'
 import type { UpgradeJournal } from '../src/installer/upgrade.js'
 import { FakeCliIo, FakeInstallerHost } from './installer-helpers.js'
 
 const PASSWORD = 'sufficient-system-password'
+const PACKAGE_VERSION = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { readonly version: string }).version
 const SYSTEM_ARGS = [
   '--json', '--non-interactive', '--mode', 'http', '--listen-address', '10.0.0.20',
   '--dsh-service', 'dsh-web.service', '--admin-bootstrap', 'password', '--admin-username', 'admin',
@@ -17,7 +19,7 @@ const BUNDLE_ROOT = '/root/.dsh/profiles/web/node_modules/dsh-auth'
 function readyHost(): FakeInstallerHost {
   const host = new FakeInstallerHost()
   host.withSystemdService()
-  host.installCliPackage()
+  host.installCliPackage(PACKAGE_VERSION)
   host.installBundledCaddy()
   return host
 }
@@ -85,7 +87,7 @@ describe('managed upgrade', () => {
     await expect(runCli([...UPGRADE_ARGS], io, same)).resolves.toBe(4)
     expect(io.outputs.join('')).toContain('UPGRADE_VERSION_NOT_HIGHER')
     expect(same.commands.slice(setupCommands).some(command => command.args[0] === 'plugin')).toBe(false)
-    expect(stateOf(same).profilePackageVersion).toBe('0.2.0')
+    expect(stateOf(same).profilePackageVersion).toBe(PACKAGE_VERSION)
 
     const downgrade = readyHost()
     await setupInstalled(downgrade)
@@ -114,11 +116,11 @@ describe('managed upgrade', () => {
 
     const state = stateOf(host)
     expect(state.status).toBe('installed')
-    expect(state.profilePackageVersion).toBe('0.2.0')
+    expect(state.profilePackageVersion).toBe(PACKAGE_VERSION)
     expect(state.upgrade).toBeUndefined()
-    expect(host.commands.some(command => command.args.includes('add') && command.args.at(-1) === '0.2.0')).toBe(true)
-    expect(JSON.parse(host.readFile(`${BUNDLE_ROOT}/package.json`))).toMatchObject({ version: '0.2.0' })
-    expect(host.readFile('/etc/dsh-auth/dsh-auth.env')).toContain('DSH_AUTH_EXPECTED_VERSION="0.2.0"')
+    expect(host.commands.some(command => command.args.includes('add') && command.args.at(-1) === PACKAGE_VERSION)).toBe(true)
+    expect(JSON.parse(host.readFile(`${BUNDLE_ROOT}/package.json`))).toMatchObject({ version: PACKAGE_VERSION })
+    expect(host.readFile('/etc/dsh-auth/dsh-auth.env')).toContain(`DSH_AUTH_EXPECTED_VERSION="${PACKAGE_VERSION}"`)
     await expect(runCli(['doctor', '--json'], new FakeCliIo(false), host)).resolves.toBe(0)
   }, 30_000)
 
@@ -141,10 +143,10 @@ describe('managed upgrade', () => {
 
     const state = stateOf(host)
     expect(state.status).toBe('installed')
-    expect(state.profilePackageVersion).toBe('0.2.0')
+    expect(state.profilePackageVersion).toBe(PACKAGE_VERSION)
     expect(state.upgrade).toBeUndefined()
-    expect(JSON.parse(host.readFile(`${BUNDLE_ROOT}/package.json`))).toMatchObject({ version: '0.2.0' })
-    expect(host.readFile('/etc/dsh-auth/dsh-auth.env')).toContain('DSH_AUTH_EXPECTED_VERSION="0.2.0"')
+    expect(JSON.parse(host.readFile(`${BUNDLE_ROOT}/package.json`))).toMatchObject({ version: PACKAGE_VERSION })
+    expect(host.readFile('/etc/dsh-auth/dsh-auth.env')).toContain(`DSH_AUTH_EXPECTED_VERSION="${PACKAGE_VERSION}"`)
     expect(host.commands).toContainEqual({ executable: '/usr/bin/systemctl', args: ['restart', 'dsh-web.service'] })
     await expect(runCli(['doctor', '--json'], new FakeCliIo(false), host)).resolves.toBe(0)
   }, 30_000)
@@ -180,7 +182,7 @@ describe('managed upgrade', () => {
     await expect(runCli([...UPGRADE_ARGS], io, host)).resolves.toBe(8)
     const output = io.outputs.join('')
     expect(output).toContain('PROFILE_PACKAGE_BUILD_DRIFT')
-    expect(output).toContain('dsh plugin --profile web add 0.2.0')
+    expect(output).toContain(`dsh plugin --profile web add ${PACKAGE_VERSION}`)
     expect(output).toContain('rerun dsh-auth doctor')
     expect(output).toContain('run dsh-auth upgrade')
     expect(host.commands.slice(setupCommands).some(command => command.args[0] === 'plugin' || command.args[0] === 'restart')).toBe(false)
@@ -194,8 +196,8 @@ describe('managed upgrade', () => {
     // Simulate a crash after the bundle was swapped to the target build.
     host.run({ executable: '/opt/dsh/bin/dsh', args: ['plugin', '--profile', 'web', 'add', 'dsh-auth@0.3.0'] })
     const journal: UpgradeJournal = {
-      fromVersion: '0.2.0',
-      fromSpec: '0.2.0',
+      fromVersion: PACKAGE_VERSION,
+      fromSpec: PACKAGE_VERSION,
       fromBuildIdentity: recorded.profilePackageBuildIdentity ?? '',
       targetVersion: '0.3.0',
       targetBuildIdentity: 'not-recorded-for-crash',
