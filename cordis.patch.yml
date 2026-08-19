@@ -10,6 +10,7 @@
       config:
         authStateFile: !!js process.env.DSH_AUTH_STATE_FILE
         sessionSecretFile: !!js process.env.DSH_AUTH_SESSION_SECRET_FILE
+        expectedVersion: !!js process.env.DSH_AUTH_EXPECTED_VERSION
         loginTokenEnabled: !!js JSON.parse(process.env.DSH_AUTH_LOGIN_TOKEN_ENABLED ?? 'false')
         loginTokenDirectory: !!js process.env.DSH_AUTH_LOGIN_TOKEN_DIRECTORY
         loginTokenFailureMessageZh: !!js process.env.DSH_AUTH_LOGIN_TOKEN_FAILURE_MESSAGE_ZH

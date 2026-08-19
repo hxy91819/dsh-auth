@@ -26,6 +26,7 @@ export class FakeInstallerHost implements InstallerHost {
   readonly busyPorts = new Set<string>()
   commandHandler: (command: CommandSpec) => CommandResult = () => ({ status: 0, stdout: '', stderr: '' })
   private randomCounter = 0
+  private readonly cliSnapshots = new Map<string, Map<string, FakeEntry>>()
 
   constructor() {
     for (const path of ['/', '/etc', '/etc/systemd', '/etc/systemd/system', '/usr', '/usr/bin', '/usr/sbin', '/usr/lib', '/opt', '/opt/dsh', '/opt/dsh/bin', '/root', '/root/.dsh', '/var', '/var/lib', '/usr/lib/node_modules', '/usr/lib/node_modules/dsh-auth']) {
@@ -51,6 +52,23 @@ export class FakeInstallerHost implements InstallerHost {
     }
   }
 
+  private snapshotTree(root: string): Map<string, FakeEntry> {
+    return new Map([...this.entries.entries()].filter(([path]) => path === root || path.startsWith(`${root}/`)))
+  }
+
+  private restoreTree(snapshot: Map<string, FakeEntry>, root: string, rebased: string): void {
+    this.removeTreeEntries(rebased)
+    for (const [path, entry] of snapshot) {
+      this.entries.set(path === root ? rebased : `${rebased}${path.slice(root.length)}`, { ...entry, content: Buffer.from(entry.content) })
+    }
+  }
+
+  private installTreeCopy(sourceRoot: string, targetRoot: string, requestedVersion: string | undefined): void {
+    const stashed = requestedVersion === undefined ? undefined : this.cliSnapshots.get(requestedVersion)
+    if (stashed !== undefined) this.restoreTree(stashed, '/usr/lib/node_modules/dsh-auth', targetRoot)
+    else this.copyTree(sourceRoot, targetRoot)
+  }
+
   private copyTree(from: string, to: string): void {
     for (const entry of this.listDirectory(from)) {
       const source = join(from, entry)
@@ -70,6 +88,14 @@ export class FakeInstallerHost implements InstallerHost {
     this.addDirectory('/usr/lib/node_modules/dsh-auth/lib')
     this.addFile('/usr/lib/node_modules/dsh-auth/package.json', `${JSON.stringify({ name: 'dsh-auth', version }, null, 2)}\n`, 0o644)
     this.addFile('/usr/lib/node_modules/dsh-auth/lib/cli.js', 'export {}\n', 0o644)
+  }
+
+  /** Simulate a newer globally installed CLI build, keeping the old tree restorable. */
+  promoteCliPackage(version: string): void {
+    const manifest = JSON.parse(this.readFile('/usr/lib/node_modules/dsh-auth/package.json')) as { version: string }
+    this.cliSnapshots.set(manifest.version, this.snapshotTree('/usr/lib/node_modules/dsh-auth'))
+    this.addFile('/usr/lib/node_modules/dsh-auth/package.json', `${JSON.stringify({ ...manifest, version }, null, 2)}\n`)
+    this.addFile('/usr/lib/node_modules/dsh-auth/lib/build-marker.txt', `build ${version}\n`, 0o644)
   }
 
   /** Simulate an external dsh plugin install of the given build into the profile. */
@@ -180,12 +206,13 @@ export class FakeInstallerHost implements InstallerHost {
       const manifestPath = `${profileRoot}/package.json`
       if (verb === 'add') {
         const source = command.args.at(-1) ?? 'dsh-auth@0.1.11'
-        const version = source.startsWith('dsh-auth@') ? source.slice('dsh-auth@'.length) : `file:${source}`
+        const requestedVersion = source.startsWith('dsh-auth@') ? source.slice('dsh-auth@'.length) : source.startsWith('/') ? undefined : source
+        const version = source.startsWith('dsh-auth@') ? source.slice('dsh-auth@'.length) : source.startsWith('/') ? `file:${source}` : source
         this.addFile(manifestPath, `${JSON.stringify({ dependencies: { 'dsh-auth': version }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', 'dsh-auth'] } } }, null, 2)}\n`)
         const bundleRoot = `${profileRoot}/node_modules/dsh-auth`
         if (this.fileExists(bundleRoot)) this.removeTreeEntries(bundleRoot)
         this.addDirectory(`${profileRoot}/node_modules`)
-        this.copyTree('/usr/lib/node_modules/dsh-auth', bundleRoot)
+        this.installTreeCopy('/usr/lib/node_modules/dsh-auth', bundleRoot, requestedVersion)
       } else if (verb === 'remove') {
         this.addFile(manifestPath, `${JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } } }, null, 2)}\n`)
         const bundleRoot = `${profileRoot}/node_modules/dsh-auth`

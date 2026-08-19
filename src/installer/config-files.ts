@@ -6,7 +6,7 @@ function quoteEnvironment(value: string): string {
 }
 
 /** Render the DSH service environment without embedding secret values. */
-export function renderEnvironmentFile(request: SetupRequest, paths: ManagedPaths): string {
+export function renderEnvironmentFile(request: SetupRequest, paths: ManagedPaths, expectedVersion?: string): string {
   const lines = [
     '# Managed by dsh-auth. Secret values live in separate permission-restricted files.',
     `DSH_AUTH_STATE_FILE=${quoteEnvironment(paths.authStateFile)}`,
@@ -15,6 +15,11 @@ export function renderEnvironmentFile(request: SetupRequest, paths: ManagedPaths
     `DSH_AUTH_SECURE_COOKIES=${request.mode === 'https' ? 'true' : 'false'}`,
     'DSH_AUTH_TRUSTED_PROXY_ADDRESSES="127.0.0.1,::1"',
   ]
+  if (expectedVersion !== undefined) {
+    // Runtime fail-closed marker: the bundle refuses to activate when its own
+    // version differs from the managed installation that wrote this file.
+    lines.push(`DSH_AUTH_EXPECTED_VERSION=${quoteEnvironment(expectedVersion)}`)
+  }
   if (request.loginTokenEnabled) {
     lines.push(`DSH_AUTH_LOGIN_TOKEN_DIRECTORY=${quoteEnvironment(paths.loginTokenDirectory)}`)
     if (request.loginTokenErrorMessageZh !== undefined) {

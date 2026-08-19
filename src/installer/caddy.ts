@@ -154,9 +154,9 @@ function readManifest(host: InstallerHost, directory: string): Record<string, un
   return parsed as Record<string, unknown>
 }
 
-/** Resolve and verify the Caddy binary bundled in this dsh-auth package. Never downloads. */
-export function resolveCaddyPackage(host: InstallerHost): CaddyPackage {
-  const directory = host.resolveBundledCaddyRoot()
+/** Resolve and verify a bundled Caddy tree. Defaults to this CLI's own vendor root. Never downloads. */
+export function resolveCaddyPackage(host: InstallerHost, root: string = host.resolveBundledCaddyRoot()): CaddyPackage {
+  const directory = root
   const selected = caddyPlatform(host.platform, host.arch)
   if (!host.regularFile(join(directory, 'manifest.json'))) {
     prerequisite(

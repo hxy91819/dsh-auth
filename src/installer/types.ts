@@ -149,7 +149,7 @@ export interface PlanAction {
 /** Stable, secret-free installation plan. */
 export interface InstallationPlan {
   readonly schemaVersion: 2
-  readonly operation: 'setup' | 'uninstall' | 'doctor'
+  readonly operation: 'setup' | 'uninstall' | 'doctor' | 'upgrade'
   readonly mode: 'system' | 'output'
   readonly status: 'ready' | 'unchanged' | 'blocked'
   readonly actions: readonly PlanAction[]

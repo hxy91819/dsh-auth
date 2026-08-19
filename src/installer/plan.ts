@@ -103,6 +103,19 @@ function hasSupportedProfilePackageGroup(candidate: Record<string, unknown>): bo
   return knownOrigin && fields.slice(1).every(field => typeof field === 'string')
 }
 
+function hasSupportedUpgradeJournal(candidate: Record<string, unknown>): boolean {
+  const journal = candidate.upgrade
+  if (journal === undefined) return true
+  if (typeof journal !== 'object' || journal === null || Array.isArray(journal)) return false
+  const record = journal as Record<string, unknown>
+  return typeof record.fromVersion === 'string'
+    && typeof record.fromSpec === 'string'
+    && typeof record.fromBuildIdentity === 'string'
+    && typeof record.targetVersion === 'string'
+    && typeof record.targetBuildIdentity === 'string'
+    && (record.phase === 'bundle' || record.phase === 'caddy' || record.phase === 'services')
+}
+
 function hasSupportedIdentity(candidate: Record<string, unknown>): boolean {
   return !(
     candidate.schemaVersion !== 2
@@ -121,6 +134,7 @@ function hasSupportedIdentity(candidate: Record<string, unknown>): boolean {
     || typeof candidate.dshGid !== 'number'
     || typeof candidate.profilePackageInstalledByDshAuth !== 'boolean'
     || !hasSupportedProfilePackageGroup(candidate)
+    || !hasSupportedUpgradeJournal(candidate)
   )
 }
 
@@ -271,7 +285,7 @@ function verifyInstalledState(host: InstallerHost, state: InstallState, request:
   }
   const system = !output
   const expectedFiles = new Map<string, string>([
-    [state.paths.environmentFile, renderEnvironmentFile(request, state.paths)],
+    [state.paths.environmentFile, renderEnvironmentFile(request, state.paths, state.profilePackageVersion)],
     [state.paths.caddyfile, renderCaddyfile(request, system)],
     ...(output ? [] : [
       [state.paths.systemdDropInFile, renderSystemdDropIn(state.paths)] as const,

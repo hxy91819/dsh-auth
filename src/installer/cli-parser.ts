@@ -44,6 +44,7 @@ const FLAG_DECLARATIONS: readonly FlagDeclaration[] = [
   { name: '--public-origin', kind: 'value', valueHint: 'ORIGIN', help: 'single http(s) origin paired with --auth-state-file' },
   { name: '--authorize-password-reset', kind: 'boolean', help: 'required for non-interactive password reset' },
   { name: '--authorize-uninstall', kind: 'boolean', help: 'required for non-interactive uninstall' },
+  { name: '--authorize-upgrade', kind: 'boolean', help: 'required for non-interactive upgrade' },
   { name: '--authorize-login-token-issue', kind: 'boolean', help: 'required for non-interactive token issue' },
 ]
 
@@ -128,6 +129,7 @@ export function parseArguments(argv: readonly string[]): ParsedArguments {
 }
 
 const ISSUE_TOKEN_FLAGS = new Set(['--ttl-seconds', '--auth-state-file', '--public-origin', '--authorize-login-token-issue'])
+const UPGRADE_FLAGS = new Set(['--authorize-upgrade'])
 
 function flagLine(flag: FlagDeclaration): string {
   const name = flag.valueHint === undefined ? flag.name : `${flag.name} ${flag.valueHint}`
@@ -137,15 +139,18 @@ function flagLine(flag: FlagDeclaration): string {
 /** Frozen usage text generated from the same flag declarations used by the parser. */
 export function renderHelp(): string {
   const global = FLAG_DECLARATIONS.filter(flag => flag.global === true)
-  const authorize = FLAG_DECLARATIONS.filter(flag => flag.name === '--authorize-password-reset' || flag.name === '--authorize-uninstall')
-  const setup = FLAG_DECLARATIONS.filter(flag => flag.global !== true && !authorize.includes(flag) && !ISSUE_TOKEN_FLAGS.has(flag.name))
+  const authorize = FLAG_DECLARATIONS.filter(flag => flag.name === '--authorize-password-reset' || flag.name === '--authorize-uninstall' || flag.name === '--authorize-upgrade' || flag.name === '--authorize-login-token-issue')
+  const setup = FLAG_DECLARATIONS.filter(flag => flag.global !== true && !authorize.includes(flag) && !ISSUE_TOKEN_FLAGS.has(flag.name) && !UPGRADE_FLAGS.has(flag.name))
   const issueToken = FLAG_DECLARATIONS.filter(flag => ISSUE_TOKEN_FLAGS.has(flag.name))
+  const upgrade = FLAG_DECLARATIONS.filter(flag => UPGRADE_FLAGS.has(flag.name))
   return `Usage:
   dsh-auth --help
   dsh-auth --version
   dsh-auth setup [options]
   dsh-auth plan [options]
   dsh-auth doctor [--json]
+  dsh-auth upgrade [--package dsh-auth@VERSION|/x.tgz]
+                  [--non-interactive] [--authorize-upgrade] [--json]
   dsh-auth reset-password [--non-interactive] [--json]
                           [--password-stdin|--password-file PATH]
                           [--authorize-password-reset]
@@ -165,6 +170,9 @@ ${global.map(flagLine).join('\n')}
 Setup options:
 ${setup.map(flagLine).join('\n')}
 
+Upgrade options:
+${upgrade.map(flagLine).join('\n')}
+
 Issue login token options:
 ${issueToken.map(flagLine).join('\n')}
 
@@ -175,6 +183,14 @@ requires --dsh-service. HTTPS also requires --server-name. HTTP requires
 --listen-address. A ready password setup also requires exactly one of
 --password-stdin or --password-file; plan, login-token initialization, and
 unchanged reruns do not.
+
+upgrade moves a healthy v2 system installation to the build of this CLI: the
+profile bundle, bundled Caddy, environment marker, ownership record, and
+services move together or roll back together. The target version must be
+higher than the installed one, downgrades are refused, and drift must be
+repaired with dsh plugin --profile NAME add SPEC plus a healthy doctor before
+upgrading. Interactive use asks for the exact word upgrade; non-interactive
+use requires --non-interactive together with --authorize-upgrade.
 
 issue-login-token prints a bearer login URL to stdout and nothing else. Without
 --auth-state-file it derives paths from the recorded system installation and
@@ -192,7 +208,8 @@ command. --json does not disable prompts; automation must pass
 Plain HTTP is accepted only on loopback or RFC1918/ULA addresses. Automatic
 TLS rejects certificate parameters; manual TLS requires both. Uninstall
 requires --authorize-uninstall when prompts are disabled. Password reset
-requires --authorize-password-reset when prompts are disabled; --yes and
+requires --authorize-password-reset when prompts are disabled. Upgrade
+requires --authorize-upgrade when prompts are disabled; --yes and
 inline password options do not exist.
 `
 }

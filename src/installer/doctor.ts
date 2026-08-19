@@ -44,7 +44,7 @@ function managedFileDiagnostics(host: InstallerHost, state: InstallState): Diagn
     diagnostics.push({ code: 'INLINE_SECRET_FOUND', severity: 'error', message: 'The managed environment file contains an inline secret value.', remediation: 'Remove public reachability and reinstall with file-backed secrets.' })
   }
   const expectedFiles = new Map<string, string>([
-    [state.paths.environmentFile, renderEnvironmentFile(state.request, state.paths)],
+    [state.paths.environmentFile, renderEnvironmentFile(state.request, state.paths, state.profilePackageVersion)],
     [state.paths.systemdDropInFile, renderSystemdDropIn(state.paths)],
     [state.paths.caddyfile, renderCaddyfile(state.request, true)],
     [state.paths.caddyUnitFile, renderCaddyUnit(state.request, state.paths)],
@@ -113,7 +113,7 @@ function profileDiagnostics(host: InstallerHost, state: InstallState): Diagnosti
         code: 'PROFILE_PACKAGE_BUILD_DRIFT',
         severity: 'error',
         message: 'The profile dsh-auth bundle no longer matches the build recorded by setup.',
-        remediation: `Restore the recorded build with dsh plugin --profile ${state.request.profile} add ${state.profilePackageSpec ?? 'dsh-auth'} from a trusted source, then rerun doctor.`,
+        remediation: `Recovery order: (1) run dsh plugin --profile ${state.request.profile} add ${state.profilePackageSpec ?? 'dsh-auth'} to restore the recorded build; (2) rerun dsh-auth doctor and confirm healthy; (3) run dsh-auth upgrade.`,
       })
     }
     if (state.profilePackageOrigin === 'external') {
