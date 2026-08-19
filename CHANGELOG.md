@@ -1,15 +1,27 @@
 # Changelog
 
-## Unreleased
+## v0.2.3
+
+Changes since [v0.2.2](https://github.com/hxy91819/dsh-auth/compare/v0.2.2...v0.2.3).
 
 ### Changes
 
-- test: prove a failed managed upgrade restores a pnpm `file:` profile spec offline.
-- fix: load authentication state through an O_NOFOLLOW descriptor so a swapped symlink cannot replace the inspected file.
-- ci: stop installing Nginx and maintaining leftover Nginx checks in daily CI and E2E.
-- fix: restore offline tarball installs when rolling back a `file:` profile spec.
-- fix: show a distinct login-token page when Origin or CSRF checks fail.
-- test: prove Origin/CSRF token denials through the real TLS edge.
+- release: prepare v0.2.3 (`eee4338`). Thanks @hxy91819.
+- test: prove failed upgrade restores a file: spec offline ([#28](https://github.com/hxy91819/dsh-auth/pull/28)). Thanks @hxy91819.
+- fix: load auth state through an O_NOFOLLOW descriptor ([#27](https://github.com/hxy91819/dsh-auth/pull/27)). Thanks @hxy91819.
+- fix: distinguish Origin/CSRF token denials from spent-link errors ([#26](https://github.com/hxy91819/dsh-auth/pull/26)). Thanks @hxy91819.
+- fix: restore offline tarball rollback for file: profile specs ([#25](https://github.com/hxy91819/dsh-auth/pull/25)). Thanks @hxy91819.
+- ci: drop leftover Nginx checks from daily CI and E2E ([#24](https://github.com/hxy91819/dsh-auth/pull/24)). Thanks @hxy91819.
+- fix: prepare Caddy log path in release preflight ([#23](https://github.com/hxy91819/dsh-auth/pull/23)). Thanks @hxy91819.
+- release: prepare v0.2.2 ([#22](https://github.com/hxy91819/dsh-auth/pull/22)). Thanks @hxy91819.
+
+### Contributors
+
+Thanks @hxy91819 for this release.
+
+## Unreleased
+
+### Changes
 
 ## v0.2.2
 
