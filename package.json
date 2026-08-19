@@ -118,7 +118,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsdown && node scripts/mark-bin.mjs",
+    "build": "rm -rf lib && tsc -p tsconfig.build.json && tsdown && node scripts/mark-bin.mjs",
     "clean": "tsc --build --clean tsconfig.build.json",
     "test": "vitest run",
     "test:e2e": "node scripts/real-integration.mjs",
