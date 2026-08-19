@@ -1,0 +1,42 @@
+name: Packed systemd lifecycle E2E
+description: Run the managed lifecycle E2E in a privileged systemd container against a packed tarball.
+
+inputs:
+  tarball:
+    required: true
+    description: Checkout-relative path to the dsh-auth tarball
+
+runs:
+  using: composite
+  steps:
+    - name: Run packed managed lifecycle E2E in systemd
+      shell: bash
+      env:
+        TARBALL_REL: ${{ inputs.tarball }}
+      run: |
+        set -euo pipefail
+        case "$TARBALL_REL" in
+          '' | /* | *..*)
+            echo '::error::tarball must be a checkout-relative path without ..' >&2
+            exit 1
+            ;;
+        esac
+        test -f "$TARBALL_REL"
+        IMAGE="dsh-auth-systemd-e2e:${GITHUB_SHA:-local}"
+        CONTAINER="dsh-auth-systemd-e2e-${GITHUB_RUN_ID:-$$}-${GITHUB_RUN_ATTEMPT:-0}"
+        docker build --file .github/systemd-e2e.Dockerfile --tag "$IMAGE" .github
+        docker run --detach --init=false --privileged --security-opt label=disable \
+          --name "$CONTAINER" --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
+          --volume "$PWD:/source:ro" "$IMAGE"
+        cleanup() { docker rm --force "$CONTAINER" >/dev/null 2>&1 || true; }
+        trap cleanup EXIT
+        for attempt in {1..30}; do
+          STATE="$(docker exec "$CONTAINER" systemctl is-system-running 2>/dev/null || true)"
+          if [ "$STATE" = running ] || [ "$STATE" = degraded ]; then break; fi
+          sleep 1
+        done
+        [[ "$STATE" == "running" || "$STATE" == "degraded" ]]
+        docker exec "$CONTAINER" bash -lc 'mkdir /checkout && cp -a /source/. /checkout/'
+        docker exec "$CONTAINER" bash -lc 'cd /checkout && corepack pnpm install --frozen-lockfile'
+        docker exec --env "LIFECYCLE_TARBALL_BASE=/checkout/${TARBALL_REL}" \
+          "$CONTAINER" bash -lc 'cd /checkout && corepack pnpm run test:e2e:lifecycle'

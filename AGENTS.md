@@ -66,3 +66,9 @@ When the user asks to land, merge, or 合入 a PR, identify that PR and its HEAD
 3. CI. Every check run on the PR HEAD must be `completed` and `success`. Query `gh pr checks` and the commit check-runs API for that SHA. Duplicate `push` and `pull_request` jobs both count. Pending, queued, failed, cancelled, or timed-out checks block land. Combined Status API `pending` with an empty status list is not evidence of failure when check-runs are green.
 
 Draft, conflicted, or non-mergeable PRs stay unmerged. Use `gh pr merge` with the repository default method after all gates pass.
+
+Packed installer, browser, and lifecycle jobs are separate check-runs. A failed job may be rerun from the packed tarball artifact without repeating jobs that already succeeded. The aggregator job named `check` succeeds only when every packed job succeeds; all of those check-runs still count for land.
+
+## Release
+
+Protected `main` accepts release commits only through a pull request. Follow `docs/releasing.md`. When the user has already authorized publication, put the version bump and changelog on the last feature branch instead of opening a second release-only PR. Run Autoreview in parallel with CI. Local verification before the release commit is `check`, `check:caddy`, and `git diff --check`; do not locally re-run packed E2E, `npm pack --dry-run`, or lifecycle beside an existing managed install. After merge, tag the changelog commit and dispatch Release from `main`.

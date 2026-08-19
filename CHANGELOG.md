@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- docs: describe the pull-request release path and stop extra local packed checks.
+- test: reject oversized login bodies at the outer TLS proxy so 413 is deterministic.
+- ci: run packed installer, browser, and lifecycle tests in parallel from one tarball checkpoint.
+- ci: add a Release dry-run that packs HEAD and skips npm publish.
+
 ## v0.2.3
 
 Changes since [v0.2.2](https://github.com/hxy91819/dsh-auth/compare/v0.2.2...v0.2.3).
@@ -18,10 +27,6 @@ Changes since [v0.2.2](https://github.com/hxy91819/dsh-auth/compare/v0.2.2...v0.
 ### Contributors
 
 Thanks @hxy91819 for this release.
-
-## Unreleased
-
-### Changes
 
 ## v0.2.2
 

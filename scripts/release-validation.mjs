@@ -168,12 +168,25 @@ function writeJson(filePath, value) {
 }
 
 /**
- * Validate the exact tag checkout and its relationship to origin/main.
+ * Identity for a dry-run pack of the current HEAD. The synthetic tag is only
+ * the tarball/manifest name; it is not a Git tag and must never be published.
  *
  * @param {string} repositoryRoot
- * @param {string} tag
  * @returns {ReleaseIdentity}
  */
+export function identityFromPackageHead(repositoryRoot) {
+  const packageJson = readJson(join(repositoryRoot, 'package.json'))
+  if (!isRecord(packageJson) || packageJson.name !== PACKAGE_NAME || typeof packageJson.version !== 'string') {
+    throw new ReleaseValidationError(`package.json must be ${PACKAGE_NAME} with a version`)
+  }
+  const version = packageJson.version
+  const filename = expectedTarballFilename(version)
+  const commit = gitOutput(['rev-parse', '--verify', 'HEAD'], repositoryRoot)
+  if (!SHA_PATTERN.test(commit)) throw new ReleaseValidationError('HEAD commit SHA is invalid')
+  return { tag: `v${version}`, version, commit, filename }
+}
+
+/** @param {string} repositoryRoot @param {string} tag @returns {ReleaseIdentity} */
 export function validateReleaseSource(repositoryRoot, tag) {
   const version = parseStableTag(tag)
   const packageJson = readJson(join(repositoryRoot, 'package.json'))
@@ -199,6 +212,19 @@ export function validateReleaseSource(repositoryRoot, tag) {
     commit: tagCommit,
     filename: expectedTarballFilename(version),
   }
+}
+
+/** @param {string} repositoryRoot @param {Map<string, string>} options @returns {ReleaseIdentity} */
+function resolvePackIdentity(repositoryRoot, options) {
+  const source = options.get('source') ?? 'tag'
+  if (source !== 'tag' && source !== 'head') {
+    throw new ReleaseValidationError('--source must be tag or head')
+  }
+  if (source === 'head') {
+    if (options.has('tag')) throw new ReleaseValidationError('--tag is not valid with --source head')
+    return identityFromPackageHead(repositoryRoot)
+  }
+  return validateReleaseSource(repositoryRoot, requiredOption(options, 'tag'))
 }
 
 /** @param {unknown} value @param {ReleaseIdentity} expected @returns {ReleaseManifest} */
@@ -359,13 +385,12 @@ function findTarball(directory, version) {
  * Build exactly one final tarball after validating npm's dry-run file list.
  *
  * @param {string} repositoryRoot
- * @param {string} tag
+ * @param {ReleaseIdentity} identity
  * @param {string} directory
  * @param {string | undefined} reportPath
  * @param {string | undefined} manifestPath
  */
-export function createReleaseArtifact(repositoryRoot, tag, directory, reportPath, manifestPath) {
-  const identity = validateReleaseSource(repositoryRoot, tag)
+export function createReleaseArtifact(repositoryRoot, identity, directory, reportPath, manifestPath) {
   mkdirSync(directory, { recursive: true })
   const existingTarballs = readdirSync(directory).filter(name => name.endsWith('.tgz'))
   if (existingTarballs.length !== 0) throw new ReleaseValidationError('release directory already contains a tarball')
@@ -389,15 +414,18 @@ export function createReleaseArtifact(repositoryRoot, tag, directory, reportPath
 }
 
 /**
- * Revalidate the downloaded artifact against the current exact tag checkout.
+ * Revalidate the downloaded artifact against the current checkout identity.
  *
  * @param {string} repositoryRoot
- * @param {string} tag
+ * @param {ReleaseIdentity} identity
  * @param {string} directory
  * @param {string} manifestPath
  */
-export function verifyReleaseArtifact(repositoryRoot, tag, directory, manifestPath) {
-  const identity = validateReleaseSource(repositoryRoot, tag)
+export function verifyReleaseArtifact(repositoryRoot, identity, directory, manifestPath) {
+  const headCommit = gitOutput(['rev-parse', '--verify', 'HEAD'], repositoryRoot)
+  if (headCommit !== identity.commit) {
+    throw new ReleaseValidationError('HEAD does not match the packed commit')
+  }
   const tarball = findTarball(directory, identity.version)
   const manifest = validateReleaseManifest(readJson(manifestPath), identity)
   const digest = sha256File(tarball)
@@ -571,11 +599,12 @@ const HELP = `Usage:
 Description:
   Validate one existing stable vX.Y.Z tag, create or recheck its npm artifact,
   fail closed on registry state, and smoke-test the exact published version.
+  --source head packs the current HEAD without treating it as a publishable tag.
 
 Commands:
   source             Verify package version, exact tag checkout, and origin/main ancestry.
   pack               Run npm pack --dry-run, create one final tarball, and write its manifest.
-  artifact-verify    Recheck a downloaded tarball and manifest against the exact tag checkout.
+  artifact-verify    Recheck a downloaded tarball and manifest against the checkout identity.
   registry-absent    Require an exact version response of HTTP 404 from the official registry.
   registry-published Require the exact version and latest dist-tag on the official registry.
   registry-smoke     Install the exact version into a fresh temporary npm home and run its bin.
@@ -583,7 +612,8 @@ Commands:
   privacy            Scan tracked files and run git diff --check without printing matches.
 
 Options:
-  --tag <vX.Y.Z>       Required stable release tag for all commands except privacy.
+  --tag <vX.Y.Z>       Required stable release tag unless --source head is set.
+  --source <tag|head>  tag (default) requires an existing Git tag; head is dry-run only.
   --directory <path>   Artifact directory for pack and artifact-verify.
   --manifest <path>    Manifest path for artifact-verify; pack defaults to directory/manifest.json.
   --report <path>      Optional npm pack --dry-run JSON report output for pack.
@@ -599,6 +629,7 @@ Outputs:
 Examples:
   node scripts/release-validation.mjs source --tag v0.1.13
   node scripts/release-validation.mjs pack --tag v0.1.13 --directory release --report release/pack-report.json
+  node scripts/release-validation.mjs pack --source head --directory release --manifest release/manifest.json
   node scripts/release-validation.mjs artifact-verify --tag v0.1.13 --directory release --manifest release/manifest.json
   node scripts/release-validation.mjs registry-published --tag v0.1.13
 `
@@ -666,10 +697,10 @@ export async function main(argv, repositoryRoot = process.cwd()) {
       return
     }
     case 'pack': {
-      validateOptionNames(options, ['tag', 'directory', 'manifest', 'report'])
+      validateOptionNames(options, ['tag', 'source', 'directory', 'manifest', 'report'])
       const result = createReleaseArtifact(
         repositoryRoot,
-        requiredOption(options, 'tag'),
+        resolvePackIdentity(repositoryRoot, options),
         pathOption(requiredOption(options, 'directory')),
         options.get('report') === undefined ? undefined : pathOption(options.get('report') ?? ''),
         options.get('manifest') === undefined ? undefined : pathOption(options.get('manifest') ?? ''),
@@ -678,10 +709,10 @@ export async function main(argv, repositoryRoot = process.cwd()) {
       return
     }
     case 'artifact-verify': {
-      validateOptionNames(options, ['tag', 'directory', 'manifest'])
+      validateOptionNames(options, ['tag', 'source', 'directory', 'manifest'])
       const result = verifyReleaseArtifact(
         repositoryRoot,
-        requiredOption(options, 'tag'),
+        resolvePackIdentity(repositoryRoot, options),
         pathOption(requiredOption(options, 'directory')),
         pathOption(requiredOption(options, 'manifest')),
       )

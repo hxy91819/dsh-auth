@@ -4,14 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing stable vX.Y.Z tag to publish
-        required: true
+        description: Existing stable vX.Y.Z tag to publish. Ignored when dry_run is true.
+        required: false
         type: string
+      dry_run:
+        description: Pack and run packed E2E from this workflow ref. Never publish to npm.
+        required: false
+        type: boolean
+        default: false
 
 permissions: {}
 
 concurrency:
-  group: npm-release-${{ inputs.tag }}
+  group: ${{ inputs.dry_run == true && format('release-dry-run-{0}', github.ref) || format('npm-release-{0}', inputs.tag) }}
   cancel-in-progress: false
 
 env:
@@ -26,19 +31,51 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    outputs:
+      ref: ${{ steps.identity.outputs.ref }}
+      tarball: ${{ steps.identity.outputs.tarball }}
+      version: ${{ steps.identity.outputs.version }}
     steps:
-      - name: Require the main workflow ref
-        if: github.ref != 'refs/heads/main'
+      - name: Require a real release to use main and a stable tag
+        if: ${{ inputs.dry_run != true }}
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          WORKFLOW_REF: ${{ github.ref }}
         run: |
-          echo '::error::Release must be dispatched from the main workflow ref.' >&2
-          exit 1
+          set -euo pipefail
+          if [ "$WORKFLOW_REF" != 'refs/heads/main' ]; then
+            echo '::error::Release must be dispatched from the main workflow ref.' >&2
+            exit 1
+          fi
+          if [ -z "$RELEASE_TAG" ]; then
+            echo '::error::Release requires an existing stable tag input.' >&2
+            exit 1
+          fi
 
-      - name: Check out the exact release tag
+      - name: Check out the release source
         uses: actions/checkout@v7
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: ${{ inputs.dry_run == true && github.sha || format('refs/tags/{0}', inputs.tag) }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Record the packed identity
+        id: identity
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = true ]; then
+            VERSION="$(node -p 'require("./package.json").version')"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "tarball=dsh-auth-${VERSION}.tgz" >> "$GITHUB_OUTPUT"
+            echo "ref=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "tarball=dsh-auth-${RELEASE_TAG#v}.tgz" >> "$GITHUB_OUTPUT"
+            echo "ref=refs/tags/${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up Node 24 without a package cache
         uses: actions/setup-node@v7
@@ -56,15 +93,10 @@ jobs:
           version: ${{ env.PNPM_VERSION }}
 
       - name: Validate the stable tag and main ancestry
+        if: ${{ inputs.dry_run != true }}
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: node scripts/release-validation.mjs source --tag "$RELEASE_TAG"
-
-      - name: Install PTY support
-        run: sudo apt-get update
-
-      - name: Install PTY support packages
-        run: sudo apt-get install --yes util-linux
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -94,15 +126,25 @@ jobs:
 
       - name: Create and inspect the single release artifact
         env:
+          DRY_RUN: ${{ inputs.dry_run }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          node scripts/release-validation.mjs pack \
-            --tag "$RELEASE_TAG" \
-            --directory release \
-            --manifest release/manifest.json \
-            --report release/pack-report.json
+          set -euo pipefail
+          if [ "$DRY_RUN" = true ]; then
+            node scripts/release-validation.mjs pack --source head \
+              --directory release \
+              --manifest release/manifest.json \
+              --report release/pack-report.json
+          else
+            node scripts/release-validation.mjs pack \
+              --tag "$RELEASE_TAG" \
+              --directory release \
+              --manifest release/manifest.json \
+              --report release/pack-report.json
+          fi
 
       - name: Verify the committed changelog and generate release notes
+        if: ${{ inputs.dry_run != true }}
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
@@ -114,76 +156,12 @@ jobs:
             --notes release/release-notes.md \
             --repository "$GITHUB_REPOSITORY"
 
+      - name: Write dry-run notes instead of a GitHub Release body
+        if: ${{ inputs.dry_run == true }}
+        run: printf '%s\n' 'Dry-run; not a GitHub Release.' > release/release-notes.md
+
       - name: Run offline packed-bin smoke
-        env:
-          RELEASE_TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          RELEASE_VERSION="${RELEASE_TAG#v}"
-          TARBALL="./release/dsh-auth-${RELEASE_VERSION}.tgz"
-          node scripts/pack-smoke.mjs "$TARBALL"
-
-      - name: Run packed interactive and non-interactive PTY E2E
-        env:
-          RELEASE_TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          RELEASE_VERSION="${RELEASE_TAG#v}"
-          TARBALL="release/dsh-auth-${RELEASE_VERSION}.tgz"
-          node scripts/installer-e2e.mjs "$TARBALL"
-
-      - name: Run packed authentication E2E through DSH, Caddy, and Chrome
-        env:
-          RELEASE_TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          RELEASE_VERSION="${RELEASE_TAG#v}"
-          TARBALL="release/dsh-auth-${RELEASE_VERSION}.tgz"
-          pnpm run test:e2e -- "$TARBALL"
-
-      - name: Run packed authentication E2E behind an outer TLS proxy
-        env:
-          RELEASE_TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          RELEASE_VERSION="${RELEASE_TAG#v}"
-          TARBALL="release/dsh-auth-${RELEASE_VERSION}.tgz"
-          pnpm run test:e2e:behind-tls-proxy -- "$TARBALL"
-
-      - name: Run packed managed lifecycle E2E in systemd
-        env:
-          RELEASE_TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          RELEASE_VERSION="${RELEASE_TAG#v}"
-          IMAGE="dsh-auth-systemd-e2e:${GITHUB_SHA}"
-          CONTAINER="dsh-auth-systemd-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          docker build --file .github/systemd-e2e.Dockerfile --tag "$IMAGE" .github
-          docker run --detach --init=false --privileged --security-opt label=disable \
-            --name "$CONTAINER" --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
-            --volume "$PWD:/source:ro" "$IMAGE"
-          cleanup() { docker rm --force "$CONTAINER" >/dev/null 2>&1 || true; }
-          trap cleanup EXIT
-          for attempt in {1..30}; do
-            STATE="$(docker exec "$CONTAINER" systemctl is-system-running 2>/dev/null || true)"
-            if [ "$STATE" = running ] || [ "$STATE" = degraded ]; then break; fi
-            sleep 1
-          done
-          [[ "$STATE" == "running" || "$STATE" == "degraded" ]]
-          docker exec "$CONTAINER" bash -lc 'mkdir /checkout && cp -a /source/. /checkout/'
-          docker exec --env "LIFECYCLE_TARBALL_BASE=/checkout/release/dsh-auth-${RELEASE_VERSION}.tgz" \
-            "$CONTAINER" bash -lc 'cd /checkout && corepack pnpm run test:e2e:lifecycle'
-          node scripts/release-validation.mjs artifact-verify \
-            --tag "$RELEASE_TAG" --directory release --manifest release/manifest.json
-
-      - name: Require and test the current npm latest Harness
-        env:
-          RELEASE_TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          RELEASE_VERSION="${RELEASE_TAG#v}"
-          TARBALL="release/dsh-auth-${RELEASE_VERSION}.tgz"
-          pnpm run test:e2e:latest-dsh -- "$TARBALL"
+        run: node scripts/pack-smoke.mjs "./release/${{ steps.identity.outputs.tarball }}"
 
       - name: Upload the verified release artifact and manifest
         uses: actions/upload-artifact@v7
@@ -196,8 +174,229 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  publish:
+  e2e-installer:
     needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the packed source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node 24 without a package cache
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Install PTY support
+        run: sudo apt-get update && sudo apt-get install --yes util-linux
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Download the preflight artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dsh-auth-release
+          path: release
+      - name: Run packed interactive and non-interactive PTY E2E
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          node scripts/installer-e2e.mjs "release/${{ needs.preflight.outputs.tarball }}"
+
+  e2e:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the packed source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node 24 without a package cache
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Compile gitignored lib for the checkout E2E helper
+        run: pnpm run build
+      - name: Download the preflight artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dsh-auth-release
+          path: release
+      - name: Run packed authentication E2E through DSH, Caddy, and Chrome
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          pnpm run test:e2e -- "release/${{ needs.preflight.outputs.tarball }}"
+
+  e2e-behind-tls-proxy:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the packed source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node 24 without a package cache
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Compile gitignored lib for the checkout E2E helper
+        run: pnpm run build
+      - name: Download the preflight artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dsh-auth-release
+          path: release
+      - name: Run packed authentication E2E behind an outer TLS proxy
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          pnpm run test:e2e:behind-tls-proxy -- "release/${{ needs.preflight.outputs.tarball }}"
+
+  e2e-lifecycle:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the packed source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download the preflight artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dsh-auth-release
+          path: release
+      - name: Revalidate the packed artifact
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = true ]; then
+            node scripts/release-validation.mjs artifact-verify --source head \
+              --directory release --manifest release/manifest.json
+          else
+            node scripts/release-validation.mjs artifact-verify --tag "$RELEASE_TAG" \
+              --directory release --manifest release/manifest.json
+          fi
+      - uses: ./.github/actions/systemd-lifecycle-e2e
+        with:
+          tarball: release/${{ needs.preflight.outputs.tarball }}
+
+  e2e-latest-dsh:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the packed source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node 24 without a package cache
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Compile gitignored lib for the checkout E2E helper
+        run: pnpm run build
+      - name: Download the preflight artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dsh-auth-release
+          path: release
+      - name: Require and test the current npm latest Harness
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          pnpm run test:e2e:latest-dsh -- "release/${{ needs.preflight.outputs.tarball }}"
+
+  dry-run:
+    if: ${{ inputs.dry_run == true && !cancelled() }}
+    needs:
+      - preflight
+      - e2e-installer
+      - e2e
+      - e2e-behind-tls-proxy
+      - e2e-lifecycle
+      - e2e-latest-dsh
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Confirm packed checks without publishing
+        env:
+          PREFLIGHT: ${{ needs.preflight.result }}
+          E2E_INSTALLER: ${{ needs.e2e-installer.result }}
+          E2E: ${{ needs.e2e.result }}
+          E2E_BEHIND_TLS_PROXY: ${{ needs.e2e-behind-tls-proxy.result }}
+          E2E_LIFECYCLE: ${{ needs.e2e-lifecycle.result }}
+          E2E_LATEST_DSH: ${{ needs.e2e-latest-dsh.result }}
+        run: |
+          set -euo pipefail
+          failed=0
+          for name in PREFLIGHT E2E_INSTALLER E2E E2E_BEHIND_TLS_PROXY E2E_LIFECYCLE E2E_LATEST_DSH; do
+            eval "result=\${$name}"
+            printf '%s=%s\n' "$name" "$result"
+            if [ "$result" != success ]; then failed=1; fi
+          done
+          if [ "$failed" -ne 0 ]; then exit 1; fi
+          echo 'Release dry-run passed; npm was not published.'
+
+  publish:
+    if: ${{ inputs.dry_run != true }}
+    needs:
+      - preflight
+      - e2e-installer
+      - e2e
+      - e2e-behind-tls-proxy
+      - e2e-lifecycle
+      - e2e-latest-dsh
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment:
@@ -206,10 +405,10 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Check out the exact release tag
+      - name: Check out the packed source
         uses: actions/checkout@v7
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: ${{ needs.preflight.outputs.ref }}
           fetch-depth: 0
           persist-credentials: false
 
