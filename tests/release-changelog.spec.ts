@@ -51,11 +51,13 @@ describe('release changelog', () => {
     expect(pullRequestNumber('fix: preserve auth state (#13)')).toBe(13)
     expect(pullRequestNumber('fix: preserve auth state')).toBeUndefined()
     const section = renderSection('v0.1.14', 'v0.1.13', 'acme/dsh-auth', [{
-      title: 'Fix auth state',
+      title: 'release!: remove legacy auth state migration',
       reference: '`0123456`',
       credit: ' Thanks Maintainer.',
       contributor: 'Maintainer',
     }])
+    expect(section).toContain('### Breaking changes\n\n- release!: remove legacy auth state migration')
+    expect(section).toContain('### Changes\n\n- No additional user-visible changes.')
     expect(extractSection(`# Changelog\n\n${section}`, 'v0.1.14')).toBe(section)
   })
 

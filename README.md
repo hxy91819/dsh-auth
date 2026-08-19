@@ -6,7 +6,7 @@
 
 Add a secure administrator login to the DeepSeek Harness Web app. `dsh-auth` keeps Harness on loopback and installs a project-owned Caddy `forward_auth` edge for pages, APIs, downloads, SSE, and WebSockets.
 
-Version 2 is a breaking upgrade. Previous installer flags, Nginx-managed installations, and old sessions are not migrated. Uninstall the previous installation, then run `setup` again.
+Version 0.2.0 is a breaking upgrade from legacy v1 deployments. Previous installer flags, Nginx-managed installations, and old sessions are not migrated. Uninstall the previous installation, then run `setup` again.
 
 ## Quick start
 
@@ -22,7 +22,7 @@ sudo dsh-auth setup
 `npm install -g dsh-auth` installs the current stable CLI, and the installer pins that same version in the selected DSH profile. For controlled production rollout, install the exact version approved by your supply-chain policy:
 
 ```sh
-sudo npm install -g dsh-auth@0.1.15
+sudo npm install -g dsh-auth@0.2.0
 ```
 
 The interactive installer asks for the exact DSH service, administrator initialization method, HTTPS hostname, and TLS mode; shows a secret-free plan; and changes the system only after you type the exact confirmation. It installs the pinned bundle into the selected DSH profile, copies a checksum-verified Caddy binary bundled in the same package, writes permission-restricted authentication state, and enables an independent `dsh-auth-caddy.service`. It never stores a plaintext password and never downloads Caddy at setup time.

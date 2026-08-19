@@ -25,6 +25,7 @@ import { parseStableTag, ReleaseValidationError } from './release-validation.mjs
 
 const MERGE_PR_PATTERN = /^Merge pull request #(\d+)\b/u
 const SQUASH_PR_PATTERN = /\(#(\d+)\)$/u
+const BREAKING_CHANGE_PATTERN = /^[a-z][a-z0-9-]*(?:\([^)]*\))?!:/u
 const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u
 
 /** @typedef {{title: string, reference: string, credit: string, contributor: string}} Change */
@@ -203,9 +204,16 @@ export function renderSection(tag, base, repository, changes) {
   const lines = [`## ${tag}`, '']
   if (base === undefined) lines.push('Initial release.', '')
   else lines.push(`Changes since [${base}](https://github.com/${repository}/compare/${base}...${tag}).`, '')
+  const breakingChanges = changes.filter(change => BREAKING_CHANGE_PATTERN.test(change.title))
+  const regularChanges = changes.filter(change => !BREAKING_CHANGE_PATTERN.test(change.title))
+  if (breakingChanges.length > 0) {
+    lines.push('### Breaking changes', '')
+    for (const change of breakingChanges) lines.push(`- ${change.title} (${change.reference}).${change.credit}`)
+    lines.push('')
+  }
   lines.push('### Changes', '')
-  if (changes.length === 0) lines.push('- No user-visible changes.')
-  else for (const change of changes) lines.push(`- ${change.title} (${change.reference}).${change.credit}`)
+  if (regularChanges.length === 0) lines.push('- No additional user-visible changes.')
+  else for (const change of regularChanges) lines.push(`- ${change.title} (${change.reference}).${change.credit}`)
   const contributors = joinContributors(changes.map(change => change.contributor))
   if (contributors !== '') lines.push('', '### Contributors', '', `Thanks ${contributors} for this release.`)
   return `${lines.join('\n').trimEnd()}\n`

@@ -390,7 +390,7 @@ describe('token Chrome origin', () => {
     } finally {
       browser.kill('SIGKILL')
     }
-  }, 20_000)
+  }, 30_000)
 })
 
 function singleHeader(value: string | string[] | undefined): string | undefined {
@@ -424,13 +424,24 @@ async function openChrome(chrome: string, targetUrl: string): Promise<ReturnType
     `--remote-debugging-port=${String(debugPort)}`,
     'about:blank',
   ], { stdio: ['ignore', 'pipe', 'pipe'] })
-  const deadline = Date.now() + 10_000
+  const deadline = Date.now() + 20_000
+  let ready = false
   while (Date.now() < deadline) {
     try {
-      if ((await fetch(`http://127.0.0.1:${String(debugPort)}/json/version`)).ok) break
+      if ((await fetch(`http://127.0.0.1:${String(debugPort)}/json/version`)).ok) {
+        ready = true
+        break
+      }
     } catch {
+      if (child.exitCode !== null) break
       await new Promise(resolve => setTimeout(resolve, 50))
     }
+  }
+  if (!ready) {
+    child.kill('SIGKILL')
+    throw new Error(child.exitCode === null
+      ? 'Chrome debugging endpoint did not become ready'
+      : `Chrome exited before its debugging endpoint became ready with code ${String(child.exitCode)}`)
   }
   const targetResponse = await fetch(`http://127.0.0.1:${String(debugPort)}/json/new?${encodeURIComponent(targetUrl)}`, {
     method: 'PUT',

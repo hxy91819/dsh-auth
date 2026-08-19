@@ -1,7 +1,7 @@
 {
   "name": "dsh-auth",
-  "version": "0.1.15",
-  "description": "Caddy-fronted single-account authentication bundle for DeepSeek Harness",
+  "version": "0.2.0",
+  "description": "Caddy-fronted administrator authentication bundle for DeepSeek Harness",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
