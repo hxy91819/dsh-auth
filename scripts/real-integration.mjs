@@ -829,8 +829,10 @@ async function main() {
   const afterRestartSpa = await request(httpsPort, '/', { headers: { cookie: session.pair } })
   assert(afterRestartSpa.status === 200, 'persisted session did not reach the protected SPA after a DSH restart')
 
-  const browser = await openBrowser(chromePort, `https://localhost:${String(httpsPort)}/auth/login`)
+  const browser = await openBrowser(chromePort, 'about:blank')
   try {
+    await browser.clearCookies()
+    await browser.navigate(`https://localhost:${String(httpsPort)}/auth/login`)
     await waitForBrowser(browser.evaluate, 'document.readyState === "complete" && document.querySelector("form") !== null', 'browser login page')
     await browser.evaluate(`(() => {
       const username = document.querySelector('input[name="username"]')
