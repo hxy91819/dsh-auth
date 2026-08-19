@@ -137,6 +137,15 @@ jobs:
           TARBALL="release/dsh-auth-${RELEASE_VERSION}.tgz"
           pnpm run test:e2e -- "$TARBALL"
 
+      - name: Run packed authentication E2E behind an outer TLS proxy
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          RELEASE_VERSION="${RELEASE_TAG#v}"
+          TARBALL="release/dsh-auth-${RELEASE_VERSION}.tgz"
+          pnpm run test:e2e:behind-tls-proxy -- "$TARBALL"
+
       - name: Require and test the current npm latest Harness
         env:
           RELEASE_TAG: ${{ inputs.tag }}
