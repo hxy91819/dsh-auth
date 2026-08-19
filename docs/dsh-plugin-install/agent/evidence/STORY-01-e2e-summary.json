@@ -1,4 +1,4 @@
-> dsh-auth@0.2.0 test:e2e /data/code/dsh-auth-worktree-dsh-plugin-install
+> dsh-auth@0.2.0 test:e2e /workspace/dsh-auth
 > node scripts/real-integration.mjs
 {
   "packageInstall": "offline tarball",

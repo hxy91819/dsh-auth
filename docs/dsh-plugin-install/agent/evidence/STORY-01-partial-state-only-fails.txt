@@ -1,4 +1,4 @@
-file:///data/code/dsh-auth-worktree-dsh-plugin-install/node_modules/.pnpm/@deepseek-ai+dsh-app-boot@0.1.0-rc.7_89f3f3e171ab968bd2a7fb339aad61f7/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js:1186
+file:///workspace/dsh-auth/node_modules/.pnpm/@deepseek-ai+dsh-app-boot@0.1.0-rc.7_89f3f3e171ab968bd2a7fb339aad61f7/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js:1186
 		throw new Error(`${binName}: ${stage}: ${detail}${stack}`, { cause });
 		      ^
 
@@ -6,26 +6,26 @@ Error: dsh: plugin tree failed to load: failed to apply loader entry dsh-auth (d
   - authStateFile cannot be read: ENOENT: no such file or directory, lstat '/tmp/opencode/s01/state.json'
 ValidationError: invalid config:
   - authStateFile cannot be read: ENOENT: no such file or directory, lstat '/tmp/opencode/s01/state.json'
-    at resolveConfig (file:///data/code/dsh-auth-worktree-dsh-plugin-install/node_modules/.pnpm/@deepseek-ai+cordis@4.0.1_@deepseek-ai+cordis-plugin-include@1.0.6_@deepseek-ai+cordis-plugin-loader@1.0.2/node_modules/@deepseek-ai/cordis/lib/index.js:959:27)
-    at Fiber._resolveConfig (file:///data/code/dsh-auth-worktree-dsh-plugin-install/node_modules/.pnpm/@deepseek-ai+cordis@4.0.1_@deepseek-ai+cordis-plugin-include@1.0.6_@deepseek-ai+cordis-plugin-loader@1.0.2/node_modules/@deepseek-ai/cordis/lib/index.js:1346:25)
-    at Fiber._reload (file:///data/code/dsh-auth-worktree-dsh-plugin-install/node_modules/.pnpm/@deepseek-ai+cordis@4.0.1_@deepseek-ai+cordis-plugin-include@1.0.6_@deepseek-ai+cordis-plugin-loader@1.0.2/node_modules/@deepseek-ai/cordis/lib/index.js:1354:24)
-    at boot (file:///data/code/dsh-auth-worktree-dsh-plugin-install/node_modules/.pnpm/@deepseek-ai+dsh-app-boot@0.1.0-rc.7_89f3f3e171ab968bd2a7fb339aad61f7/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js:1186:9)
-    at async runProfile (file:///data/code/dsh-auth-worktree-dsh-plugin-install/node_modules/.pnpm/@deepseek-ai+dsh@0.1.0-rc.7_505a58f85dd85be32c5d3b8314427076/node_modules/@deepseek-ai/dsh/lib/profile-boot-DG5t9aNs.js:247:14)
-    at async file:///data/code/dsh-auth-worktree-dsh-plugin-install/node_modules/.pnpm/@deepseek-ai+dsh@0.1.0-rc.7_505a58f85dd85be32c5d3b8314427076/node_modules/@deepseek-ai/dsh/lib/bin.js:133:3 {
+    at resolveConfig (file:///workspace/dsh-auth/node_modules/.pnpm/@deepseek-ai+cordis@4.0.1_@deepseek-ai+cordis-plugin-include@1.0.6_@deepseek-ai+cordis-plugin-loader@1.0.2/node_modules/@deepseek-ai/cordis/lib/index.js:959:27)
+    at Fiber._resolveConfig (file:///workspace/dsh-auth/node_modules/.pnpm/@deepseek-ai+cordis@4.0.1_@deepseek-ai+cordis-plugin-include@1.0.6_@deepseek-ai+cordis-plugin-loader@1.0.2/node_modules/@deepseek-ai/cordis/lib/index.js:1346:25)
+    at Fiber._reload (file:///workspace/dsh-auth/node_modules/.pnpm/@deepseek-ai+cordis@4.0.1_@deepseek-ai+cordis-plugin-include@1.0.6_@deepseek-ai+cordis-plugin-loader@1.0.2/node_modules/@deepseek-ai/cordis/lib/index.js:1354:24)
+    at boot (file:///workspace/dsh-auth/node_modules/.pnpm/@deepseek-ai+dsh-app-boot@0.1.0-rc.7_89f3f3e171ab968bd2a7fb339aad61f7/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js:1186:9)
+    at async runProfile (file:///workspace/dsh-auth/node_modules/.pnpm/@deepseek-ai+dsh@0.1.0-rc.7_505a58f85dd85be32c5d3b8314427076/node_modules/@deepseek-ai/dsh/lib/profile-boot-DG5t9aNs.js:247:14)
+    at async file:///workspace/dsh-auth/node_modules/.pnpm/@deepseek-ai+dsh@0.1.0-rc.7_505a58f85dd85be32c5d3b8314427076/node_modules/@deepseek-ai/dsh/lib/bin.js:133:3 {
   [cause]: Error: failed to apply loader entry dsh-auth (dsh-auth): invalid config:
     - authStateFile cannot be read: ENOENT: no such file or directory, lstat '/tmp/opencode/s01/state.json'
-      at updateError (file:///data/code/dsh-auth-worktree-dsh-plugin-install/node_modules/.pnpm/@deepseek-ai+cordis-plugin-loader@1.0.2_@deepseek-ai+cordis@4.0.1_node-addon-require-builtin@0.1.5/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js:299:9)
-      at Entry._await (file:///data/code/dsh-auth-worktree-dsh-plugin-install/node_modules/.pnpm/@deepseek-ai+cordis-plugin-loader@1.0.2_@deepseek-ai+cordis@4.0.1_node-addon-require-builtin@0.1.5/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js:506:10)
+      at updateError (file:///workspace/dsh-auth/node_modules/.pnpm/@deepseek-ai+cordis-plugin-loader@1.0.2_@deepseek-ai+cordis@4.0.1_node-addon-require-builtin@0.1.5/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js:299:9)
+      at Entry._await (file:///workspace/dsh-auth/node_modules/.pnpm/@deepseek-ai+cordis-plugin-loader@1.0.2_@deepseek-ai+cordis@4.0.1_node-addon-require-builtin@0.1.5/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js:506:10)
       at async Promise.allSettled (index 130)
-      at async Proxy.await (file:///data/code/dsh-auth-worktree-dsh-plugin-install/node_modules/.pnpm/@deepseek-ai+cordis-plugin-loader@1.0.2_@deepseek-ai+cordis@4.0.1_node-addon-require-builtin@0.1.5/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js:182:22)
-      at async boot (file:///data/code/dsh-auth-worktree-dsh-plugin-install/node_modules/.pnpm/@deepseek-ai+dsh-app-boot@0.1.0-rc.7_89f3f3e171ab968bd2a7fb339aad61f7/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js:1176:3)
-      at async runProfile (file:///data/code/dsh-auth-worktree-dsh-plugin-install/node_modules/.pnpm/@deepseek-ai+dsh@0.1.0-rc.7_505a58f85dd85be32c5d3b8314427076/node_modules/@deepseek-ai/dsh/lib/profile-boot-DG5t9aNs.js:247:14)
-      at async file:///data/code/dsh-auth-worktree-dsh-plugin-install/node_modules/.pnpm/@deepseek-ai+dsh@0.1.0-rc.7_505a58f85dd85be32c5d3b8314427076/node_modules/@deepseek-ai/dsh/lib/bin.js:133:3 {
+      at async Proxy.await (file:///workspace/dsh-auth/node_modules/.pnpm/@deepseek-ai+cordis-plugin-loader@1.0.2_@deepseek-ai+cordis@4.0.1_node-addon-require-builtin@0.1.5/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js:182:22)
+      at async boot (file:///workspace/dsh-auth/node_modules/.pnpm/@deepseek-ai+dsh-app-boot@0.1.0-rc.7_89f3f3e171ab968bd2a7fb339aad61f7/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js:1176:3)
+      at async runProfile (file:///workspace/dsh-auth/node_modules/.pnpm/@deepseek-ai+dsh@0.1.0-rc.7_505a58f85dd85be32c5d3b8314427076/node_modules/@deepseek-ai/dsh/lib/profile-boot-DG5t9aNs.js:247:14)
+      at async file:///workspace/dsh-auth/node_modules/.pnpm/@deepseek-ai+dsh@0.1.0-rc.7_505a58f85dd85be32c5d3b8314427076/node_modules/@deepseek-ai/dsh/lib/bin.js:133:3 {
     [cause]: ValidationError: invalid config:
       - authStateFile cannot be read: ENOENT: no such file or directory, lstat '/tmp/opencode/s01/state.json'
-        at resolveConfig (file:///data/code/dsh-auth-worktree-dsh-plugin-install/node_modules/.pnpm/@deepseek-ai+cordis@4.0.1_@deepseek-ai+cordis-plugin-include@1.0.6_@deepseek-ai+cordis-plugin-loader@1.0.2/node_modules/@deepseek-ai/cordis/lib/index.js:959:27)
-        at Fiber._resolveConfig (file:///data/code/dsh-auth-worktree-dsh-plugin-install/node_modules/.pnpm/@deepseek-ai+cordis@4.0.1_@deepseek-ai+cordis-plugin-include@1.0.6_@deepseek-ai+cordis-plugin-loader@1.0.2/node_modules/@deepseek-ai/cordis/lib/index.js:1346:25)
-        at Fiber._reload (file:///data/code/dsh-auth-worktree-dsh-plugin-install/node_modules/.pnpm/@deepseek-ai+cordis@4.0.1_@deepseek-ai+cordis-plugin-include@1.0.6_@deepseek-ai+cordis-plugin-loader@1.0.2/node_modules/@deepseek-ai/cordis/lib/index.js:1354:24)
+        at resolveConfig (file:///workspace/dsh-auth/node_modules/.pnpm/@deepseek-ai+cordis@4.0.1_@deepseek-ai+cordis-plugin-include@1.0.6_@deepseek-ai+cordis-plugin-loader@1.0.2/node_modules/@deepseek-ai/cordis/lib/index.js:959:27)
+        at Fiber._resolveConfig (file:///workspace/dsh-auth/node_modules/.pnpm/@deepseek-ai+cordis@4.0.1_@deepseek-ai+cordis-plugin-include@1.0.6_@deepseek-ai+cordis-plugin-loader@1.0.2/node_modules/@deepseek-ai/cordis/lib/index.js:1346:25)
+        at Fiber._reload (file:///workspace/dsh-auth/node_modules/.pnpm/@deepseek-ai+cordis@4.0.1_@deepseek-ai+cordis-plugin-include@1.0.6_@deepseek-ai+cordis-plugin-loader@1.0.2/node_modules/@deepseek-ai/cordis/lib/index.js:1354:24)
   }
 }
 
