@@ -179,6 +179,8 @@ function checked(command, args, options = {}) {
 }
 
 function outerTlsProxyConfig(httpPort, httpsPort, innerPort, certificate, key) {
+  // Cap /auth at the TLS hop. Without this, reverse_proxy can turn the inner
+  // 413 into 502 while the outer is still writing the oversized body.
   return `{
 \tadmin off
 \tauto_https off
@@ -196,6 +198,18 @@ https://localhost:${String(httpsPort)}, https://:${String(httpsPort)} {
 \ttls ${JSON.stringify(certificate)} ${JSON.stringify(key)}
 \t@invalid_host not host localhost
 \trespond @invalid_host 421
+\t@auth path /auth /auth/*
+\thandle @auth {
+\t\trequest_body {
+\t\t\tmax_size 20KiB
+\t\t}
+\t\treverse_proxy 127.0.0.1:${String(innerPort)} {
+\t\t\theader_up Host {upstream_hostport}
+\t\t\theader_up X-Forwarded-Host localhost:${String(httpsPort)}
+\t\t\theader_up X-Forwarded-Proto https
+\t\t\theader_up X-Real-IP {remote_host}
+\t\t}
+\t}
 \treverse_proxy 127.0.0.1:${String(innerPort)} {
 \t\theader_up Host {upstream_hostport}
 \t\theader_up X-Forwarded-Host localhost:${String(httpsPort)}
@@ -513,6 +527,31 @@ function assertTokenDeniedHtml(response, token) {
   assert(!body.includes(token), 'token authenticity denial echoed the bearer token')
   assert(!body.includes('cross-origin') && !body.includes('CSRF'), 'token authenticity denial named the check class')
   return body
+}
+
+function oversizedLoginRequest(extraHeaders = {}) {
+  return {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      ...extraHeaders,
+    },
+    body: `padding=${'x'.repeat(21 * 1024)}`,
+  }
+}
+
+async function proveOversizedAuthBody(httpsPort, innerPort) {
+  if (innerPort !== undefined) {
+    const inner = await requestHttp(innerPort, '/auth/login', oversizedLoginRequest({
+      'x-forwarded-host': `localhost:${String(httpsPort)}`,
+      'x-forwarded-proto': 'https',
+      'x-real-ip': '127.0.0.1',
+    }))
+    assert(inner.status === 413, `inner edge did not reject an oversized authentication body (status ${String(inner.status)})`)
+  }
+  const publicEdge = await request(httpsPort, '/auth/login', oversizedLoginRequest())
+  assert(publicEdge.status === 413, `Caddy did not reject an oversized authentication body (status ${String(publicEdge.status)})`)
+  return publicEdge.status
 }
 
 async function proveTokenAuthenticityDenial(httpsPort, authStateFile, innerPort) {
@@ -833,12 +872,10 @@ async function main() {
   const unauthenticatedSse = await sseStatus(httpsPort)
   assert(unauthenticatedSse.status === 401, 'unauthenticated SSE was not rejected')
   assert(await http2Status(httpsPort, '/auth/login') === 200, 'Caddy did not negotiate HTTP/2')
-  const oversizedLogin = await request(httpsPort, '/auth/login', {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: `padding=${'x'.repeat(21 * 1024)}`,
-  })
-  assert(oversizedLogin.status === 413, 'Caddy did not reject an oversized authentication body')
+  const oversizedAuthBody = await proveOversizedAuthBody(
+    httpsPort,
+    topology === 'behind-tls-proxy' ? innerPort : undefined,
+  )
 
   if (bootstrap === 'login-token') {
     await completeTokenOnboarding(
@@ -1030,7 +1067,7 @@ async function main() {
     harnessUiSettings: 'live locale/theme sync',
     canonicalHttpRedirect: httpRedirect.status,
     unknownHost: unknownHost.status,
-    oversizedAuthBody: oversizedLogin.status,
+    oversizedAuthBody,
     unauthenticatedPage: pageDenied.status,
     unauthenticatedApi: 401,
     unauthenticatedSse: unauthenticatedSse.status,

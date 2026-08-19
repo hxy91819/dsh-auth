@@ -53,9 +53,58 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  check:
+  functional:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.14.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.15.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Audit production and development dependencies
+        run: pnpm audit --audit-level high
+      - run: pnpm run check:functional
+
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      tarball: ${{ steps.packed.outputs.tarball }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.14.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.15.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm pack --pack-destination packed
+      - id: packed
+        run: |
+          set -euo pipefail
+          tarball="$(find packed -maxdepth 1 -type f -name 'dsh-auth-*.tgz' -printf '%f\n')"
+          test "$(printf '%s\n' "$tarball" | wc -l)" -eq 1
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+      - run: node scripts/pack-smoke.mjs "packed/${{ steps.packed.outputs.tarball }}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packed-tarball
+          path: packed/*.tgz
+          if-no-files-found: error
+          retention-days: 1
+      - run: npm pack --dry-run
+
+  e2e-installer:
+    needs: pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -68,33 +117,92 @@ jobs:
       - name: Install PTY support
         run: sudo apt-get update && sudo apt-get install --yes util-linux
       - run: pnpm install --frozen-lockfile
-      - name: Audit production and development dependencies
-        run: pnpm audit --audit-level high
-      - run: pnpm run check:functional
-      - run: pnpm pack --pack-destination packed
-      - run: node scripts/pack-smoke.mjs packed/dsh-auth-*.tgz
-      - run: node scripts/installer-e2e.mjs packed/dsh-auth-*.tgz
-      - run: pnpm run test:e2e -- packed/dsh-auth-*.tgz
-      - run: pnpm run test:e2e:behind-tls-proxy -- packed/dsh-auth-*.tgz
-      - name: Run packed managed lifecycle E2E in systemd
+      - uses: actions/download-artifact@v7
+        with:
+          name: packed-tarball
+          path: packed
+      - run: node scripts/installer-e2e.mjs "packed/${{ needs.pack.outputs.tarball }}"
+
+  e2e:
+    needs: pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.14.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.15.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v7
+        with:
+          name: packed-tarball
+          path: packed
+      - run: pnpm run test:e2e -- "packed/${{ needs.pack.outputs.tarball }}"
+
+  e2e-behind-tls-proxy:
+    needs: pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.14.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.15.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v7
+        with:
+          name: packed-tarball
+          path: packed
+      - run: pnpm run test:e2e:behind-tls-proxy -- "packed/${{ needs.pack.outputs.tarball }}"
+
+  e2e-lifecycle:
+    needs: pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: packed-tarball
+          path: packed
+      - uses: ./.github/actions/systemd-lifecycle-e2e
+        with:
+          tarball: packed/${{ needs.pack.outputs.tarball }}
+
+  check:
+    if: ${{ !cancelled() }}
+    needs:
+      - functional
+      - pack
+      - e2e-installer
+      - e2e
+      - e2e-behind-tls-proxy
+      - e2e-lifecycle
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every packed check job
+        env:
+          FUNCTIONAL: ${{ needs.functional.result }}
+          PACK: ${{ needs.pack.result }}
+          E2E_INSTALLER: ${{ needs.e2e-installer.result }}
+          E2E: ${{ needs.e2e.result }}
+          E2E_BEHIND_TLS_PROXY: ${{ needs.e2e-behind-tls-proxy.result }}
+          E2E_LIFECYCLE: ${{ needs.e2e-lifecycle.result }}
         run: |
           set -euo pipefail
-          IMAGE="dsh-auth-systemd-e2e:${GITHUB_SHA}"
-          CONTAINER="dsh-auth-systemd-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          TARBALL="$(find "$PWD/packed" -maxdepth 1 -type f -name 'dsh-auth-*.tgz' -print -quit)"
-          docker build --file .github/systemd-e2e.Dockerfile --tag "$IMAGE" .github
-          docker run --detach --init=false --privileged --security-opt label=disable \
-            --name "$CONTAINER" --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
-            --volume "$PWD:/source:ro" "$IMAGE"
-          cleanup() { docker rm --force "$CONTAINER" >/dev/null 2>&1 || true; }
-          trap cleanup EXIT
-          for attempt in {1..30}; do
-            STATE="$(docker exec "$CONTAINER" systemctl is-system-running 2>/dev/null || true)"
-            if [ "$STATE" = running ] || [ "$STATE" = degraded ]; then break; fi
-            sleep 1
+          failed=0
+          for name in FUNCTIONAL PACK E2E_INSTALLER E2E E2E_BEHIND_TLS_PROXY E2E_LIFECYCLE; do
+            eval "result=\${$name}"
+            printf '%s=%s\n' "$name" "$result"
+            if [ "$result" != success ]; then failed=1; fi
           done
-          [[ "$STATE" == "running" || "$STATE" == "degraded" ]]
-          docker exec "$CONTAINER" bash -lc 'mkdir /checkout && cp -a /source/. /checkout/'
-          docker exec --env "LIFECYCLE_TARBALL_BASE=/checkout/packed/$(basename "$TARBALL")" \
-            "$CONTAINER" bash -lc 'cd /checkout && corepack pnpm run test:e2e:lifecycle'
-      - run: npm pack --dry-run
+          exit "$failed"
