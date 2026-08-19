@@ -6,6 +6,7 @@ import { AuthApplication } from './application.js'
 import { injectAuthBasePath, injectBrowserBootstrap } from './browser-bootstrap.js'
 import { Config } from './config.js'
 import type { ResolvedConfig } from './config.js'
+import { createAuthEventLogger } from './logging.js'
 
 export { Config }
 export type { ConfigInput, ResolvedConfig } from './config.js'
@@ -22,10 +23,21 @@ export const inject = ['webServer', 'settings']
 
 /** Register the `/auth` prefix using the WebServer's reversible route effect. */
 export function apply(ctx: Context, config: ResolvedConfig): void {
+  const hostLogger = ctx.logger(name)
+  const logger = createAuthEventLogger(
+    hostLogger,
+    () => ctx.logger.exporters.size > 1,
+    line => { process.stderr.write(line) },
+  )
   const application = new AuthApplication(config, Date.now, () => ({
     locale: ctx.settings.get(LOCALE_NAMESPACE),
     theme: ctx.settings.get(THEME_NAMESPACE),
-  }))
+  }), logger)
+  logger.info({
+    event: 'auth.runtime.ready',
+    secureCookies: config.secureCookies,
+    loginTokenEnabled: config.loginTokenEnabled,
+  })
   const route: WebRoute = {
     kind: 'prefix',
     path: config.basePath,

@@ -5,6 +5,10 @@
 
 http://{{PUBLIC_HOST}}:{{HTTP_PORT}}, http://:{{HTTP_PORT}} {
 	bind {{LISTEN_ADDRESS}}
+	log {
+		output stderr
+		format json
+	}
 	@invalid_host not host {{PUBLIC_HOST}}
 	respond @invalid_host 421
 	redir https://{{PUBLIC_AUTHORITY}}{uri} 308
@@ -13,6 +17,10 @@ http://{{PUBLIC_HOST}}:{{HTTP_PORT}}, http://:{{HTTP_PORT}} {
 https://{{PUBLIC_HOST}}:{{HTTPS_PORT}}, https://:{{HTTPS_PORT}} {
 	bind {{LISTEN_ADDRESS}}
 	{{TLS_DIRECTIVE}}
+	log {
+		output stderr
+		format json
+	}
 
 	header {
 		Strict-Transport-Security "max-age=31536000"

@@ -225,6 +225,9 @@ async function verifyProtocol(caddy, root, ports, certificate, key) {
     stdio: ['ignore', 'ignore', 'pipe'],
     env: { ...process.env, XDG_DATA_HOME: join(root, 'protocol-data'), XDG_CONFIG_HOME: join(root, 'protocol-config') },
   })
+  let edgeLogs = ''
+  edge.stderr.setEncoding('utf8')
+  edge.stderr.on('data', chunk => { edgeLogs += chunk })
   try {
     await waitForEdge(ports.https, edge)
     const page = await request(ports.https, '/')
@@ -274,6 +277,13 @@ async function verifyProtocol(caddy, root, ports, certificate, key) {
       || seen['x-real-ip'] === '203.0.113.9') throw new Error('forged forwarding headers reached the upstream')
     const cookies = Array.isArray(accepted.headers['set-cookie']) ? accepted.headers['set-cookie'] : [accepted.headers['set-cookie']]
     if (!cookies.some(value => value?.startsWith('renewed=yes;'))) throw new Error('renewal Cookie was not forwarded')
+    const accessLogSecret = `must-not-appear-${randomBytes(12).toString('hex')}`
+    if ((await request(ports.https, '/api/access-log-check', {
+      headers: { cookie: accessLogSecret, authorization: `Bearer ${accessLogSecret}` },
+    })).status !== 401) throw new Error('access-log redaction probe did not reach the protected edge')
+    await new Promise(resolveTimeout => setTimeout(resolveTimeout, 100))
+    if (!edgeLogs.includes('/api/access-log-check')) throw new Error('Caddy access log was not emitted to stderr')
+    if (edgeLogs.includes(accessLogSecret)) throw new Error('Caddy access log exposed a credential header')
   } finally {
     await terminate(edge)
     upstream.close()
@@ -307,7 +317,7 @@ try {
     version, platform, binarySha256: manifest.platforms[platform].binarySha256,
     manifestPlatforms: Object.keys(manifest.platforms).sort(), tlsModes: ['automatic', 'internal', 'manual'],
     adminApi: 'disabled', publicVerify: 404, interactive: 303, api: 401, tokenRoutes: 'public proxied', setupRoute: 'public proxied', passwordRoute: 'public proxied',
-    identityHeaders: 'verified values replaced forgeries', renewalCookie: true, cleanup: true,
+    identityHeaders: 'verified values replaced forgeries', renewalCookie: true, accessLogCredentials: 'redacted', cleanup: true,
   }, undefined, 2)}\n`)
 } finally {
   rmSync(root, { recursive: true, force: true })

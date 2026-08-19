@@ -241,6 +241,15 @@ sudo dsh-auth doctor
 sudo dsh-auth doctor --json
 ```
 
+Runtime authentication events use the Cordis logger name `dsh-auth`, while the managed Caddy service writes JSON access logs to stderr. Under the standard systemd installation, collect both journals together with the read-only health report:
+
+```sh
+sudo journalctl -u dsh-web.service -u dsh-auth-caddy.service --since '1 hour ago'
+sudo dsh-auth doctor --json
+```
+
+Authentication logs contain fixed event names, outcomes, authentication methods, and a deployment-scoped irreversible client identifier. They do not contain submitted usernames, passwords, hashes, raw login tokens, cookies, CSRF values, session identifiers, request bodies, or complete request URLs. Caddy applies its built-in credential redaction to access logs; operators must still treat logs as sensitive because they contain client addresses and request paths. Apply an appropriate journal retention policy and redact private hosts, paths, addresses, and account information before sharing a support bundle.
+
 `uninstall --dry-run` lists only files and profile changes proven by the ownership record. Interactive uninstall requires typing `uninstall`; automation requires the exact `--authorize-uninstall` flag. The independent Caddy unit is removed; a user-installed Caddy or Nginx is never touched.
 
 ```sh

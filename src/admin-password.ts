@@ -12,6 +12,7 @@ import {
   writeHtml,
 } from './http.js'
 import type { LoginLimiter } from './limiter.js'
+import type { AuthEventLogger } from './logging.js'
 import {
   ADMIN_PASSWORD_MAX_BYTES,
   assertAdministratorPassword,
@@ -35,6 +36,8 @@ export interface AdminPasswordContext {
   readonly cookie: (name: string, value: string, maxAgeSeconds: number) => string
   readonly renewalCookies: (authenticated: SessionAuthentication) => readonly string[]
   readonly renewalHeaders: (authenticated: SessionAuthentication) => Record<string, string | string[]>
+  readonly logger: AuthEventLogger
+  readonly clientId: (req: IncomingMessage) => string
 }
 
 /** Authenticated password change for the single administrator identity. */
@@ -110,6 +113,7 @@ async function passwordChangePost(
   const limiterKey = clientAddress(req, ctx.config)
   const retryAfter = ctx.limiter.consume(limiterKey, ctx.now())
   if (retryAfter !== undefined) {
+    ctx.logger.warn({ event: 'auth.password-change.failed', reason: 'rate_limited', clientId: ctx.clientId(req) })
     renderPasswordChange(res, 429, returnTo, preferences, authenticated, ctx, 'rateLimited', {
       'retry-after': String(retryAfter),
     })
@@ -122,6 +126,7 @@ async function passwordChangePost(
     ? false
     : await verifyPassword(current, credentials.passwordHash)
   if (credentials === undefined || !currentMatches || currentBytes > ADMIN_PASSWORD_MAX_BYTES) {
+    ctx.logger.warn({ event: 'auth.password-change.failed', reason: 'invalid_current_password', clientId: ctx.clientId(req) })
     renderPasswordChange(res, 401, returnTo, preferences, authenticated, ctx, 'currentPasswordInvalid')
     return
   }
@@ -137,6 +142,7 @@ async function passwordChangePost(
     redirect(res, loginRedirect(ctx, returnTo))
     return
   }
+  ctx.logger.info({ event: 'auth.password-change.succeeded', clientId: ctx.clientId(req) })
   writeHtml(res, 200, passwordChangeCompletePage(preferences, returnTo), {
     'set-cookie': [
       ...ctx.renewalCookies(authenticated),

@@ -33,6 +33,8 @@ import {
 } from './http.js'
 import { LoginLimiter } from './limiter.js'
 import { LoginTokenStore, createNodeTokenHost } from './login-token-store.js'
+import { clientLogId, errorLogFields, silentAuthLogger } from './logging.js'
+import type { AuthEventLogger } from './logging.js'
 import {
   ADMIN_PASSWORD_MAX_BYTES,
   assertAdministratorPassword,
@@ -59,6 +61,7 @@ export class AuthApplication {
     private readonly config: ResolvedConfig,
     private readonly now: () => number = Date.now,
     private readonly readHarnessUiSettings: () => HarnessUiSettings = () => ({}),
+    private readonly logger: AuthEventLogger = silentAuthLogger,
   ) {
     this.sessions = new SessionStore(config, now)
     this.csrfSigner = new CookieSigner(config.sessionSecret)
@@ -84,9 +87,11 @@ export class AuthApplication {
 
   /** Handle one request under the configured auth prefix. */
   async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    let route = 'unknown'
     try {
       const url = new URL(req.url ?? '/', 'http://dsh-auth.invalid')
       const path = url.pathname
+      route = this.routeName(path)
       if (path === this.config.basePath && req.method === 'GET') {
         redirect(res, `${this.config.basePath}/login`)
         return
@@ -136,6 +141,8 @@ export class AuthApplication {
           cookie: (name, value, maxAgeSeconds) => this.cookie(name, value, maxAgeSeconds),
           renewalCookies: authenticated => this.renewalCookies(authenticated),
           renewalHeaders: authenticated => this.renewalHeaders(authenticated),
+          logger: this.logger,
+          clientId: request => this.clientId(request),
         })
         return
       }
@@ -150,9 +157,24 @@ export class AuthApplication {
       write(res, 404, 'not found')
     } catch (error) {
       if (error instanceof HttpError) {
+        this.logger.warn({
+          event: 'auth.request.denied',
+          route,
+          method: req.method ?? 'UNKNOWN',
+          clientId: this.clientId(req),
+          status: error.status,
+          reason: this.httpErrorReason(error),
+        })
         write(res, error.status, error.message, { 'cache-control': 'no-store' })
         return
       }
+      this.logger.error({
+        event: 'auth.request.error',
+        route,
+        method: req.method ?? 'UNKNOWN',
+        clientId: this.clientId(req),
+        ...errorLogFields(error),
+      })
       throw error
     }
   }
@@ -180,6 +202,7 @@ export class AuthApplication {
     const limiterKey = clientAddress(req, this.config)
     const retryAfter = this.limiter.consume(limiterKey, this.now())
     if (retryAfter !== undefined) {
+      this.logger.warn({ event: 'auth.login.failed', authMethod: 'password', reason: 'rate_limited', clientId: this.clientId(req) })
       const csrf = this.issueCsrf()
       writeHtml(res, 429, loginPage(this.config.basePath, formReturnTo, csrf.token, preferences, 'rateLimited'), {
         'retry-after': String(retryAfter),
@@ -197,11 +220,13 @@ export class AuthApplication {
       Promise.resolve(constantTimeTextEqual(username, credentials?.username ?? 'admin', this.config.sessionSecret)),
     ])
     if (credentials === undefined || !passwordMatches || !usernameMatches || passwordBytes > ADMIN_PASSWORD_MAX_BYTES) {
+      this.logger.warn({ event: 'auth.login.failed', authMethod: 'password', reason: 'invalid_credentials', clientId: this.clientId(req) })
       this.renderLogin(res, 401, formReturnTo, preferences, 'invalidCredentials')
       return
     }
     this.limiter.reset(limiterKey)
     const created = this.sessions.create(this.now())
+    this.logger.info({ event: 'auth.login.succeeded', authMethod: 'password', clientId: this.clientId(req) })
     redirect(res, formReturnTo, {
       'set-cookie': [
         this.cookie(this.cookieNames.session, created.cookieValue, this.config.sessionTtlSeconds),
@@ -303,6 +328,7 @@ export class AuthApplication {
     const form = await readForm(req)
     if (!this.validCsrf(req, form.get('csrf'))) throw new HttpError(403, 'invalid CSRF token')
     this.sessions.revoke(req)
+    this.logger.info({ event: 'auth.logout.succeeded', clientId: this.clientId(req) })
     redirect(res, `${this.config.basePath}/login`, {
       'set-cookie': [this.cookie(this.cookieNames.session, '', 0), this.cookie(this.cookieNames.csrf, '', 0)],
     })
@@ -385,6 +411,7 @@ export class AuthApplication {
     const limiterKey = clientAddress(req, this.config)
     const retryAfter = this.tokenLimiter.consume(limiterKey, this.now())
     if (retryAfter !== undefined) {
+      this.logger.warn({ event: 'auth.login.failed', authMethod: 'login-token', reason: 'rate_limited', clientId: this.clientId(req) })
       writeTokenHtml(res, 429, tokenRateLimitedPage(preferences), { 'retry-after': String(retryAfter) })
       return
     }
@@ -393,17 +420,20 @@ export class AuthApplication {
     const submitted = form.get('token')
     if (submitted === null || submitted.length === 0 || submitted.length > 256
       || form.getAll('csrf').length !== 1 || form.getAll('token').length !== 1 || form.size !== 2) {
+      this.logger.warn({ event: 'auth.login.failed', authMethod: 'login-token', reason: 'invalid_token', clientId: this.clientId(req) })
       this.renderTokenFailure(res, 401, preferences)
       return
     }
     let claim: ReturnType<LoginTokenStore['claim']>
     try {
       claim = this.tokenStore.claim(submitted)
-    } catch {
+    } catch (error) {
       // A damaged managed file is a denial, never an internal-detail probe.
+      this.logger.error({ event: 'auth.token-store.error', operation: 'claim', ...errorLogFields(error) })
       claim = { status: 'invalid' }
     }
     if (claim.status !== 'claimed') {
+      this.logger.warn({ event: 'auth.login.failed', authMethod: 'login-token', reason: 'invalid_token', clientId: this.clientId(req) })
       this.renderTokenFailure(res, 401, preferences)
       return
     }
@@ -411,6 +441,7 @@ export class AuthApplication {
       const created = this.sessions.create(this.now(), 'login-token')
       this.tokenStore.releaseClaim(claim)
       this.tokenLimiter.reset(limiterKey)
+      this.logger.info({ event: 'auth.login.succeeded', authMethod: 'login-token', clientId: this.clientId(req) })
       const target = this.sessions.passwordCredentials() !== undefined
         ? '/'
         : `${this.config.basePath}/admin/setup?returnTo=%2F`
@@ -420,8 +451,15 @@ export class AuthApplication {
           this.cookie(this.cookieNames.csrf, '', 0),
         ],
       })
-    } catch {
+    } catch (error) {
       // The claim is never restored; the user must request a fresh token.
+      this.logger.error({
+        event: 'auth.login.failed',
+        authMethod: 'login-token',
+        reason: 'session_persistence',
+        clientId: this.clientId(req),
+        ...errorLogFields(error),
+      })
       this.renderTokenFailure(res, 401, preferences)
     }
   }
@@ -509,6 +547,7 @@ export class AuthApplication {
       redirect(res, `${this.config.basePath}/login?returnTo=${encodeURIComponent(target)}`)
       return
     }
+    this.logger.info({ event: 'auth.admin.initialized', clientId: this.clientId(req) })
     redirect(res, returnTo, {
       'set-cookie': [
         ...this.renewalCookies(authenticated),
@@ -561,6 +600,27 @@ export class AuthApplication {
       ...(this.config.loginTokenFailureMessageZh === undefined ? {} : { zh: this.config.loginTokenFailureMessageZh }),
       ...(this.config.loginTokenFailureMessageEn === undefined ? {} : { en: this.config.loginTokenFailureMessageEn }),
     }))
+  }
+
+  private clientId(req: IncomingMessage): string {
+    return clientLogId(this.config.sessionSecret, clientAddress(req, this.config))
+  }
+
+  private routeName(path: string): string {
+    const suffix = path.startsWith(this.config.basePath) ? path.slice(this.config.basePath.length) : path
+    return new Set([
+      '', '/login', `/${TOKEN_BOOTSTRAP_FILE}`, '/token', `/${BROWSER_BOOTSTRAP_FILE}`,
+      '/session', '/csrf', '/account', '/admin/setup', '/admin/password', '/logout', '/verify',
+    ]).has(suffix) ? suffix || '/' : 'unknown'
+  }
+
+  private httpErrorReason(error: HttpError): string {
+    if (error.message === 'cross-origin request denied') return 'origin_denied'
+    if (error.message === 'invalid CSRF token') return 'csrf_denied'
+    if (error.status === 413) return 'request_too_large'
+    if (error.status === 415) return 'content_type_denied'
+    if (error.message === 'request aborted') return 'request_aborted'
+    return 'http_error'
   }
 
   private renderLogin(
