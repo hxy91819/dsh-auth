@@ -10,6 +10,7 @@ Changes since [v0.1.15](https://github.com/hxy91819/dsh-auth/compare/v0.1.15...v
 
 ### Changes
 
+- fix: make managed uninstall transactional (`0e897a6`). Thanks masonxhuang.
 - docs: remove password reset screenshots (`19697f5`). Thanks masonxhuang.
 - docs: derive token-login progress from execution cards ([#14](https://github.com/hxy91819/dsh-auth/pull/14)). Thanks @hxy91819.
 - feat: reset the administrator password from Settings ([#13](https://github.com/hxy91819/dsh-auth/pull/13)). Thanks @hxy91819.
