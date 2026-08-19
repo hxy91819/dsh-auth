@@ -10,7 +10,7 @@
 
 ## Architecture
 
-- Caddy is the only public listener. Harness binds loopback; Caddy performs `forward_auth`, security headers, TLS, and authenticated HTTP, download, SSE, and WebSocket proxying.
+- The managed Caddy is the only authentication edge allowed to reach loopback-bound Harness. It normally terminates public TLS; `--behind-tls-proxy` instead keeps it on loopback HTTP behind an operator-owned TLS proxy while preserving `forward_auth`, security headers, and authenticated HTTP, download, SSE, and WebSocket proxying.
 - The Cordis plugin owns `/auth/*`, the bilingual login page, signed CSRF values, Argon2id verification, persistent revocable sessions, and the Settings password-reset and sign-out rows.
 - Protect the SPA, `/api/*`, `/plugins/*`, `/api/session.export`, `/api/events.mux`, `/api/events.host`, and `/plugins/events`. Public access to the upstream `/auth/verify` route must resolve as not found.
 - Integrate through Harness WebServer, Settings, index-tap, client-module, locale, and sidebar-slot extension points. Extend those seams instead of forking Harness, rewriting its assets, probing the DOM, or using Nginx `sub_filter`.

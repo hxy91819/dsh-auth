@@ -59,7 +59,7 @@ function completedSystemState(host: InstallerHost): InstallState {
 }
 
 /** Derive issue inputs from the default v2 system ownership record; root only. */
-export function resolveSystemdLoginTokenContext(host: InstallerHost): LoginTokenIssueContext {
+export function resolveSystemdLoginTokenContext(host: InstallerHost, publicOriginValue?: string): LoginTokenIssueContext {
   if (host.effectiveUid !== 0) {
     throw new InstallerError('systemd login token issue requires root', ExitCode.permission, [{
       code: 'LOGIN_TOKEN_ROOT_REQUIRED',
@@ -79,12 +79,26 @@ export function resolveSystemdLoginTokenContext(host: InstallerHost): LoginToken
   if (state.publicOrigin !== publicOrigin(state.request)) {
     conflict('the recorded public origin does not match the recorded installation request', 'INSTALL_STATE_INCONSISTENT')
   }
+  if (state.request.behindTlsProxy === true && publicOriginValue === undefined) {
+    throw new InstallerError('login token issue behind a TLS proxy requires --public-origin', ExitCode.usage, [{
+      code: 'PUBLIC_ORIGIN_REQUIRED',
+      severity: 'error',
+      message: 'The current public HTTPS origin is not part of the managed installation.',
+    }])
+  }
+  if (state.request.behindTlsProxy !== true && publicOriginValue !== undefined) {
+    throw new InstallerError('--public-origin is accepted for system installations only with --behind-tls-proxy', ExitCode.usage)
+  }
+  const issueOrigin = publicOriginValue === undefined ? state.publicOrigin : validatePublicOrigin(publicOriginValue)
+  if (state.request.behindTlsProxy === true && !issueOrigin.startsWith('https://')) {
+    throw new InstallerError('--public-origin must use https for an installation behind a TLS proxy', ExitCode.usage)
+  }
   requireAuthStateShape(host, state.paths.authStateFile, state.dshUid, state.dshGid)
   requireTokenDirectory(host, state.paths.loginTokenDirectory, state.dshUid, state.dshGid)
   return {
     authStateFile: state.paths.authStateFile,
     tokenDirectory: state.paths.loginTokenDirectory,
-    publicOrigin: state.publicOrigin,
+    publicOrigin: issueOrigin,
     owner: { uid: state.dshUid, gid: state.dshGid },
   }
 }

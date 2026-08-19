@@ -17,6 +17,7 @@ import { resolveContainerLoginTokenContext, resolveSystemdLoginTokenContext } fr
 import { prepareSetup } from './installer/plan.js'
 import { resetManagedPassword } from './installer/reset-password.js'
 import { executeUninstall, prepareUninstall } from './installer/uninstall.js'
+import { executeUpgrade, prepareUpgrade } from './installer/upgrade.js'
 import { ExitCode, type ExitCodeValue, type InstallationPlan, type InstallerHost, type PasswordSource, type SetupRequest } from './installer/types.js'
 import { parseAdminBootstrap, parseLoginTokenPolicy, parseTlsMode, validateAbsolutePath, validateSetupRequest } from './installer/validation.js'
 
@@ -244,6 +245,7 @@ async function setupRequest(parsed: ParsedArguments, io: CliIo, interactive: boo
   const failureEn = values.get('--login-token-error-message-en')
   return validateSetupRequest({
     mode: inputs.mode,
+    ...(parsed.flags.has('--behind-tls-proxy') ? { behindTlsProxy: true } : {}),
     ...(outputDirectory === undefined ? {} : { outputDirectory }),
     ...(inputs.dshService === undefined ? {} : { dshService: inputs.dshService }),
     ...(dshHome === undefined ? {} : { dshHome }),
@@ -454,6 +456,35 @@ async function runUninstall(parsed: ParsedArguments, io: CliIo, host: InstallerH
   return ExitCode.success
 }
 
+async function authorizeUpgrade(parsed: ParsedArguments, io: CliIo, plan: InstallationPlan): Promise<boolean> {
+  if (io.interactive && !parsed.flags.has('--non-interactive')) {
+    io.writeOut(renderPlan(plan))
+    return (await io.readLine('Type upgrade to apply this exact plan: ')).trim() === 'upgrade'
+  }
+  if (!parsed.flags.has('--authorize-upgrade')) {
+    throw new InstallerError('non-interactive upgrade requires --authorize-upgrade', ExitCode.usage)
+  }
+  return true
+}
+
+async function runUpgrade(parsed: ParsedArguments, io: CliIo, host: InstallerHost): Promise<number> {
+  assertAcceptedOptions(parsed, ['--json', '--dry-run', '--package', '--authorize-upgrade', '--non-interactive'], 'upgrade accepts only --package, --authorize-upgrade, --non-interactive, --dry-run, and --json')
+  const packageSpec = parsed.values.get('--package')
+  const result = prepareUpgrade(host, packageSpec === undefined ? {} : { packageSpec })
+  const json = parsed.flags.has('--json')
+  if (parsed.flags.has('--dry-run') || result.plan.status !== 'ready') {
+    const exitCode = result.plan.status === 'ready' ? ExitCode.success : ExitCode.unhealthy
+    io.writeOut(json ? jsonOutput('upgrade', result.plan.status === 'ready' ? 'ready' : result.plan.status, exitCode, result.plan) : renderPlan(result.plan))
+    return exitCode
+  }
+  const context = result.context
+  if (context === undefined) return ExitCode.unhealthy
+  if (!await authorizeUpgrade(parsed, io, result.plan)) return ExitCode.cancelled
+  executeUpgrade(host, context)
+  io.writeOut(json ? jsonOutput('upgrade', 'success', ExitCode.success, result.plan) : 'dsh-auth upgrade completed; the bundle, Caddy, record, and services moved together.\n')
+  return ExitCode.success
+}
+
 function loginTokenExitCode(kind: LoginTokenError['kind']): ExitCodeValue {
   if (kind === 'usage') return ExitCode.usage
   if (kind === 'execution') return ExitCode.execution
@@ -488,12 +519,13 @@ async function runIssueLoginToken(parsed: ParsedArguments, io: CliIo, host: Inst
   )
   const authStateFile = parsed.values.get('--auth-state-file')
   const publicOrigin = parsed.values.get('--public-origin')
-  if ((authStateFile === undefined) !== (publicOrigin === undefined)) {
-    throw new InstallerError('--auth-state-file and --public-origin must be provided together', ExitCode.usage)
+  let context
+  if (authStateFile === undefined) {
+    context = resolveSystemdLoginTokenContext(host, publicOrigin)
+  } else {
+    if (publicOrigin === undefined) throw new InstallerError('--auth-state-file requires --public-origin', ExitCode.usage)
+    context = resolveContainerLoginTokenContext(host, authStateFile, publicOrigin)
   }
-  const context = authStateFile === undefined || publicOrigin === undefined
-    ? resolveSystemdLoginTokenContext(host)
-    : resolveContainerLoginTokenContext(host, authStateFile, publicOrigin)
   if (!await authorizeLoginTokenIssue(parsed, io)) return ExitCode.cancelled
   let issued
   try {
@@ -542,6 +574,7 @@ async function dispatchCommand(parsed: ParsedArguments, io: CliIo, host: Install
     return await runSetupOrPlan(parsed, io, host, command)
   }
   if (parsed.command === 'doctor') return runDoctor(parsed, io, host)
+  if (parsed.command === 'upgrade') return await runUpgrade(parsed, io, host)
   if (parsed.command === 'reset-password') return await runResetPassword(parsed, io, host)
   if (parsed.command === 'uninstall') return await runUninstall(parsed, io, host)
   if (parsed.command === 'issue-login-token') return await runIssueLoginToken(parsed, io, host)

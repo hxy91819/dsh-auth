@@ -1,0 +1,8 @@
+== STORY-03 verification evidence ==
+tests/upgrade.spec.ts: 9/9 passed (semver compare, success w/ credential+session preservation, same-version & downgrade refusal, target-mismatch rollback, caddy-validate rollback, missing/v1/interrupted refusal, drift three-step refusal, crash recovery, dry-run+interactive+authorize)
+tests/config.spec.ts: expectedVersion accept/reject/absent
+pnpm run check: 19 files, 185 tests passed; check:caddy exit 0; git diff --check exit 0
+pack-smoke: Packed artifact installs offline and its real dsh-auth bin completes a secret-safe setup.
+installer-e2e: Packed interactive and non-interactive installer end-to-end tests passed.
+real e2e (second run after one transient DSH client-module load failure): exit 0, preinstall="preinstall": "web usable without auth surface"
+tarball: 8748247d07cb756ba3a4c0e06a493eec87740d52bd7281f75e1faa41908043ec

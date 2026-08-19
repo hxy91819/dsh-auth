@@ -1,0 +1,53 @@
+{
+  "kind": "agent-card",
+  "schema_version": 1,
+  "story": "STORY-03",
+  "intent_version": 2,
+  "status": "done",
+  "owner": "opencode",
+  "blocker": "无",
+  "status_updated": "2026-08-19",
+  "refreshed": "2026-08-19",
+  "code_baseline": "c08c98a",
+  "owns": [
+    "MANAGED_UPGRADE"
+  ],
+  "verifies": [
+    "TRUSTED_ADOPTION"
+  ],
+  "goal": "独立 upgrade 命令把健康 v2 安装原子升级到与受信任全局 CLI 一致的更高版本构建，并完整恢复失败升级。",
+  "decision_boundary": "只允许升级到包名、版本和构建身份与当前受信任全局 CLI 一致且版本更高的目标；保留凭据、secret、认证状态和会话；不迁移 v1；版本漂移必须先恢复记录中的旧 bundle 并通过 doctor。",
+  "technical_plan": "新增公开 CLI 契约和 typed upgrade plan；校验目标与全局 CLI 身份及版本顺序；记录升级事务；更新 bundle、Caddy、配置与服务；失败逆序恢复；doctor 为漂移状态输出按记录执行 dsh plugin add、复检、再升级的固定步骤。",
+  "authoritative_inputs": "docs/dsh-plugin-install/epics/EPIC-DSH-PLUGIN-INSTALL.md；对应 Story；docs/installer.md；README.md 的 CLI 契约；src/cli.ts；src/installer/cli-parser.ts；src/installer/plan.ts；src/installer/executor.ts；src/installer/doctor.ts；src/installer/types.ts；STORY-02 交接。",
+  "claim_checks": "确认 STORY-02 已完成并读取构建身份与所有权交接；intent_version=2；当前 CLI schema、退出码、状态 parser 和服务回滚基线可复现。",
+  "checklist": [
+    {
+      "done": true,
+      "text": "冻结 upgrade 参数、计划、JSON、退出码和拒绝行为。"
+    },
+    {
+      "done": true,
+      "text": "实现 v2 前进升级事务和服务验证。"
+    },
+    {
+      "done": true,
+      "text": "保持凭据、会话和预装包卸载语义。"
+    },
+    {
+      "done": true,
+      "text": "覆盖每个写入与服务阶段的自动回滚。"
+    },
+    {
+      "done": true,
+      "text": "实现版本漂移失败关闭及 doctor 的三步恢复诊断。"
+    },
+    {
+      "done": true,
+      "text": "完成全量检查和 Story 交接。"
+    }
+  ],
+  "steps": "先写公开契约与失败测试；扩展 parser、types、plan 和 journal；实现逐阶段更新与回滚；增加 runtime/doctor 漂移检查和旧 bundle 恢复诊断；最后跑安装器与真实服务验证。",
+  "verification": "固定分母 tests/upgrade.spec.ts 9 用例 + tests/config.spec.ts expectedVersion 3 断言组：成功升级（bundle/Caddy/记录/服务一致、凭据与 secret 字节不变、env 写入 DSH_AUTH_EXPECTED_VERSION、doctor 健康）、同版本与降级在变更前以退出码 4 拒绝、目标构建不匹配回滚到旧 bundle 并 doctor 恢复健康（退出码 6 + UPGRADE_TARGET_BUILD_MISMATCH）、Caddy 校验失败全量回滚（bundle+binary+env+记录+服务）、缺失安装/v1/中断 setup 分别 8/4/8、外部漂移以 8 拒绝且 remediation 含 dsh plugin --profile web add 0.2.0 → rerun doctor → run dsh-auth 三步、崩溃日志（installing+upgrade journal）被下一次 upgrade 先回滚再完成升级、--dry-run 计划无变更、交互输 upgrade 执行/输 no 退出 7、缺 --authorize-upgrade 退出 2、runtime 失败关闭：resolveConfig 对 expectedVersion 不等于自身构建版本抛错。全量 pnpm run check 19 文件 185 测试、check:caddy、git diff --check、pack-smoke、installer-e2e 全部通过；真实 E2E 第二次运行通过（首次为 DSH 内部 client 模块偶发加载失败，与本改动无关）。",
+  "stop_conditions": "升级需要改变认证状态格式、使会话失效、允许降级、接受与全局 CLI 身份不一致的目标、在 doctor 恢复健康前升级，或无法恢复旧 Caddy/bundle/service 时停止并请求确认。",
+  "handoff": "起止版本：c08c98a..本提交。新增 src/installer/upgrade.ts（compareVersions/prepareUpgrade/executeUpgrade，事务 journal 存于状态 upgrade 字段：from*/target*/phase bundle|caddy|services）；CLI 新增 upgrade 命令（--package/--dry-run/--authorize-upgrade，交互输入 upgrade 确认）；plan/doctor 对 env 渲染带 state.profilePackageVersion；env 文件新增 DSH_AUTH_EXPECTED_VERSION，组合层映射 expectedVersion，resolveConfig 与自身 package.json 版本不一致即失败关闭（未托管部署无该变量不受影响）；doctor 漂移 remediation 固定为三步恢复顺序；executor 导出 profileCommand/dshEnvironment/runChecked/systemctlPath 复用。状态兼容：新字段均可选，旧记录读入不受影响；UPGRADE_RECORD_INCOMPLETE 拒绝无身份记录的旧安装。诊断码：UPGRADE_VERSION_NOT_HIGHER、UPGRADE_TARGET_BUILD_MISMATCH、UPGRADE_RESTORE_BUILD_MISMATCH、UPGRADE_BUNDLE_INSTALL_FAILED、UPGRADE_CADDY_VALIDATE_FAILED、UPGRADE_DSH_RESTART_FAILED、UPGRADE_CADDY_RESTART_FAILED、UPGRADE_RESTORE_BUNDLE_FAILED、UPGRADE_RECORD_INCOMPLETE。STORY-04 输入：完整生命周期 = 预安装(dormant) → setup 接管 → upgrade → uninstall 保留外部包；发布验收需覆盖打包产物上的 upgrade 真实流程与文档准确性。"
+}

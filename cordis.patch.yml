@@ -1,11 +1,16 @@
 # Installed bundle layer. DSH_AUTH_* values must come from the inherited
 # process environment (or an orchestrator env-file), not DSH's project .env.
+# `dsh plugin add` only pre-installs this bundle: with both core file
+# variables absent the row stays disabled (dormant), so an unconfigured Web
+# keeps booting; exactly one variable present still fails validation loudly.
 - insert:
     - id: dsh-auth
       name: dsh-auth
+      disabled: !!js process.env.DSH_AUTH_STATE_FILE === undefined && process.env.DSH_AUTH_SESSION_SECRET_FILE === undefined
       config:
         authStateFile: !!js process.env.DSH_AUTH_STATE_FILE
         sessionSecretFile: !!js process.env.DSH_AUTH_SESSION_SECRET_FILE
+        expectedVersion: !!js process.env.DSH_AUTH_EXPECTED_VERSION
         loginTokenEnabled: !!js JSON.parse(process.env.DSH_AUTH_LOGIN_TOKEN_ENABLED ?? 'false')
         loginTokenDirectory: !!js process.env.DSH_AUTH_LOGIN_TOKEN_DIRECTORY
         loginTokenFailureMessageZh: !!js process.env.DSH_AUTH_LOGIN_TOKEN_FAILURE_MESSAGE_ZH

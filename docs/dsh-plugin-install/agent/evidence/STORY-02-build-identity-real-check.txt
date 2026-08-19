@@ -1,0 +1,5 @@
+== STORY-02 real build-identity determinism ==
+tarball: 6c9ce3c85304eaf2… dsh-auth-0.2.0.tgz
+npm -g install vs dsh plugin add of the same tarball:
+  identity 4ef7bc8516445010781280e0313d7d0f6ffd972a286dc8b242fea36981d3249d on both sides -> adoptable
+one tampered file in the profile copy -> identity differs -> PROFILE_PACKAGE_BUILD_MISMATCH

@@ -1,10 +1,10 @@
-import { chmodSync, chownSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, chownSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Config, resolveConfig } from '../src/config.js'
-import { testCredentials } from './helpers.js'
+import { testConfig, testCredentials } from './helpers.js'
 
 const roots: string[] = []
 
@@ -16,6 +16,16 @@ describe('configuration', () => {
   it('fails before activation when auth state or session secret files are absent', () => {
     expect(Config['~standard'].validate({}).issues?.[0]?.message).toMatch(/authStateFile/u)
     expect(() => resolveConfig({ authStateFile: '/tmp/missing-auth-state.json' })).toThrow(/sessionSecretFile|authStateFile/u)
+  })
+
+  it('accepts the managed expected-version marker only for this exact build', async () => {
+    const credentials = await testCredentials()
+    const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
+    const thisBuild = testConfig(credentials, { expectedVersion: version.version })
+    expect(thisBuild.basePath).toBe('/auth')
+    expect(() => testConfig(credentials, { expectedVersion: '0.0.0-foreign' })).toThrow(/expectedVersion .* does not match this dsh-auth/u)
+    expect(() => testConfig(credentials, { expectedVersion: '' })).toThrow(/expectedVersion must be a non-empty string/u)
+    expect(testConfig(credentials).basePath).toBe('/auth')
   })
 
   it('reads bounded absolute secret files and rejects removed identity fields', () => {

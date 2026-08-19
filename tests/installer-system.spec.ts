@@ -1,10 +1,12 @@
 import { randomBytes } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { runCli } from '../src/cli.js'
 import { verifyPassword } from '../src/password.js'
 import { FakeCliIo, FakeInstallerHost } from './installer-helpers.js'
 
 const PASSWORD = 'sufficient-system-password'
+const PACKAGE_VERSION = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { readonly version: string }).version
 const SYSTEM_ARGS = [
   '--json', '--non-interactive', '--mode', 'http', '--listen-address', '10.0.0.20',
   '--dsh-service', 'dsh-web.service', '--admin-bootstrap', 'password', '--admin-username', 'admin',
@@ -14,6 +16,7 @@ const SYSTEM_ARGS = [
 function readyHost(): FakeInstallerHost {
   const host = new FakeInstallerHost()
   host.withSystemdService()
+  host.installCliPackage()
   host.installBundledCaddy()
   return host
 }
@@ -484,5 +487,169 @@ describe('system installer transactions', () => {
 
     expect(exitCode).toBe(4)
     expect(host.readFile('/etc/important-system-file')).toBe('keep\n')
+  }, 30_000)
+})
+
+describe('trusted adoption of a pre-installed profile bundle', () => {
+  const BUNDLE_ROOT = '/root/.dsh/profiles/web/node_modules/dsh-auth'
+  const STATE_FILE = '/etc/dsh-auth/install-state.json'
+
+  interface RecordedPackageState {
+    readonly profilePackageInstalledByDshAuth: boolean
+    readonly profilePackageOrigin?: string
+    readonly profilePackageSpec?: string
+    readonly profilePackageVersion?: string
+    readonly profilePackageBuildIdentity?: string
+    readonly profilePackagePath?: string
+  }
+
+  interface UninstallPlanDocument {
+    readonly plan: { readonly actions: readonly { readonly id: string }[] }
+  }
+
+  it('adopts a same-build pre-installed bundle without running plugin add', async () => {
+    const host = readyHost()
+    host.preinstallProfileBundle('web', { spec: '^0.2.0' })
+    const io = new FakeCliIo(false, [], [], PASSWORD)
+
+    const exitCode = await runCli(['setup', ...SYSTEM_ARGS, '--password-stdin'], io, host)
+
+    expect(exitCode).toBe(0)
+    expect(host.commands.some(command => command.args[0] === 'plugin')).toBe(false)
+    const state = JSON.parse(host.readFile(STATE_FILE)) as RecordedPackageState
+    expect(state.profilePackageInstalledByDshAuth).toBe(false)
+    expect(state.profilePackageOrigin).toBe('external')
+    expect(state.profilePackageSpec).toBe('^0.2.0')
+    expect(state.profilePackageVersion).toBe('0.2.0')
+    expect(state.profilePackageBuildIdentity).toMatch(/^[0-9a-f]{64}$/u)
+    expect(state.profilePackagePath).toBe(BUNDLE_ROOT)
+    const doctorIo = new FakeCliIo(false)
+    await expect(runCli(['doctor', '--json'], doctorIo, host)).resolves.toBe(0)
+    expect(doctorIo.outputs.join('')).toContain('PROFILE_PACKAGE_EXTERNAL')
+  }, 30_000)
+
+  it('records the self-installed bundle origin and build identity', async () => {
+    const host = readyHost()
+
+    await expect(runCli(['setup', ...SYSTEM_ARGS, '--password-stdin'], new FakeCliIo(false, [], [], PASSWORD), host)).resolves.toBe(0)
+
+    const state = JSON.parse(host.readFile(STATE_FILE)) as RecordedPackageState
+    expect(state.profilePackageInstalledByDshAuth).toBe(true)
+    expect(state.profilePackageOrigin).toBe('dsh-auth')
+    expect(state.profilePackageSpec).toBe(PACKAGE_VERSION)
+    expect(state.profilePackageBuildIdentity).toMatch(/^[0-9a-f]{64}$/u)
+    expect(state.profilePackagePath).toBe(BUNDLE_ROOT)
+  }, 30_000)
+
+  it('rejects a pre-installed bundle with a different version before any host change', async () => {
+    const host = readyHost()
+    host.preinstallProfileBundle('web', {
+      spec: '0.1.9',
+      mutate: root => {
+        const manifest = JSON.parse(host.readFile(`${root}/package.json`)) as { version: string }
+        host.addFile(`${root}/package.json`, `${JSON.stringify({ ...manifest, version: '0.1.9' }, null, 2)}\n`)
+      },
+    })
+
+    const io = new FakeCliIo(false, [], [], PASSWORD)
+    const exitCode = await runCli(['setup', ...SYSTEM_ARGS, '--password-stdin'], io, host)
+
+    expect(exitCode).toBe(4)
+    expect(io.outputs.join('')).toContain('PROFILE_PACKAGE_VERSION_MISMATCH')
+    expect(host.fileExists('/etc/dsh-auth')).toBe(false)
+    expect(host.commands.some(command => command.args[0] === 'plugin' || command.args[0] === 'restart' || command.args[0] === 'enable')).toBe(false)
+  }, 30_000)
+
+  it('rejects the same version from a different build before any host change', async () => {
+    const host = readyHost()
+    host.preinstallProfileBundle('web', {
+      mutate: root => {
+        host.addFile(`${root}/lib/cli.js`, 'export {} // rebuilt elsewhere\n', 0o644)
+      },
+    })
+
+    const io = new FakeCliIo(false, [], [], PASSWORD)
+    const exitCode = await runCli(['setup', ...SYSTEM_ARGS, '--password-stdin'], io, host)
+
+    expect(exitCode).toBe(4)
+    expect(io.outputs.join('')).toContain('PROFILE_PACKAGE_BUILD_MISMATCH')
+    expect(host.fileExists('/etc/dsh-auth')).toBe(false)
+    expect(host.commands.some(command => command.args[0] === 'plugin' || command.args[0] === 'restart' || command.args[0] === 'enable')).toBe(false)
+  }, 30_000)
+
+  it('rejects a declared dependency that is not a bundle or does not resolve', async () => {
+    const unlisted = readyHost()
+    unlisted.preinstallProfileBundle('web')
+    const unlistedManifest = JSON.parse(unlisted.readFile('/root/.dsh/profiles/web/package.json')) as { dsh: { profile: { bundles: string[] } } }
+    unlistedManifest.dsh.profile.bundles = unlistedManifest.dsh.profile.bundles.filter(bundle => bundle !== 'dsh-auth')
+    unlisted.addFile('/root/.dsh/profiles/web/package.json', `${JSON.stringify(unlistedManifest, null, 2)}\n`)
+
+    const unlistedIo = new FakeCliIo(false, [], [], PASSWORD)
+    await expect(runCli(['setup', ...SYSTEM_ARGS, '--password-stdin'], unlistedIo, unlisted)).resolves.toBe(4)
+    expect(unlistedIo.outputs.join('')).toContain('PROFILE_BUNDLE_DECLARATION_INVALID')
+
+    const unresolved = readyHost()
+    unresolved.preinstallProfileBundle('web')
+    unresolved.removeFile(`${BUNDLE_ROOT}/package.json`)
+
+    const unresolvedIo = new FakeCliIo(false, [], [], PASSWORD)
+    await expect(runCli(['setup', ...SYSTEM_ARGS, '--password-stdin'], unresolvedIo, unresolved)).resolves.toBe(4)
+    expect(unresolvedIo.outputs.join('')).toContain('PROFILE_PACKAGE_INVALID')
+    expect(unresolved.fileExists('/etc/dsh-auth')).toBe(false)
+  }, 30_000)
+
+  it('keeps the external bundle through setup rollback', async () => {
+    const host = readyHost()
+    host.preinstallProfileBundle('web')
+    const prior = host.commandHandler
+    host.commandHandler = command => {
+      if (command.executable === '/usr/lib/dsh-auth/caddy' && command.args[0] === 'validate' && host.fileExists('/etc/dsh-auth/Caddyfile')) {
+        return { status: 1, stdout: '', stderr: 'synthetic syntax failure' }
+      }
+      return prior(command)
+    }
+
+    const exitCode = await runCli(['setup', ...SYSTEM_ARGS, '--password-stdin'], new FakeCliIo(false, [], [], PASSWORD), host)
+
+    expect(exitCode).toBe(6)
+    expect(host.commands.some(command => command.args[0] === 'plugin' && command.args.includes('remove'))).toBe(false)
+    expect(host.regularFile(`${BUNDLE_ROOT}/package.json`)).toBe(true)
+    expect(host.readFile('/root/.dsh/profiles/web/package.json')).toContain('"dsh-auth"')
+  }, 30_000)
+
+  it('uninstall preserves an adopted bundle and removes a self-installed one', async () => {
+    const adopted = readyHost()
+    adopted.preinstallProfileBundle('web')
+    await runCli(['setup', ...SYSTEM_ARGS, '--password-stdin'], new FakeCliIo(false, [], [], PASSWORD), adopted)
+
+    const adoptedIo = new FakeCliIo(false)
+    await expect(runCli(['uninstall', '--json', '--authorize-uninstall'], adoptedIo, adopted)).resolves.toBe(0)
+    expect((JSON.parse(adoptedIo.outputs.join('')) as UninstallPlanDocument).plan.actions.some(action => action.id === 'remove-profile-package')).toBe(false)
+    expect(adoptedIo.outputs.join('')).toContain('PROFILE_PACKAGE_EXTERNAL')
+    expect(adopted.regularFile(`${BUNDLE_ROOT}/package.json`)).toBe(true)
+    expect(adopted.readFile('/root/.dsh/profiles/web/package.json')).toContain('"dsh-auth"')
+
+    const selfInstalled = readyHost()
+    await runCli(['setup', ...SYSTEM_ARGS, '--password-stdin'], new FakeCliIo(false, [], [], PASSWORD), selfInstalled)
+
+    const selfIo = new FakeCliIo(false)
+    await expect(runCli(['uninstall', '--json', '--authorize-uninstall'], selfIo, selfInstalled)).resolves.toBe(0)
+    expect((JSON.parse(selfIo.outputs.join('')) as UninstallPlanDocument).plan.actions.some(action => action.id === 'remove-profile-package')).toBe(true)
+    expect(selfInstalled.fileExists(BUNDLE_ROOT)).toBe(false)
+    expect(selfInstalled.readFile('/root/.dsh/profiles/web/package.json')).not.toContain('"dsh-auth"')
+  }, 30_000)
+
+  it('doctor detects a replaced external bundle build', async () => {
+    const host = readyHost()
+    host.preinstallProfileBundle('web')
+    await runCli(['setup', ...SYSTEM_ARGS, '--password-stdin'], new FakeCliIo(false, [], [], PASSWORD), host)
+    host.addFile(`${BUNDLE_ROOT}/lib/cli.js`, 'export {} // replaced build\n', 0o644)
+
+    const io = new FakeCliIo(false)
+    const exitCode = await runCli(['doctor', '--json'], io, host)
+
+    expect(exitCode).toBe(8)
+    expect(io.outputs.join('')).toContain('PROFILE_PACKAGE_BUILD_DRIFT')
+    expect(io.outputs.join('')).toContain('dsh plugin --profile web add')
   }, 30_000)
 })

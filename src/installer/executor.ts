@@ -2,10 +2,12 @@ import { dirname } from 'node:path'
 import { join } from 'node:path'
 import { authStateSecretId, createAuthStateDocument } from '../auth-state.js'
 import { ADMIN_PASSWORD_MAX_BYTES, assertAdministratorPassword, hashPassword } from '../password.js'
+import { computePackageIdentity, type PackageIdentity } from './build-identity.js'
 import { renderCaddyfile, renderCaddyUnit, resolveCaddyPackage } from './caddy.js'
 import { renderEnvironmentFile, renderSystemdDropIn, serializeInstallState } from './config-files.js'
 import { InstallerError } from './errors.js'
 import { bootstrapStatePath, initialInstallState, readInstallState, validateStatePaths } from './plan.js'
+import { profileBundleRoot, profilePackageStateFields } from './profile-package.js'
 import { ExitCode, type CommandSpec, type InstallState, type InstallerHost, type ManagedPaths, type PreparedSetup } from './types.js'
 
 /** Secret reader invoked only after planning and confirmation complete. */
@@ -13,13 +15,22 @@ export interface SetupSecrets {
   readPassword(): Promise<string>
 }
 
-function systemctl(host: InstallerHost): string {
-  const path = ['/usr/bin/systemctl', '/bin/systemctl'].find(candidate => host.regularFile(candidate))
-  if (path === undefined) throw new InstallerError('systemctl is unavailable', ExitCode.prerequisite)
-  return path
+export function profileCommand(host: InstallerHost, state: InstallState, args: readonly string[]): CommandSpec {
+  if (state.request.outputDirectory !== undefined) throw new InstallerError('output mode has no DSH profile command', ExitCode.execution)
+  if (state.dshUser === 'root') return { executable: state.dshExecutable, args }
+  const runuser = ['/usr/sbin/runuser', '/usr/bin/runuser'].find(candidate => host.regularFile(candidate))
+  if (runuser === undefined) throw new InstallerError('runuser is required for a non-root DSH service', ExitCode.prerequisite)
+  return { executable: runuser, args: ['--user', state.dshUser, '--', state.dshExecutable, ...args] }
 }
 
-function runChecked(host: InstallerHost, command: CommandSpec, code: string, env?: NodeJS.ProcessEnv): void {
+export function dshEnvironment(state: InstallState): NodeJS.ProcessEnv {
+  return {
+    DSH_HOME: state.dshHome,
+    PATH: process.env.PATH ?? '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+  }
+}
+
+export function runChecked(host: InstallerHost, command: CommandSpec, code: string, env?: NodeJS.ProcessEnv): void {
   const result = host.run(command, env === undefined ? undefined : { env })
   if (result.error !== undefined || result.status !== 0) {
     throw new InstallerError(`command failed: ${code}`, ExitCode.execution, [{
@@ -28,6 +39,12 @@ function runChecked(host: InstallerHost, command: CommandSpec, code: string, env
       message: `${command.executable} exited unsuccessfully; output was withheld to avoid leaking deployment data.`,
     }])
   }
+}
+
+export function systemctlPath(host: InstallerHost): string {
+  const path = ['/usr/bin/systemctl', '/bin/systemctl'].find(candidate => host.regularFile(candidate))
+  if (path === undefined) throw new InstallerError('systemctl is unavailable', ExitCode.prerequisite)
+  return path
 }
 
 function updateState(host: InstallerHost, state: InstallState, changes: Partial<InstallState>): InstallState {
@@ -71,21 +88,6 @@ function writeOwnedFile(
   return pending
 }
 
-function profileCommand(host: InstallerHost, state: InstallState, args: readonly string[]): CommandSpec {
-  if (state.request.outputDirectory !== undefined) throw new InstallerError('output mode has no DSH profile command', ExitCode.execution)
-  if (state.dshUser === 'root') return { executable: state.dshExecutable, args }
-  const runuser = ['/usr/sbin/runuser', '/usr/bin/runuser'].find(candidate => host.regularFile(candidate))
-  if (runuser === undefined) throw new InstallerError('runuser is required for a non-root DSH service', ExitCode.prerequisite)
-  return { executable: runuser, args: ['--user', state.dshUser, '--', state.dshExecutable, ...args] }
-}
-
-function dshEnvironment(state: InstallState): NodeJS.ProcessEnv {
-  return {
-    DSH_HOME: state.dshHome,
-    PATH: process.env.PATH ?? '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-  }
-}
-
 function assertSafeRootDirectory(host: InstallerHost, path: string): void {
   let current = path
   for (;;) {
@@ -116,12 +118,12 @@ async function prepareSecretMaterial(host: InstallerHost, prepared: PreparedSetu
   return { passwordHash: await hashPassword(password), sessionSecret }
 }
 
-function serviceIsActive(host: InstallerHost, systemctlPath: string, service: string): boolean {
-  return host.run({ executable: systemctlPath, args: ['is-active', '--quiet', service] }).status === 0
+function serviceIsActive(host: InstallerHost, systemctl: string, service: string): boolean {
+  return host.run({ executable: systemctl, args: ['is-active', '--quiet', service] }).status === 0
 }
 
-function serviceIsEnabled(host: InstallerHost, systemctlPath: string, service: string): boolean {
-  return host.run({ executable: systemctlPath, args: ['is-enabled', '--quiet', service] }).status === 0
+function serviceIsEnabled(host: InstallerHost, systemctl: string, service: string): boolean {
+  return host.run({ executable: systemctl, args: ['is-enabled', '--quiet', service] }).status === 0
 }
 
 function caddyValidationConfig(host: InstallerHost, state: InstallState): { readonly path: string; readonly temporary: boolean } {
@@ -138,7 +140,7 @@ function caddyValidationConfig(host: InstallerHost, state: InstallState): { read
 }
 
 function activateSystem(host: InstallerHost, initial: InstallState): InstallState {
-  const systemctlPath = systemctl(host)
+  const systemctl = systemctlPath(host)
   let state = initial
   const activation = state.activation
   if (activation === undefined) throw new InstallerError('service activation journal is missing', ExitCode.execution)
@@ -149,15 +151,15 @@ function activateSystem(host: InstallerHost, initial: InstallState): InstallStat
     if (validation.temporary && host.fileExists(validation.path)) host.removeFile(validation.path)
   }
   state = updateState(host, state, { activation: { ...activation, daemonReloadAttempted: true } })
-  runChecked(host, { executable: systemctlPath, args: ['daemon-reload'] }, 'SYSTEMD_DAEMON_RELOAD_FAILED')
+  runChecked(host, { executable: systemctl, args: ['daemon-reload'] }, 'SYSTEMD_DAEMON_RELOAD_FAILED')
   const afterReload = state.activation
   if (afterReload === undefined) throw new InstallerError('service activation journal is missing', ExitCode.execution)
   state = updateState(host, state, { activation: { ...afterReload, dshRestartAttempted: true } })
-  runChecked(host, { executable: systemctlPath, args: ['restart', state.dshService] }, 'DSH_RESTART_FAILED')
+  runChecked(host, { executable: systemctl, args: ['restart', state.dshService] }, 'DSH_RESTART_FAILED')
   const afterDsh = state.activation
   if (afterDsh === undefined) throw new InstallerError('service activation journal is missing', ExitCode.execution)
   state = updateState(host, state, { activation: { ...afterDsh, caddyActivationAttempted: true } })
-  runChecked(host, { executable: systemctlPath, args: ['enable', '--now', 'dsh-auth-caddy.service'] }, 'CADDY_ENABLE_FAILED')
+  runChecked(host, { executable: systemctl, args: ['enable', '--now', 'dsh-auth-caddy.service'] }, 'CADDY_ENABLE_FAILED')
   return state
 }
 
@@ -188,15 +190,15 @@ function removeCreatedPaths(host: InstallerHost, state: InstallState, preserveSt
 function rollbackServices(host: InstallerHost, state: InstallState): void {
   if (state.request.outputDirectory !== undefined || state.activation === undefined) return
   const activation = state.activation
-  const systemctlPath = systemctl(host)
+  const systemctl = systemctlPath(host)
   if (activation.caddyActivationAttempted) {
-    runChecked(host, { executable: systemctlPath, args: ['disable', '--now', 'dsh-auth-caddy.service'] }, 'ROLLBACK_CADDY_SERVICE_FAILED')
+    runChecked(host, { executable: systemctl, args: ['disable', '--now', 'dsh-auth-caddy.service'] }, 'ROLLBACK_CADDY_SERVICE_FAILED')
   }
   if (activation.daemonReloadAttempted) {
-    runChecked(host, { executable: systemctlPath, args: ['daemon-reload'] }, 'ROLLBACK_SYSTEMD_RELOAD_FAILED')
+    runChecked(host, { executable: systemctl, args: ['daemon-reload'] }, 'ROLLBACK_SYSTEMD_RELOAD_FAILED')
   }
   if (activation.dshRestartAttempted) {
-    runChecked(host, { executable: systemctlPath, args: [activation.dshWasActive ? 'restart' : 'stop', state.dshService] }, 'ROLLBACK_DSH_SERVICE_FAILED')
+    runChecked(host, { executable: systemctl, args: [activation.dshWasActive ? 'restart' : 'stop', state.dshService] }, 'ROLLBACK_DSH_SERVICE_FAILED')
   }
 }
 
@@ -245,15 +247,15 @@ function executionContext(
   const configGid = system ? serviceGid : processGid
   const configMode = system ? 0o750 : 0o700
   const configExisted = host.fileExists(paths.configDirectory)
-  const systemctlPath = system ? systemctl(host) : undefined
+  const systemctl = system ? systemctlPath(host) : undefined
   const state: InstallState = {
     ...initialInstallState(prepared, caddyBinarySha256),
     createdPaths: [...(configExisted ? [] : [paths.configDirectory]), paths.stateFile],
-    ...(systemctlPath === undefined ? {} : {
+    ...(systemctl === undefined ? {} : {
       activation: {
         dshWasActive: prepared.discovery.dshService?.activeState === 'active',
-        caddyWasActive: serviceIsActive(host, systemctlPath, 'dsh-auth-caddy.service'),
-        caddyWasEnabled: serviceIsEnabled(host, systemctlPath, 'dsh-auth-caddy.service'),
+        caddyWasActive: serviceIsActive(host, systemctl, 'dsh-auth-caddy.service'),
+        caddyWasEnabled: serviceIsEnabled(host, systemctl, 'dsh-auth-caddy.service'),
         daemonReloadAttempted: false,
         dshRestartAttempted: false,
         caddyActivationAttempted: false,
@@ -282,11 +284,43 @@ function writeOwnershipJournal(host: InstallerHost, paths: ManagedPaths, context
 }
 
 function installProfilePackage(host: InstallerHost, prepared: PreparedSetup, initial: InstallState): InstallState {
+  if (prepared.profilePackage !== undefined) {
+    // Same-build adoption: the externally pre-installed bundle keeps external
+    // ownership, so rollback and uninstall never delete it.
+    return updateState(host, initial, {
+      profilePackageInstalledByDshAuth: false,
+      ...profilePackageStateFields(prepared.profilePackage),
+    })
+  }
   const packageAction = prepared.plan.actions.find(action => action.id === 'install-profile-package')
   if (packageAction?.command === undefined) return initial
   const state = updateState(host, initial, { profilePackageInstalledByDshAuth: true })
   runChecked(host, profileCommand(host, state, packageAction.command.args), 'PROFILE_PACKAGE_INSTALL_FAILED', dshEnvironment(state))
-  return state
+  const manifestPath = join(state.dshHome, 'profiles', state.request.profile, 'package.json')
+  const bundleRoot = profileBundleRoot(state.dshHome, state.request.profile)
+  let spec: string
+  let identity: PackageIdentity
+  try {
+    const manifest = JSON.parse(host.readFile(manifestPath)) as { readonly dependencies?: Record<string, unknown> }
+    const dependency = manifest.dependencies?.['dsh-auth']
+    if (typeof dependency !== 'string' || dependency.length === 0) throw new Error('dependency is not a string')
+    spec = dependency
+    identity = computePackageIdentity(host, host.realpath(bundleRoot), 'profile bundle')
+  } catch {
+    throw new InstallerError('the installed profile bundle cannot be identified', ExitCode.execution, [{
+      code: 'PROFILE_PACKAGE_INVALID',
+      severity: 'error',
+      message: 'The freshly installed dsh-auth bundle did not resolve to an identifiable package.',
+      remediation: 'Reinstall dsh-auth from a trusted source, then rerun setup.',
+    }])
+  }
+  return updateState(host, state, profilePackageStateFields({
+    origin: 'dsh-auth',
+    spec,
+    version: identity.version,
+    buildIdentity: identity.buildIdentity,
+    resolvedPath: host.realpath(bundleRoot),
+  }))
 }
 
 function createManagedDirectories(host: InstallerHost, prepared: PreparedSetup, paths: ManagedPaths, context: ExecutionContext, initial: InstallState): InstallState {
@@ -328,7 +362,7 @@ function writeManagedConfiguration(
   let state = writeOwnedFile(host, initial, paths.caddyBinary, host.readFileBytes(caddySource), 0o755, context.configUid, system ? 0 : context.configGid)
   state = writeOwnedFile(host, state, paths.sessionSecretFile, `${material.sessionSecret}\n`, secretMode, context.configUid, context.configGid)
   state = writeAuthState(host, prepared, paths, context, material, state)
-  state = writeOwnedFile(host, state, paths.environmentFile, renderEnvironmentFile(prepared.request, paths), secretMode, context.configUid, context.configGid)
+  state = writeOwnedFile(host, state, paths.environmentFile, renderEnvironmentFile(prepared.request, paths, initial.profilePackageVersion), secretMode, context.configUid, context.configGid)
   state = writeOwnedFile(host, state, paths.caddyfile, renderCaddyfile(prepared.request, system, paths.caddyStateDirectory), 0o644, context.configUid, system ? 0 : context.configGid)
   if (!system) {
     return writeOwnedFile(host, state, paths.caddyUnitFile, renderCaddyUnit(prepared.request, paths), 0o644, context.configUid, context.configGid)

@@ -7,9 +7,16 @@ import { inspectTokenDirectory } from './login-token-store.js'
 /** Public authentication prefix is fixed for installer, Caddy, and browser URLs. */
 const AUTH_BASE_PATH = '/auth'
 
+function ownPackageVersion(): string {
+  const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { readonly version?: unknown }
+  if (typeof manifest.version !== 'string') throw new Error('dsh-auth package version is unavailable')
+  return manifest.version
+}
+
 const ALLOWED_KEYS = [
   'authStateFile',
   'sessionSecretFile',
+  'expectedVersion',
   'loginTokenEnabled',
   'loginTokenDirectory',
   'loginTokenFailureMessageZh',
@@ -44,6 +51,7 @@ const REMOVED_KEYS: Readonly<Record<string, string>> = {
 export interface ConfigInput {
   readonly authStateFile?: string
   readonly sessionSecretFile?: string
+  readonly expectedVersion?: string
   readonly loginTokenEnabled?: boolean
   readonly loginTokenDirectory?: string
   readonly loginTokenFailureMessageZh?: string
@@ -231,6 +239,13 @@ export function resolveConfig(value: unknown): ResolvedConfig {
     throw new Error('sessionSecret must contain 32-4096 bytes')
   }
   if (sessionSecret.includes(0)) throw new Error('sessionSecret must not contain NUL bytes')
+
+  const expectedVersion = optionalString(input, 'expectedVersion')
+  if (expectedVersion !== undefined && expectedVersion !== ownPackageVersion()) {
+    // Fail-closed marker from the managed environment file: the bundle that
+    // drifted away from the managed installation must not silently activate.
+    throw new Error(`expectedVersion ${expectedVersion} does not match this dsh-auth ${ownPackageVersion()}; restore the recorded bundle and run dsh-auth upgrade`)
+  }
 
   const loginTokenEnabled = boolean(input, 'loginTokenEnabled', false)
   const loginTokenDirectory = optionalString(input, 'loginTokenDirectory')

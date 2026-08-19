@@ -27,6 +27,12 @@ sudo dsh-auth setup
 sudo npm install -g dsh-auth@0.2.1
 ```
 
+### Plugin pre-install is not enabled authentication
+
+`dsh plugin --profile web add dsh-auth` (or a local tarball) only adds the bundle to the Web profile. With both core environment variables absent the bundle stays dormant: Web keeps booting normally, no authentication routes or settings UI appear, and nothing is exposed. A partially supplied configuration still fails loudly instead of booting. Enabling authentication always requires the globally installed CLI and `sudo dsh-auth setup`; the plugin command never creates secrets, installs Caddy, or protects anything.
+
+When setup finds a pre-installed bundle whose package name, version, and build content exactly match the running CLI, it adopts it: no package is reinstalled, and the bundle keeps external ownership. Any other pre-installed build is refused before the host changes. Rollback and uninstall leave an adopted bundle in place; without managed configuration it simply returns to dormancy.
+
 The interactive installer asks for the exact DSH service, administrator initialization method, HTTPS hostname, and TLS mode; shows a secret-free plan; and changes the system only after you type the exact confirmation. It installs the pinned bundle into the selected DSH profile, copies a checksum-verified Caddy binary bundled in the same package, writes permission-restricted authentication state, and enables an independent `dsh-auth-caddy.service`. It never stores a plaintext password and never downloads Caddy at setup time.
 
 Normal deployment requires Linux x64 or ARM64, systemd, Node.js 24.7 or newer, and DSH Web 0.1.0-rc.7. Automatic TLS is the HTTPS default. Manual TLS requires an existing certificate and key.
@@ -112,6 +118,7 @@ sudo dsh-auth setup \
 | `--non-interactive` | on a TTY | | Disable prompts. |
 | `--json` | no | | Emit one JSON document. Does not disable prompts. |
 | `--mode` | no | `https` | `https` or `http`. |
+| `--behind-tls-proxy` | no | disabled | Keep the managed HTTP edge on loopback, require trusted HTTPS forwarding headers, and issue Secure cookies. |
 | `--admin-bootstrap` | when not prompting | | `password` or `login-token`. |
 | `--admin-username` | password setup | | Initial administrator login name. |
 | `--login-token` | when not prompting | | `enabled` or `disabled`. Token initialization requires `enabled`. |
@@ -142,9 +149,10 @@ Other commands accept a smaller frozen flag set:
 |---|---|---|
 | `plan` | Same setup flags, without a password source | `--json`, `--non-interactive` |
 | `doctor` | | `--json` |
+| `upgrade` | `--authorize-upgrade` | `--package`, `--json`, `--non-interactive`, `--dry-run` |
 | `reset-password` | `--password-file` or `--password-stdin`; `--authorize-password-reset` | `--json`, `--non-interactive` |
 | `uninstall` | `--authorize-uninstall` | `--json`, `--non-interactive`, `--dry-run` |
-| `issue-login-token` | `--authorize-login-token-issue` when not prompting | `--ttl-seconds`, `--auth-state-file` with `--public-origin`, `--json` |
+| `issue-login-token` | `--authorize-login-token-issue` when not prompting | `--ttl-seconds`, `--public-origin`, `--auth-state-file` with `--public-origin`, `--json` |
 | `hash` | | `--password-stdin` |
 | `secret` | | |
 
@@ -169,6 +177,15 @@ dsh-auth issue-login-token \
   --json \
   --auth-state-file /export/dsh-auth/state/auth-state.json \
   --public-origin https://harness.example.com
+```
+
+A system installation created with `--behind-tls-proxy` also takes the current public HTTPS origin at issue time. The value is not stored by setup, so changing an outer proxy address or port does not require reinstalling dsh-auth:
+
+```sh
+sudo dsh-auth issue-login-token \
+  --non-interactive \
+  --authorize-login-token-issue \
+  --public-origin https://203.0.113.10:49152
 ```
 
 Setup can replace the built-in failure page text. Configure Chinese and English independently; an omitted language keeps its built-in copy. Each value is 1–500 Unicode characters of plain text. Control characters are rejected, and HTML is shown as text rather than markup. The installer refuses these flags when `--login-token` is `disabled`.
@@ -222,6 +239,24 @@ sudo dsh-auth setup \
 
 Do not use this mode on an untrusted network. HTTPS is the production default.
 
+## TLS terminated by an outer reverse proxy
+
+Operators may keep certificates and public TLS in a same-host or same-network-namespace ingress, load balancer, or reverse proxy while retaining the managed dsh-auth Caddy as the only authentication edge that can reach DSH:
+
+```sh
+sudo dsh-auth setup \
+  --admin-bootstrap login-token \
+  --login-token enabled \
+  --mode http \
+  --listen-address 127.0.0.1 \
+  --http-port 8080 \
+  --behind-tls-proxy
+```
+
+This mode accepts only a loopback listener. The outer proxy must connect to that listener from loopback and must overwrite `X-Forwarded-Host`, `X-Forwarded-Proto`, and `X-Real-IP`; the forwarded protocol must be `https`. Missing forwarding metadata is rejected. dsh-auth preserves the public authority for exact Origin checks, uses relative login redirects, and emits `Secure`, `__Host-` cookies even though its inner hop is HTTP.
+
+The outer proxy, its certificates, public address, and port remain operator-owned. Setup does not discover, reload, or modify them, and their changing public origin is not part of the setup fingerprint. Do not expose the inner listener, use a path prefix as an authentication secret, or let the outer proxy append client-supplied forwarding headers.
+
 ## Doctor, uninstall, and v1 reinstall
 
 `doctor` checks the ownership record, file permissions, the exact DSH service, root-executable safety, Caddy version and checksum, `caddy validate`, and service state:
@@ -244,7 +279,7 @@ Authentication logs contain fixed event names, outcomes, authentication methods,
 
 Caddy access logs only security-sensitive login, token, logout, administrator, and public-verify paths; routine SPA and API traffic is skipped, and request and response headers are omitted. The active file rolls after 10 MiB; at most three gzip-compressed archives are retained for up to seven days, bounding nominal uncompressed storage near 40 MiB. Operators must still treat these files as sensitive because they contain client addresses and request paths. Keep journald globally bounded as well, and redact private hosts, paths, addresses, and account information before sharing a support bundle.
 
-`uninstall --dry-run` lists only files and profile changes proven by the ownership record. Interactive uninstall requires typing `uninstall`; automation requires the exact `--authorize-uninstall` flag. The independent Caddy unit is removed; a user-installed Caddy or Nginx is never touched.
+`uninstall --dry-run` lists only files and profile changes proven by the ownership record. Interactive uninstall requires typing `uninstall`; automation requires the exact `--authorize-uninstall` flag. The independent Caddy unit is removed; a user-installed Caddy or Nginx is never touched. An adopted, externally pre-installed bundle is preserved and simply becomes dormant again.
 
 ```sh
 sudo dsh-auth uninstall --dry-run
@@ -252,6 +287,27 @@ sudo dsh-auth uninstall
 ```
 
 schema v1 ownership records, old Nginx flags, and old plugin identity fields are refused with a reinstall diagnosis. There is no automatic migration. Old sessions become invalid after uninstall and a new setup.
+
+## Managed upgrades
+
+`upgrade` moves a healthy v2 installation to the build of the currently installed global CLI. Install the newer CLI first, then run:
+
+```sh
+sudo npm install -g dsh-auth@0.2.1
+sudo dsh-auth upgrade
+```
+
+The profile bundle, bundled Caddy binary, environment marker, ownership record, and both services move together; administrator credentials, the session secret, and existing sessions survive. Any failing step rolls everything back to the recorded build. Same-version reinstalls and downgrades are refused, and `--package /path/dsh-auth-VERSION.tgz` pins an offline source. Interactive upgrade requires typing `upgrade`; automation requires `--non-interactive --authorize-upgrade`.
+
+Updating the profile bundle through plain `dsh plugin` (instead of `dsh-auth upgrade`) creates version drift. The Web service then fails closed on restart instead of running an unverified build behind the authentication edge. `doctor` reports the drift with a fixed recovery order:
+
+```sh
+dsh plugin --profile web add <recorded-package-spec>   # restore the recorded build
+sudo dsh-auth doctor                                   # must report healthy again
+sudo dsh-auth upgrade                                  # only then upgrade
+```
+
+If the old artifact is no longer available or restores to a different build, doctor keeps failing: pin the recorded version from your trusted source, or uninstall and set up again.
 
 ## Exit codes
 

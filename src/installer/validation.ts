@@ -63,6 +63,10 @@ function validateListenAddress(value: string, mode: EdgeMode): string {
   return value
 }
 
+function isLoopbackAddress(value: string): boolean {
+  return value === '127.0.0.1' || value === '::1'
+}
+
 function validateCredentialPath(value: string, label: string): string {
   validateAbsolutePath(value, label)
   if (!/^[A-Za-z0-9_./+-]+$/u.test(value)) usage(`${label} contains characters unsafe for Caddy configuration`)
@@ -131,6 +135,9 @@ function validateDeploymentInputs(input: SetupRequest): void {
 }
 
 function validateTransport(input: SetupRequest): void {
+  if (input.behindTlsProxy === true && (input.mode !== 'http' || !isLoopbackAddress(input.listenAddress))) {
+    usage('--behind-tls-proxy requires --mode http and a loopback --listen-address')
+  }
   if (input.mode === 'http') {
     if (input.tls !== undefined || input.certificate !== undefined || input.certificateKey !== undefined || input.serverName !== undefined) {
       usage('plain HTTP mode does not accept TLS server or certificate options')
@@ -160,7 +167,8 @@ export function publicOrigin(request: SetupRequest): string {
     if (host === undefined) usage('HTTPS mode requires a valid --server-name')
     return request.httpsPort === 443 ? `https://${host}` : `https://${host}:${String(request.httpsPort)}`
   }
-  return `http://${request.listenAddress}:${String(request.httpPort)}`
+  const host = request.listenAddress.includes(':') ? `[${request.listenAddress}]` : request.listenAddress
+  return `http://${host}:${String(request.httpPort)}`
 }
 
 /** Accept exactly one http or https origin without userinfo, path, query, or fragment. */

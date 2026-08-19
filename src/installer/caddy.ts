@@ -72,13 +72,24 @@ function templateFile(name: string): string {
 export function renderCaddyfile(request: SetupRequest, system: boolean, caddyStateDirectory = SYSTEM_CADDY_STATE): string {
   const accessLogFile = caddyPath(join(caddyStateDirectory, 'access.log'), 'Caddy access log')
   if (request.mode === 'http') {
-    const authority = `${request.listenAddress}:${String(request.httpPort)}`
+    const siteHost = request.listenAddress.includes(':') ? `[${request.listenAddress}]` : request.listenAddress
+    const authority = `${siteHost}:${String(request.httpPort)}`
+    const behindTlsProxy = request.behindTlsProxy === true
     return fillTemplate(templateFile('dsh-auth.http.Caddyfile.template'), new Map([
-      ['{{PUBLIC_HOST}}', request.listenAddress],
+      ['{{SITE_HOST}}', siteHost],
       ['{{HTTP_PORT}}', String(request.httpPort)],
       ['{{LISTEN_ADDRESS}}', request.listenAddress],
-      ['{{PUBLIC_AUTHORITY}}', authority],
       ['{{UPSTREAM}}', request.upstream],
+      ['{{STRICT_TRANSPORT_SECURITY}}', behindTlsProxy ? 'Strict-Transport-Security "max-age=31536000"' : ''],
+      ['{{FORWARDED_GUARD}}', behindTlsProxy
+        ? `@invalid_forwarded not header X-Forwarded-Proto https\n\t\trespond @invalid_forwarded 421\n\t\t@missing_forwarded_host not header X-Forwarded-Host *\n\t\trespond @missing_forwarded_host 421\n\t\t@missing_real_ip not header X-Real-IP *\n\t\trespond @missing_real_ip 421`
+        : `@invalid_host not host ${request.listenAddress}\n\t\trespond @invalid_host 421`],
+      ['{{FORWARDED_HOST}}', behindTlsProxy ? '{header.X-Forwarded-Host}' : authority],
+      ['{{FORWARDED_PROTO}}', behindTlsProxy ? '{header.X-Forwarded-Proto}' : '{scheme}'],
+      ['{{REAL_IP}}', behindTlsProxy ? '{header.X-Real-IP}' : '{remote_host}'],
+      ['{{CLEAR_FORWARDED_HEADERS}}', behindTlsProxy
+        ? 'request_header -X-Forwarded-For'
+        : 'request_header -X-Forwarded-For\n\t\trequest_header -X-Forwarded-Host\n\t\trequest_header -X-Forwarded-Proto\n\t\trequest_header -X-Real-IP'],
       ['{{ACCESS_LOG_FILE}}', accessLogFile],
     ]))
   }
@@ -157,9 +168,9 @@ function readManifest(host: InstallerHost, directory: string): Record<string, un
   return parsed as Record<string, unknown>
 }
 
-/** Resolve and verify the Caddy binary bundled in this dsh-auth package. Never downloads. */
-export function resolveCaddyPackage(host: InstallerHost): CaddyPackage {
-  const directory = host.resolveBundledCaddyRoot()
+/** Resolve and verify a bundled Caddy tree. Defaults to this CLI's own vendor root. Never downloads. */
+export function resolveCaddyPackage(host: InstallerHost, root: string = host.resolveBundledCaddyRoot()): CaddyPackage {
+  const directory = root
   const selected = caddyPlatform(host.platform, host.arch)
   if (!host.regularFile(join(directory, 'manifest.json'))) {
     prerequisite(

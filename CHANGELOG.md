@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- feat: support a loopback authentication edge behind an operator-managed TLS proxy.
+
 ## v0.2.1
 
 Changes since [v0.2.0](https://github.com/hxy91819/dsh-auth/compare/v0.2.0...v0.2.1).

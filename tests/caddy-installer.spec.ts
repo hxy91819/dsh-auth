@@ -3,9 +3,10 @@ import { CADDY_PACKAGE_VERSION, CADDY_VERSION, renderCaddyfile, renderCaddyUnit,
 import type { ManagedPaths, SetupRequest } from '../src/installer/types.js'
 import { FakeInstallerHost } from './installer-helpers.js'
 
-function request(mode: 'http' | 'https', tls?: 'automatic' | 'manual'): SetupRequest {
+function request(mode: 'http' | 'https', tls?: 'automatic' | 'manual', behindTlsProxy = false): SetupRequest {
   return {
     mode,
+    ...(behindTlsProxy ? { behindTlsProxy: true } : {}),
     profile: 'web',
     packageSource: 'dsh-auth@0.1.15',
     adminBootstrap: 'password',
@@ -69,6 +70,30 @@ describe('Caddy installer contract', () => {
     expect(rendered).toContain('log_skip @skip_access_log')
     expect(rendered).not.toContain('Strict-Transport-Security')
     expect(rendered).not.toContain('tls ')
+    expect(rendered).toContain('header Location {resp.header.X-Dsh-Auth-Login}')
+    expect(rendered).toContain('header_up X-Forwarded-Host 10.0.0.20:8080')
+    expect(rendered).toContain('request_header -X-Forwarded-Host')
+  })
+
+  it('renders loopback HTTP behind TLS with forwarded-origin guards and relative redirects', () => {
+    const proxied = { ...request('http', undefined, true), listenAddress: '127.0.0.1' }
+    const rendered = renderCaddyfile(proxied, true)
+
+    expect(rendered).toContain('bind 127.0.0.1')
+    expect(rendered).toContain('@invalid_forwarded not header X-Forwarded-Proto https')
+    expect(rendered).toContain('@missing_forwarded_host not header X-Forwarded-Host *')
+    expect(rendered).toContain('@missing_real_ip not header X-Real-IP *')
+    expect(rendered.match(/header_up X-Forwarded-Host \{header\.X-Forwarded-Host\}/gu)).toHaveLength(3)
+    expect(rendered.match(/header_up X-Forwarded-Proto \{header\.X-Forwarded-Proto\}/gu)).toHaveLength(3)
+    expect(rendered.match(/header_up X-Real-IP \{header\.X-Real-IP\}/gu)).toHaveLength(3)
+    expect(rendered).toContain('header Location {resp.header.X-Dsh-Auth-Login}')
+    expect(rendered).toContain('Strict-Transport-Security "max-age=31536000"')
+    expect(rendered).not.toContain('request_header -X-Forwarded-Host')
+    expect(rendered).not.toContain('http://127.0.0.1:8080{resp.header.X-Dsh-Auth-Login}')
+
+    const ipv6 = renderCaddyfile({ ...proxied, listenAddress: '::1' }, true)
+    expect(ipv6).toContain('http://[::1]:8080')
+    expect(ipv6).toContain('bind ::1')
   })
 
   it('renders a DynamicUser unit and systemd credentials only for manual TLS', () => {

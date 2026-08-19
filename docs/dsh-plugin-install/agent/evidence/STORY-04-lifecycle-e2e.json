@@ -1,0 +1,18 @@
+== STORY-04 real lifecycle E2E (privileged systemd container, real DSH + Caddy + systemd) ==
+candidates: 0.2.0 base / 0.2.1 upgrade / 0.2.2 recovery (tarballs under /tmp/opencode/s04/artifacts)
+{
+  "candidates": {
+    "base": "33033423b",
+    "upgraded": "33033424b",
+    "recovered": "33033423b"
+  },
+  "unit": "dsh-auth-lifecycle-c3556fc5-web.service",
+  "adoption": "external bundle, no reinstall, doctor healthy",
+  "upgrade": "bundle+Caddy+record+services at 0.2.1, session preserved",
+  "drift": "restart fails closed, doctor exit 8 with recorded-spec recovery, upgrade refused",
+  "recovery": "restore recorded build, doctor healthy, upgrade to 0.2.2",
+  "downgradeRefusal": "exit 4",
+  "uninstall": "external bundle preserved, dormant again",
+  "selfInstall": "setup installs and owns the bundle, uninstall removes it",
+  "harness": "0.1.0-rc.7"
+}

@@ -1,0 +1,9 @@
+== full config: /auth/login is the real login page ==
+login_status=200
+0
+== boot roster has dsh-auth client ==
+1
+== index meta injection ==
+1
+0
+1

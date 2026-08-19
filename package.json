@@ -114,6 +114,7 @@
     "clean": "tsc --build --clean tsconfig.build.json",
     "test": "vitest run",
     "test:e2e": "node scripts/real-integration.mjs",
+    "test:e2e:lifecycle": "node scripts/lifecycle-e2e.mjs",
     "test:e2e:caddy": "node scripts/caddy-e2e.mjs",
     "test:e2e:latest-dsh": "node scripts/latest-harness-e2e.mjs",
     "test:integration:real": "pnpm run test:e2e",

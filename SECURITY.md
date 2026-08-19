@@ -20,9 +20,11 @@ This package provides authentication, not tenant isolation or fine-grained autho
 
 ## Trust boundaries
 
-### Public network to Caddy
+### Public network to the authentication edge
 
-Caddy is the only supported public listener and is the authentication enforcement point. It terminates TLS, validates the public Host, applies request limits and security headers, calls the internal authentication subrequest, and proxies authenticated HTTP, downloads, SSE, and WebSocket handshakes.
+The managed dsh-auth Caddy is the authentication enforcement point and the only edge allowed to reach Harness. By default it is also the public listener: it terminates TLS, validates the public Host, applies request limits and security headers, calls the internal authentication subrequest, and proxies authenticated HTTP, downloads, SSE, and WebSocket handshakes.
+
+An explicit `--behind-tls-proxy` deployment may place an operator-owned TLS proxy in the same host or network namespace. In that topology the managed Caddy accepts HTTP only on loopback, requires the outer proxy to report HTTPS, and preserves its forwarded public authority and client address for Origin checks and rate limiting. The outer proxy must overwrite, not append, `X-Forwarded-Host`, `X-Forwarded-Proto`, and `X-Real-IP`. The outer proxy and other local processes are part of the host trust boundary; do not use this topology with mutually untrusted local workloads.
 
 Every public path other than the intended `/auth/*` interface must pass `forward_auth`. This includes the SPA fallback, `/api`, `/api/*`, `/api/session.export`, `/api/events.mux`, `/api/events.host`, `/plugins/*`, and `/plugins/events`. The upstream `/auth/verify` endpoint must remain reachable only through Caddy's internal `forward_auth` subrequest and must return not found when requested publicly.
 
@@ -46,12 +48,13 @@ All authenticated application content shares one browser origin. An XSS vulnerab
 
 A production deployment is within the supported boundary only while all of these conditions hold:
 
-- Caddy is the sole externally reachable listener and uses the project-owned `v2.11.4` binary bundled in the installed `dsh-auth` package.
+- The managed Caddy is the sole authentication enforcement point and the only listener allowed to reach Harness; it uses the project-owned `v2.11.4` binary bundled in the installed `dsh-auth` package.
+- An outer TLS proxy, when explicitly enabled, reaches the managed Caddy only through its loopback listener, overwrites the required forwarding headers, and exposes no route that bypasses the managed Caddy.
 - Harness listens on the exact configured loopback upstream and is not reachable through any bypass path.
-- HTTPS is used with a valid certificate and key, TLS 1.2 or newer, and the configured public hostname. TLS must not be silently downgraded between the browser and Caddy.
+- HTTPS is used between the browser and the public edge with a valid certificate and key and TLS 1.2 or newer. TLS must not be silently downgraded before the request reaches the managed Caddy.
 - Production cookies remain `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, host-only, and `__Host-` prefixed.
 - `/auth/verify` remains internal, and the catch-all protected location continues to cover current and future Harness routes.
-- Caddy overwrites proxy identity headers as rendered; an outer proxy must not be added without explicitly reviewing Host, scheme, client-address, and Origin handling.
+- Outside explicit `--behind-tls-proxy` deployments, Caddy overwrites proxy identity headers as rendered. Proxy-mode deployments preserve only the required metadata received through the loopback trust boundary.
 - The authentication state, session secret, installer state, environment file, and login-token directory retain their required ownership and modes.
 - System time is trustworthy enough for session expiry, idle expiry, cookie expiry, token expiry, and TLS validation.
 - Operators run `dsh-auth doctor` after changes to Caddy, systemd, the DSH profile, permissions, or managed files.
@@ -99,7 +102,9 @@ System `setup`, `reset-password`, and `uninstall` run with root authority. The i
 
 Review `dsh-auth plan` before authorizing setup. Caddy is installed only from the exact binaries already bundled in the installed `dsh-auth` package. Setup never downloads a binary and never probes, reloads, or reuses a user Caddy or Nginx service.
 
-The installer owns only paths recorded in its validated state. Existing files or packages that it cannot prove ownership of are conflicts. Do not edit managed files in place or fabricate an ownership record. Use `--output-dir` when building images or generating artifacts without granting service-manager or host-filesystem authority.
+The installer owns only paths recorded in its validated state. Existing files or packages that it cannot prove ownership of are conflicts; a pre-installed profile bundle is adopted only when its package name, version, and content build identity equal the running global CLI's, and adopted bundles keep external ownership through rollback and uninstall. Do not edit managed files in place or fabricate an ownership record. Use `--output-dir` when building images or generating artifacts without granting service-manager or host-filesystem authority.
+
+`upgrade` is the only supported way to move a managed installation to a new build. It refuses unhealthy, drifted, same-version, and downgrade targets, journals each transaction phase in the ownership record, and restores the recorded build on failure. The managed environment file pins the installed bundle version: after an unmanaged `dsh plugin` update the Web service fails closed on boot instead of running an unverified build behind the authentication edge. Recover with the `doctor` remediation order: restore the recorded bundle, confirm doctor is healthy, then upgrade.
 
 Installer safety does not protect against a malicious package artifact, compromised package registry, compromised operating-system repository, or already-compromised root environment. Pin and verify the package source appropriate to the deployment's supply-chain policy.
 

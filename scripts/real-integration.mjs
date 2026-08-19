@@ -515,6 +515,57 @@ async function completeTokenOnboarding(httpsPort, chromePort, authStateFile, use
   }
 }
 
+/**
+ * A freshly pre-installed bundle must leave an unconfigured Web usable with
+ * zero authentication surface, and a partially configured one must fail
+ * closed with a diagnostic before any authenticated phase starts.
+ */
+async function verifyDormantPreinstall(authStateFile) {
+  const dormantEnvironment = { ...process.env, DSH_HOME: home }
+  delete dormantEnvironment.DSH_AUTH_STATE_FILE
+  delete dormantEnvironment.DSH_AUTH_SESSION_SECRET_FILE
+  const dormantPort = await availablePort()
+  const dormantProcess = child(dshExecutable, ['web', '--port', String(dormantPort)], {
+    cwd: launchCwd, env: dormantEnvironment,
+  })
+  try {
+    await waitUntil(async () => (await fetch(`http://127.0.0.1:${String(dormantPort)}/`)).status === 200, 'dormant DSH', [
+      { name: 'dormant DSH', process: dormantProcess },
+    ])
+    const dormantIndex = await (await fetch(`http://127.0.0.1:${String(dormantPort)}/`)).text()
+    assert(!dormantIndex.includes('"id":"dsh-auth"'), 'dormant bundle entered the client boot roster')
+    const dormantLogin = await fetch(`http://127.0.0.1:${String(dormantPort)}/auth/login`)
+    const dormantLoginHtml = await dormantLogin.text()
+    assert(
+      dormantLogin.status === 200
+        && dormantLoginHtml.includes('window.__DSH_BOOT__')
+        && !dormantLoginHtml.includes('name="password"'),
+      'dormant bundle exposed an authentication route',
+    )
+  } finally {
+    await terminate(dormantProcess)
+  }
+
+  const partialEnvironment = { ...dormantEnvironment, DSH_AUTH_STATE_FILE: authStateFile }
+  const partialPort = await availablePort()
+  const partialProcess = child(dshExecutable, ['web', '--port', String(partialPort)], {
+    cwd: launchCwd, env: partialEnvironment,
+  })
+  const partialExit = await new Promise(resolve => {
+    const timer = setTimeout(() => {
+      partialProcess.kill('SIGKILL')
+      resolve(null)
+    }, 30_000)
+    partialProcess.once('exit', code => {
+      clearTimeout(timer)
+      resolve(code)
+    })
+  })
+  assert(partialExit !== 0 && partialExit !== null, `partial core configuration booted (exit ${String(partialExit)})`)
+  assert(partialProcess.testOutput().includes('invalid config'), 'partial core configuration failed without a diagnostic')
+  return { dormantBoot: 'web usable without auth surface', partialConfig: `exit ${String(partialExit)}` }
+}
+
 // eslint-disable-next-line max-lines-per-function, max-statements -- 真实 E2E 按部署→令牌或密码登录→受保护资源→重启→浏览器的时间顺序编排；STORY-06 将契约改为 v2 authStateFile 与默认 Caddy。
 async function main() {
   const tarball = packageTarball()
@@ -534,6 +585,8 @@ async function main() {
   ], { cwd: checkout, env: { ...process.env, DSH_HOME: home } })
   const settingsFile = join(home, 'settings.yaml')
   writeFileSync(settingsFile, 'locale:\n  preference: zh\nui-theme:\n  preference: dark\n')
+
+  const preinstall = await verifyDormantPreinstall(layout.authStateFile)
 
   const dshPort = await availablePort()
   const httpPort = await availablePort()
@@ -655,7 +708,7 @@ async function main() {
     pageDenied.status === 303,
     `unauthenticated page did not redirect (status ${String(pageDenied.status)}, location ${String(pageDenied.headers.location)})`,
   )
-  const loginRedirect = new URL(pageDenied.headers.location)
+  const loginRedirect = new URL(pageDenied.headers.location, `https://localhost:${String(httpsPort)}`)
   assert(
     loginRedirect.origin === `https://localhost:${String(httpsPort)}`
       && loginRedirect.pathname === '/auth/login'
@@ -776,8 +829,10 @@ async function main() {
   const afterRestartSpa = await request(httpsPort, '/', { headers: { cookie: session.pair } })
   assert(afterRestartSpa.status === 200, 'persisted session did not reach the protected SPA after a DSH restart')
 
-  const browser = await openBrowser(chromePort, `https://localhost:${String(httpsPort)}/auth/login`)
+  const browser = await openBrowser(chromePort, 'about:blank')
   try {
+    await browser.clearCookies()
+    await browser.navigate(`https://localhost:${String(httpsPort)}/auth/login`)
     await waitForBrowser(browser.evaluate, 'document.readyState === "complete" && document.querySelector("form") !== null', 'browser login page')
     await browser.evaluate(`(() => {
       const username = document.querySelector('input[name="username"]')
@@ -843,6 +898,8 @@ async function main() {
   process.stdout.write(JSON.stringify({
     packageInstall: 'offline tarball',
     harnessVersion,
+    preinstall: preinstall.dormantBoot,
+    partialPreinstall: preinstall.partialConfig,
     edgeRuntime,
     bootstrap,
     http2: 200,
