@@ -4,6 +4,7 @@
 
 ### Changes
 
+- test: prove a failed managed upgrade restores a pnpm `file:` profile spec offline.
 - fix: load authentication state through an O_NOFOLLOW descriptor so a swapped symlink cannot replace the inspected file.
 - ci: stop installing Nginx and maintaining leftover Nginx checks in daily CI and E2E.
 - fix: restore offline tarball installs when rolling back a `file:` profile spec.

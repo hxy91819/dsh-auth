@@ -1,9 +1,10 @@
 /**
  * Drive the complete managed lifecycle of the packed artifact against real
  * DSH, systemd, and the bundled Caddy edge: official plugin pre-install,
- * dormant boot, trusted setup adoption, authentication, managed upgrade,
- * drift fail-closed and recovery, downgrade refusal, uninstall back to
- * dormancy, and a self-installed second lifecycle. The script owns every
+ * dormant boot, trusted setup adoption, authentication, a failed upgrade
+ * that rolls back a pnpm `file:` spec offline, managed upgrade, drift
+ * fail-closed and recovery, downgrade refusal, uninstall back to dormancy,
+ * and a self-installed second lifecycle. The script owns every
  * generated profile, npm prefix, secret, unit, process, and port.
  */
 import { randomBytes } from 'node:crypto'
@@ -86,10 +87,15 @@ const nodeBinary = process.execPath
 const dshBinDirectory = join(checkout, 'node_modules', '@deepseek-ai', 'dsh', 'lib')
 const dshCli = executable(join(checkout, 'node_modules', '.bin', 'dsh'), 'dsh')
 const dshWrapper = join(root, 'bin', 'dsh')
+const dshCommandLog = join(root, 'bin', 'dsh-commands.log')
 mkdirSync(join(root, 'bin'), { mode: 0o755, recursive: true })
 // DSH 0.1.0-rc.7 mounts its HMR service, which requires node internals to be
-// exposed; the disposable unit owns this launch flag.
-writeFileSync(dshWrapper, `#!/bin/sh\nexec ${nodeBinary} --expose-internals ${join(dshBinDirectory, 'bin.js')} "$@"\n`, { mode: 0o755 })
+// exposed; the disposable unit owns this launch flag. The wrapper also records
+// installer-issued plugin commands so rollback flags are observable.
+writeFileSync(dshWrapper, `#!/bin/sh
+printf '%s\\n' "$*" >> ${JSON.stringify(dshCommandLog)}
+exec ${JSON.stringify(nodeBinary)} --expose-internals ${JSON.stringify(join(dshBinDirectory, 'bin.js'))} "$@"
+`, { mode: 0o755 })
 chmodSync(dshWrapper, 0o755)
 const globalPrefix = join(root, 'global')
 const summary = {}
@@ -274,6 +280,37 @@ function cli(command, args) {
   return allowFailure(join(globalPrefix, 'bin', 'dsh-auth'), [command, '--json', ...args], { cwd: root })
 }
 
+/** Prove a failed upgrade restores pnpm's rewritten `file:` spec with --offline. */
+async function proveFileSpecOfflineRollback(tarballB, edgePort, session, baseVersion) {
+  const adopted = readState()
+  assert(
+    typeof adopted.profilePackageSpec === 'string' && adopted.profilePackageSpec.startsWith('file:'),
+    `adopted spec was not a file: rewrite: ${String(adopted.profilePackageSpec)}`,
+  )
+  installGlobalCli(tarballB)
+  const broken = join(root, 'artifacts', 'dsh-auth-broken.tgz')
+  writeFileSync(broken, 'not a package\n', { mode: 0o644 })
+  writeFileSync(dshCommandLog, '')
+  const failed = cli('upgrade', ['--non-interactive', '--authorize-upgrade', '--package', broken])
+  assert(failed.status === 6, `broken-package upgrade did not fail closed\n${failed.stdout}${failed.stderr}`)
+  const logged = readFileSync(dshCommandLog, 'utf8')
+  const restore = logged.split('\n').find(line => (
+    line.includes('plugin') && line.includes('add') && line.includes(adopted.profilePackageSpec)
+  ))
+  assert(restore !== undefined, `rollback did not invoke dsh plugin add for ${adopted.profilePackageSpec}\n${logged}`)
+  assert(
+    restore.includes('--offline') && restore.includes('--config.auto-install-peers=false'),
+    `file: rollback was not offline\n${restore}`,
+  )
+  const restored = readState()
+  assert(restored.status === 'installed' && restored.profilePackageVersion === baseVersion, 'rollback did not restore the recorded version')
+  assert(restored.profilePackageSpec === adopted.profilePackageSpec, 'rollback rewrote the recorded file: spec')
+  assert(cli('doctor', []).status === 0, 'doctor rejected the installation after file: rollback')
+  const sessionView = await fetch(`http://127.0.0.1:${String(edgePort)}/auth/session`, { headers: { cookie: session } })
+  assert(sessionView.status === 200, 'session did not survive the failed upgrade rollback')
+  return `restore ${adopted.profilePackageSpec} offline, version ${baseVersion}, session preserved`
+}
+
 async function verifyProxiedSystemLifecycle(tarball) {
   cleanupUnit()
   const home = join(root, 'dsh-proxied-home')
@@ -326,6 +363,7 @@ async function verifyProxiedSystemLifecycle(tarball) {
   return 'system issue at two dynamic HTTPS origins, both redeemed, setup state unchanged'
 }
 
+// eslint-disable-next-line max-statements -- 真实 systemd 生命周期按预装→接管→失败回滚→升级→漂移恢复的时间顺序编排。
 async function main() {
   mkdirSync(join(root, 'artifacts'), { recursive: true })
   const manifestPath = join(checkout, 'package.json')
@@ -397,6 +435,9 @@ async function main() {
   assert(session !== undefined, 'adoption login produced no session cookie')
   assert(cli('doctor', []).status === 0, 'doctor rejected the adopted installation')
   summary.adoption = 'external bundle, no reinstall, doctor healthy'
+
+  // 2b. A broken --package tarball must roll back the recorded file: spec offline.
+  summary.fileSpecRollback = await proveFileSpecOfflineRollback(tarballB, edgePort, session, baseVersion)
 
   // 3. Managed upgrade to the newer CLI build; sessions survive the restart.
   installGlobalCli(tarballB)
