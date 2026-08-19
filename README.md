@@ -24,7 +24,7 @@ sudo dsh-auth setup
 `npm install -g dsh-auth` installs the current stable CLI, and the installer pins that same version in the selected DSH profile. For controlled production rollout, install the exact version approved by your supply-chain policy:
 
 ```sh
-sudo npm install -g dsh-auth@0.2.2
+sudo npm install -g dsh-auth@0.2.3
 ```
 
 ### Plugin pre-install is not enabled authentication
@@ -293,7 +293,7 @@ schema v1 ownership records, old Nginx flags, and old plugin identity fields are
 `upgrade` moves a healthy v2 installation to the build of the currently installed global CLI. Install the newer CLI first, then run:
 
 ```sh
-sudo npm install -g dsh-auth@0.2.2
+sudo npm install -g dsh-auth@0.2.3
 sudo dsh-auth upgrade
 ```
 
