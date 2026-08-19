@@ -86,7 +86,7 @@ jobs:
           docker build --file .github/systemd-e2e.Dockerfile --tag "$IMAGE" .github
           docker run --detach --init=false --privileged --security-opt label=disable \
             --name "$CONTAINER" --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
-            --volume "$PWD:/checkout" "$IMAGE"
+            --volume "$PWD:/source:ro" "$IMAGE"
           cleanup() { docker rm --force "$CONTAINER" >/dev/null 2>&1 || true; }
           trap cleanup EXIT
           for attempt in {1..30}; do
@@ -95,6 +95,7 @@ jobs:
             sleep 1
           done
           [[ "$STATE" == "running" || "$STATE" == "degraded" ]]
+          docker exec "$CONTAINER" bash -lc 'mkdir /checkout && cp -a /source/. /checkout/'
           docker exec --env "LIFECYCLE_TARBALL_BASE=/checkout/packed/$(basename "$TARBALL")" \
             "$CONTAINER" bash -lc 'cd /checkout && corepack pnpm run test:e2e:lifecycle'
       - run: npm pack --dry-run

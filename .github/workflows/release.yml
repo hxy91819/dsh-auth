@@ -157,7 +157,7 @@ jobs:
           docker build --file .github/systemd-e2e.Dockerfile --tag "$IMAGE" .github
           docker run --detach --init=false --privileged --security-opt label=disable \
             --name "$CONTAINER" --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
-            --volume "$PWD:/checkout" "$IMAGE"
+            --volume "$PWD:/source:ro" "$IMAGE"
           cleanup() { docker rm --force "$CONTAINER" >/dev/null 2>&1 || true; }
           trap cleanup EXIT
           for attempt in {1..30}; do
@@ -166,8 +166,11 @@ jobs:
             sleep 1
           done
           [[ "$STATE" == "running" || "$STATE" == "degraded" ]]
+          docker exec "$CONTAINER" bash -lc 'mkdir /checkout && cp -a /source/. /checkout/'
           docker exec --env "LIFECYCLE_TARBALL_BASE=/checkout/release/dsh-auth-${RELEASE_VERSION}.tgz" \
             "$CONTAINER" bash -lc 'cd /checkout && corepack pnpm run test:e2e:lifecycle'
+          node scripts/release-validation.mjs artifact-verify \
+            --tag "$RELEASE_TAG" --directory release --manifest release/manifest.json
 
       - name: Require and test the current npm latest Harness
         env:
