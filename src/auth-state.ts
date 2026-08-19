@@ -1,6 +1,7 @@
 import {
   closeSync,
   constants,
+  fstatSync,
   fsyncSync,
   linkSync,
   lstatSync,
@@ -120,29 +121,43 @@ function storedSession(value: unknown): StoredSession {
 }
 
 function readDocument(path: string): Record<string, unknown> | undefined {
-  let stat
+  let descriptor: number | undefined
   try {
-    stat = lstatSync(path)
+    if (process.platform === 'win32' && lstatSync(path).isSymbolicLink()) {
+      throw new Error('authStateFile must be a regular file, not a symlink or directory')
+    }
+    const flags = constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW)
+    descriptor = openSync(path, flags)
   } catch (error) {
     if (errorCode(error) === 'ENOENT') return undefined
+    if (errorCode(error) === 'ELOOP') {
+      throw new Error('authStateFile must be a regular file, not a symlink or directory')
+    }
     throw new Error(`authStateFile cannot be inspected: ${error instanceof Error ? error.message : String(error)}`)
   }
-  if (!stat.isFile()) throw new Error('authStateFile must be a regular file, not a symlink or directory')
-  if (process.platform !== 'win32') {
-    if ((stat.mode & 0o777) !== 0o600) throw new Error('authStateFile permissions must be 0600')
-    const effectiveUser = process.geteuid?.()
-    if (effectiveUser !== undefined && stat.uid !== effectiveUser) throw new Error('authStateFile must be owned by the service user')
-  }
-  if (stat.size === 0 || stat.size > MAX_AUTH_STATE_BYTES) {
-    throw new Error(`authStateFile must contain 1-${String(MAX_AUTH_STATE_BYTES)} bytes`)
-  }
-  let decoded: unknown
   try {
-    decoded = JSON.parse(readFileSync(path, 'utf8')) as unknown
-  } catch (error) {
-    throw new Error(`authStateFile is not valid JSON: ${error instanceof Error ? error.message : String(error)}`)
+    const stat = fstatSync(descriptor)
+    if (!stat.isFile()) throw new Error('authStateFile must be a regular file, not a symlink or directory')
+    if (process.platform !== 'win32') {
+      if ((stat.mode & 0o777) !== 0o600) throw new Error('authStateFile permissions must be 0600')
+      const effectiveUser = process.geteuid?.()
+      if (effectiveUser !== undefined && stat.uid !== effectiveUser) {
+        throw new Error('authStateFile must be owned by the service user')
+      }
+    }
+    if (stat.size === 0 || stat.size > MAX_AUTH_STATE_BYTES) {
+      throw new Error(`authStateFile must contain 1-${String(MAX_AUTH_STATE_BYTES)} bytes`)
+    }
+    let decoded: unknown
+    try {
+      decoded = JSON.parse(readFileSync(descriptor, 'utf8')) as unknown
+    } catch (error) {
+      throw new Error(`authStateFile is not valid JSON: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    return object(decoded, 'authStateFile')
+  } finally {
+    closeSync(descriptor)
   }
-  return object(decoded, 'authStateFile')
 }
 
 /** Construct a v2 authentication document for installer-created state. */
