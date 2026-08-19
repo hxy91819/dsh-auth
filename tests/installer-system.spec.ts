@@ -80,6 +80,8 @@ describe('system installer transactions', () => {
     expect(host.readFile('/etc/dsh-auth/dsh-auth.env')).not.toContain(PASSWORD)
     expect(host.readFile('/etc/dsh-auth/dsh-auth.env')).toContain('DSH_AUTH_STATE_FILE=')
     expect(host.readFile('/etc/dsh-auth/Caddyfile')).toContain('admin off')
+    expect(host.readFile('/etc/dsh-auth/Caddyfile')).toContain('output file "/var/lib/dsh-auth-caddy/access.log"')
+    expect(host.readFile('/etc/dsh-auth/Caddyfile')).toContain('log_skip @skip_access_log')
     expect(host.readFile('/etc/systemd/system/dsh-auth-caddy.service')).toContain('DynamicUser=yes')
     const validateIndex = host.commands.findIndex(command => command.executable === '/usr/lib/dsh-auth/caddy' && command.args[0] === 'validate')
     const enableIndex = host.commands.findIndex(command => command.executable === '/usr/bin/systemctl' && command.args[0] === 'enable' && command.args[2] === 'dsh-auth-caddy.service')

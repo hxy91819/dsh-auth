@@ -69,7 +69,8 @@ function templateFile(name: string): string {
 }
 
 /** Render the managed Caddyfile for HTTPS or trusted-network HTTP. */
-export function renderCaddyfile(request: SetupRequest, system: boolean): string {
+export function renderCaddyfile(request: SetupRequest, system: boolean, caddyStateDirectory = SYSTEM_CADDY_STATE): string {
+  const accessLogFile = caddyPath(join(caddyStateDirectory, 'access.log'), 'Caddy access log')
   if (request.mode === 'http') {
     const authority = `${request.listenAddress}:${String(request.httpPort)}`
     return fillTemplate(templateFile('dsh-auth.http.Caddyfile.template'), new Map([
@@ -78,6 +79,7 @@ export function renderCaddyfile(request: SetupRequest, system: boolean): string 
       ['{{LISTEN_ADDRESS}}', request.listenAddress],
       ['{{PUBLIC_AUTHORITY}}', authority],
       ['{{UPSTREAM}}', request.upstream],
+      ['{{ACCESS_LOG_FILE}}', accessLogFile],
     ]))
   }
   const publicHost = hostname(request.serverName ?? '')
@@ -90,6 +92,7 @@ export function renderCaddyfile(request: SetupRequest, system: boolean): string 
     ['{{PUBLIC_AUTHORITY}}', authority],
     ['{{UPSTREAM}}', request.upstream],
     ['{{TLS_DIRECTIVE}}', tlsDirective(request, system)],
+    ['{{ACCESS_LOG_FILE}}', accessLogFile],
   ]))
 }
 

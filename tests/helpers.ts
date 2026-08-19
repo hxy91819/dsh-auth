@@ -12,6 +12,7 @@ import { resolveConfig } from '../src/config.js'
 import type { ConfigInput, ResolvedConfig } from '../src/config.js'
 import { hashPassword } from '../src/password.js'
 import type { HarnessUiSettings } from '../src/preferences.js'
+import type { AuthEventLogger } from '../src/logging.js'
 
 /** Runtime-only credentials used by observable HTTP tests. */
 export interface TestCredentials {
@@ -64,8 +65,9 @@ export async function startTestServer(
   now?: () => number,
   readHarnessUiSettings?: () => HarnessUiSettings,
   inspect?: (req: IncomingMessage) => void,
+  logger?: AuthEventLogger,
 ): Promise<TestServer> {
-  const application = new AuthApplication(config, now, readHarnessUiSettings)
+  const application = new AuthApplication(config, now, readHarnessUiSettings, logger)
   const server = createServer((req, res) => {
     inspect?.(req)
     application.handle(req, res).catch((error: unknown) => {
