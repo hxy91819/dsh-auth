@@ -1,6 +1,6 @@
 # AGENTS.md
 
-`dsh-auth` is an installable Cordis bundle that adds authentication to DeepSeek Harness without modifying Harness. Keep the public README focused on what the package is and how operators install it; keep contributor workflow here.
+`dsh-auth` is an installable Cordis bundle that adds authentication to DeepSeek Harness without modifying Harness. Keep the public README (`README.md` and `README.zh-CN.md`) focused on what the package is and how operators install it; keep contributor workflow here. Update both languages together when operator-facing install behavior changes.
 
 ## Before editing
 

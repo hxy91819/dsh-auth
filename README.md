@@ -1,5 +1,7 @@
 # dsh-auth
 
+English | [简体中文](README.zh-CN.md)
+
 [![npm version](https://img.shields.io/npm/v/dsh-auth.svg)](https://www.npmjs.com/package/dsh-auth)
 [![CI](https://github.com/hxy91819/dsh-auth/actions/workflows/ci.yml/badge.svg)](https://github.com/hxy91819/dsh-auth/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/dsh-auth.svg)](LICENSE)
