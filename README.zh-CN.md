@@ -24,7 +24,7 @@ sudo dsh-auth setup
 `npm install -g dsh-auth` 安装当前稳定版 CLI，安装器会把同一版本钉死到所选 DSH profile。若需按供应链策略做受控生产发布，请安装已批准的精确版本：
 
 ```sh
-sudo npm install -g dsh-auth@0.2.1
+sudo npm install -g dsh-auth@0.2.2
 ```
 
 交互式安装器会询问精确的 DSH 服务、管理员初始化方式、HTTPS 主机名和 TLS 模式；展示一份不含密钥的计划；只有在你输入精确确认词后才会改动系统。它会把钉死的包安装进所选 DSH profile，复制同包内经过校验和验证的 Caddy 二进制，写入权限受限的认证状态，并启用独立的 `dsh-auth-caddy.service`。它从不存储明文密码，安装时也从不下载 Caddy。
