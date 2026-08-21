@@ -130,6 +130,9 @@ CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 StateDirectory=dsh-auth-caddy
 RuntimeDirectory=dsh-auth-caddy
+Environment=HOME=${paths.caddyStateDirectory}
+Environment=XDG_CONFIG_HOME=${paths.caddyStateDirectory}
+Environment=XDG_DATA_HOME=${paths.caddyStateDirectory}
 BindReadOnlyPaths=${paths.caddyfile}:/run/dsh-auth-caddy/Caddyfile
 ${credentials}ExecStartPre=${paths.caddyBinary} validate --config /run/dsh-auth-caddy/Caddyfile
 ExecStart=${paths.caddyBinary} run --config /run/dsh-auth-caddy/Caddyfile --adapter caddyfile

@@ -40,7 +40,7 @@ export interface AdminPasswordContext {
   readonly clientId: (req: IncomingMessage) => string
 }
 
-/** Authenticated password change for the single administrator identity. */
+/** Authenticated password change for the current account identity. */
 export async function handleAdminPasswordChange(
   req: IncomingMessage,
   res: ServerResponse,
@@ -77,7 +77,7 @@ function passwordChangeGet(
     redirect(res, loginRedirect(ctx, returnTo))
     return
   }
-  if (ctx.sessions.passwordCredentials() === undefined) {
+  if (ctx.sessions.accountPasswordCredentials(authenticated.session.accountId) === undefined) {
     const setup = `${ctx.config.basePath}/admin/setup?returnTo=${encodeURIComponent(returnTo)}`
     redirect(res, setup, ctx.renewalHeaders(authenticated))
     return
@@ -100,7 +100,7 @@ async function passwordChangePost(
     redirect(res, loginRedirect(ctx, returnTo))
     return
   }
-  if (ctx.sessions.passwordCredentials() === undefined) {
+  if (ctx.sessions.accountPasswordCredentials(authenticated.session.accountId) === undefined) {
     const setup = `${ctx.config.basePath}/admin/setup?returnTo=${encodeURIComponent(returnTo)}`
     redirect(res, setup, ctx.renewalHeaders(authenticated))
     return
@@ -119,7 +119,7 @@ async function passwordChangePost(
     })
     return
   }
-  const credentials = ctx.sessions.passwordCredentials()
+  const credentials = ctx.sessions.accountPasswordCredentials(authenticated.session.accountId)
   const currentBytes = Buffer.byteLength(submitted.currentPassword, 'utf8')
   const current = currentBytes <= ADMIN_PASSWORD_MAX_BYTES ? submitted.currentPassword : ''
   const currentMatches = credentials === undefined
@@ -132,7 +132,7 @@ async function passwordChangePost(
   }
   ctx.limiter.reset(limiterKey)
   const passwordHash = await hashPassword(submitted.password)
-  const result = ctx.sessions.updateAdministratorPassword(authenticated.session.token, passwordHash, ctx.now())
+  const result = ctx.sessions.updateCurrentAccountPassword(authenticated.session.token, passwordHash, ctx.now())
   if (result === 'not-configured') {
     const setup = `${ctx.config.basePath}/admin/setup?returnTo=${encodeURIComponent(returnTo)}`
     redirect(res, setup, ctx.renewalHeaders(authenticated))

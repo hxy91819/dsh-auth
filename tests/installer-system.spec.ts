@@ -22,8 +22,12 @@ function readyHost(): FakeInstallerHost {
 }
 
 function authPasswordHash(host: FakeInstallerHost): string {
-  const document = JSON.parse(host.readFile('/var/lib/dsh-auth/auth-state.json')) as { readonly administrator: { readonly passwordHash: string } }
-  return document.administrator.passwordHash
+  const document = JSON.parse(host.readFile('/var/lib/dsh-auth/auth-state.json')) as {
+    readonly accounts: { readonly id: string; readonly passwordHash: string | null }[]
+  }
+  const admin = document.accounts.find(account => account.id === 'admin')
+  if (admin?.passwordHash === null || admin?.passwordHash === undefined) throw new Error('missing admin password hash')
+  return admin.passwordHash
 }
 
 // eslint-disable-next-line max-lines-per-function -- 系统 setup/回滚/doctor 事务矩阵按状态机顺序断言，拆分会掩盖故障传播路径；阈值 2026-08 新增，重估于 STORY-06 发布验收。
