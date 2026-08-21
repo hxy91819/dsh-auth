@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { handleAdminAccounts } from './admin-accounts.js'
 import { handleAdminPasswordChange } from './admin-password.js'
 import { BROWSER_BOOTSTRAP_FILE, browserBootstrapSource } from './browser-bootstrap.js'
 import type { ResolvedConfig } from './config.js'
@@ -147,6 +148,21 @@ export class AuthApplication {
         })
         return
       }
+      if (path === `${this.config.basePath}/admin/accounts`) {
+        await handleAdminAccounts(req, res, {
+          config: this.config,
+          sessions: this.sessions,
+          now: this.now,
+          readHarnessUiSettings: this.readHarnessUiSettings,
+          cookieNames: this.cookieNames,
+          issueCsrf: () => this.issueCsrf(),
+          validCsrf: (request, submitted) => this.validCsrf(request, submitted),
+          cookie: (name, value, maxAgeSeconds) => this.cookie(name, value, maxAgeSeconds),
+          renewalCookies: authenticated => this.renewalCookies(authenticated),
+          renewalHeaders: authenticated => this.renewalHeaders(authenticated),
+        })
+        return
+      }
       if (path === `${this.config.basePath}/logout`) {
         await this.logout(req, res)
         return
@@ -220,18 +236,24 @@ export class AuthApplication {
     const submitted = form.get('password') ?? ''
     const passwordBytes = Buffer.byteLength(submitted, 'utf8')
     const password = passwordBytes <= ADMIN_PASSWORD_MAX_BYTES ? submitted : ''
-    const credentials = this.sessions.passwordCredentials()
+    const credentials = this.sessions.passwordLoginCredential(username, this.config.sessionSecret)
     const [passwordMatches, usernameMatches] = await Promise.all([
       credentials === undefined ? Promise.resolve(false) : verifyPassword(password, credentials.passwordHash),
-      Promise.resolve(constantTimeTextEqual(username, credentials?.username ?? 'admin', this.config.sessionSecret)),
+      Promise.resolve(credentials?.accountId !== undefined
+        && constantTimeTextEqual(username, credentials.username, this.config.sessionSecret)),
     ])
-    if (credentials === undefined || !passwordMatches || !usernameMatches || passwordBytes > ADMIN_PASSWORD_MAX_BYTES) {
+    if (
+      credentials?.accountId === undefined
+      || !passwordMatches
+      || !usernameMatches
+      || passwordBytes > ADMIN_PASSWORD_MAX_BYTES
+    ) {
       this.logger.warn({ event: 'auth.login.failed', authMethod: 'password', reason: 'invalid_credentials', clientId: this.clientId(req) })
       this.renderLogin(res, 401, formReturnTo, preferences, 'invalidCredentials')
       return
     }
     this.limiter.reset(limiterKey)
-    const created = this.sessions.create(this.now())
+    const created = this.sessions.create(this.now(), 'password', credentials.accountId)
     this.logger.info({ event: 'auth.login.succeeded', authMethod: 'password', clientId: this.clientId(req) })
     redirect(res, formReturnTo, {
       'set-cookie': [
@@ -274,6 +296,8 @@ export class AuthApplication {
     writeJson(res, 200, {
       authenticated: true,
       user: session.user,
+      accountMode: this.sessions.accountMode(),
+      trustedTeamPreview: this.sessions.accountMode() === 'trusted-team-preview',
       createdAt: new Date(session.createdAt).toISOString(),
       expiresAt: new Date(session.expiresAt).toISOString(),
     }, this.renewalHeaders(authenticated))
@@ -316,7 +340,10 @@ export class AuthApplication {
       authenticated.session,
       csrf.token,
       preferences,
-      this.sessions.passwordCredentials() !== undefined,
+      authenticated.session.accountId === 'admin'
+        ? this.sessions.administratorConfigured()
+        : this.sessions.accountPasswordCredentials(authenticated.session.accountId) !== undefined,
+      this.sessions.accountMode(),
     ), {
       'set-cookie': [
         ...this.renewalCookies(authenticated),
@@ -444,11 +471,11 @@ export class AuthApplication {
       return
     }
     try {
-      const created = this.sessions.create(this.now(), 'login-token')
+      const created = this.sessions.create(this.now(), 'login-token', 'admin')
       this.tokenStore.releaseClaim(claim)
       this.tokenLimiter.reset(limiterKey)
       this.logger.info({ event: 'auth.login.succeeded', authMethod: 'login-token', clientId: this.clientId(req) })
-      const target = this.sessions.passwordCredentials() !== undefined
+      const target = this.sessions.administratorConfigured()
         ? '/'
         : `${this.config.basePath}/admin/setup?returnTo=%2F`
       redirect(res, target, {
@@ -496,7 +523,7 @@ export class AuthApplication {
       redirect(res, `${this.config.basePath}/login?returnTo=${encodeURIComponent(target)}`)
       return
     }
-    if (this.sessions.passwordCredentials() !== undefined) {
+    if (this.sessions.administratorConfigured()) {
       redirect(res, `${this.config.basePath}/account`, this.renewalHeaders(authenticated))
       return
     }
@@ -524,7 +551,7 @@ export class AuthApplication {
       redirect(res, `${this.config.basePath}/login?returnTo=${encodeURIComponent(target)}`)
       return
     }
-    if (this.sessions.passwordCredentials() !== undefined) {
+    if (this.sessions.administratorConfigured()) {
       writeHtml(res, 200, adminSetupCompletePage(preferences, returnTo), this.renewalHeaders(authenticated))
       return
     }
@@ -643,7 +670,7 @@ export class AuthApplication {
       csrf.token,
       preferences,
       message,
-      this.sessions.passwordCredentials() !== undefined,
+      this.sessions.administratorConfigured(),
     ), {
       'set-cookie': this.cookie(this.cookieNames.csrf, csrf.value, 10 * 60),
     })

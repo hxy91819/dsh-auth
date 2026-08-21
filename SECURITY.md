@@ -14,9 +14,11 @@ Include the affected version, impact, minimal reproduction, deployment mode, and
 
 ## Security objective
 
-`dsh-auth` adds a single-account authentication gate in front of the DeepSeek Harness Web application without modifying Harness. Its objective is to prevent unauthenticated remote clients from reaching the Harness browser application, API, downloads, SSE endpoints, or WebSocket handshakes through the public listener.
+`dsh-auth` adds an authentication gate in front of the DeepSeek Harness Web application without modifying Harness. Its objective is to prevent unauthenticated remote clients from reaching the Harness browser application, API, downloads, SSE endpoints, or WebSocket handshakes through the public listener.
 
-This package provides authentication, not tenant isolation or fine-grained authorization. The configured user ID and roles are identity metadata; they do not create an independent Harness RBAC system. A successful login receives the authority already available to the configured Harness deployment, which may include reading workspaces, changing settings and credentials, starting agents, and executing tools.
+This package provides authentication, not tenant isolation or fine-grained authorization. User IDs and roles are identity metadata; they do not create an independent Harness RBAC system. A successful login receives the authority already available to the configured Harness deployment, which may include reading workspaces, changing settings, starting agents, and executing tools.
+
+Trusted team preview accounts are separate login identities that share one Harness instance authority. They are appropriate only for mutually trusted collaborators. They do not provide private conversations, per-workspace access control, prompt/controller attribution inside Harness, per-user tool permissions, or audit-grade attribution for model/tool actions.
 
 ## Trust boundaries
 
@@ -63,7 +65,7 @@ Removing or weakening any invariant requires a new security review. Do not compe
 
 ## Authentication and browser protections
 
-- Passwords are verified against a resource-bounded Argon2id hash. Login failures do not reveal whether the username or password was incorrect. Authenticated password changes require the current password, reuse the login rate limiter, update the Argon2id hash without rotating the session secret, and revoke every other session.
+- Passwords are verified against resource-bounded Argon2id hashes. Login failures do not reveal whether the username or password was incorrect. Authenticated password changes require the current account password, reuse the login rate limiter, update that account's Argon2id hash without rotating the session secret, and revoke that account's other sessions.
 - Login attempts are rate-limited at the application layer. Rate limiting reduces online guessing and resource abuse but is not a denial-of-service guarantee against distributed sources.
 - Login, logout, login-token redemption, and authenticated password changes use signed double-submit CSRF values and exact Origin/Referer validation.
 - Protected unsafe methods and browser WebSocket handshakes are checked at the authentication subrequest before Caddy rewrites the upstream Origin expected by Harness.
@@ -74,13 +76,13 @@ Authentication secrets are not bearer API tokens and the package does not expose
 
 ## Session lifecycle and storage
 
-Keep `DSH_AUTH_SESSION_STORE_FILE` on local storage owned by the DSH service user. The plugin creates it with mode `0600` and refuses group- or world-accessible state on POSIX systems. Do not publish, share, or place the file in a repository.
+Keep `DSH_AUTH_STATE_FILE` on local storage owned by the DSH service user. The plugin creates it with mode `0600` and refuses group- or world-accessible state on POSIX systems. Do not publish, share, or place the file in a repository.
 
 One authentication-state document supports one DSH process. Do not share it between concurrent processes or replicas; multiple replicas require a coordinated session provider with equivalent atomicity, expiry, capacity, and revocation guarantees.
 
 Treat backups and snapshots of the authentication state as sensitive. Restoring an older document while retaining the same session secret can restore a previously valid server-side session record. Rotate the session secret after restoring authentication state, cloning a machine, or recovering from an untrusted snapshot.
 
-Logout revokes the stored session and clears browser cookies. Rotating the session secret invalidates every existing cookie and persisted session. A standard reverse-proxy authentication check cannot terminate a WebSocket that has already upgraded; revocation applies to its next handshake. Deployments requiring immediate stream termination need a connection-aware edge.
+Logout revokes the stored session and clears browser cookies. Password changes and account disablement revoke only the affected account's other sessions; disabling trusted team preview revokes member sessions. Rotating the session secret invalidates every existing cookie and persisted session. A standard reverse-proxy authentication check cannot terminate a WebSocket that has already upgraded; revocation applies to its next handshake. Deployments requiring immediate stream termination need a connection-aware edge.
 
 ## Passwords, secrets, and managed files
 
@@ -114,7 +116,7 @@ Installer safety does not protect against a malicious package artifact, compromi
 - Mutually untrusted local users or workloads that can reach the Harness loopback port.
 - A compromised DSH service account, root account, Caddy process/configuration, Cordis plugin, Harness package, or same-origin browser application.
 - Immediate revocation of already-open WebSockets.
-- Multi-account policy, registration, account recovery, MFA, SSO, per-user authorization, tenant isolation, and audit-grade identity attribution.
+- Registration, account recovery, MFA, SSO, per-user Harness authorization, private workspaces, tenant isolation, and audit-grade prompt/tool attribution.
 - Multiple concurrent DSH processes sharing the JSON authentication-state document.
 - Protection of data after an authenticated user or agent intentionally exports it, writes it to an unsafe location, or sends it through a configured tool or model provider.
 - Availability against host exhaustion, a sufficiently distributed denial-of-service attack, or failure of external TLS, DNS, package-registry, and operating-system infrastructure.

@@ -1,4 +1,4 @@
-import { authStateSecretId, createAuthStateDocument } from '../auth-state.js'
+import { authStateSecretId, parseAuthStateDocument, type AuthStateDocument } from '../auth-state.js'
 import { assertAdministratorPassword, hashPassword, parsePasswordHash } from '../password.js'
 import { discoverDshService } from './discovery.js'
 import { DEFAULT_STATE_FILE } from './doctor.js'
@@ -28,6 +28,7 @@ interface CredentialBackup {
   readonly authGid: number
   readonly secretUid: number
   readonly secretGid: number
+  readonly document: AuthStateDocument
 }
 
 function inspectCredentials(host: InstallerHost, authStateFile: string, sessionSecretFile: string, expectedUid: number, expectedGid: number): CredentialBackup {
@@ -48,17 +49,20 @@ function inspectCredentials(host: InstallerHost, authStateFile: string, sessionS
   const sessionSecret = host.readFile(sessionSecretFile)
   if (!/^[A-Za-z0-9_-]{43}\n?$/u.test(sessionSecret)) throw new InstallerError('managed session secret is invalid', ExitCode.conflict)
   const authState = host.readFile(authStateFile)
-  let parsed: { readonly schemaVersion?: unknown; readonly administrator?: { readonly username?: unknown; readonly passwordHash?: unknown } }
+  let document: AuthStateDocument
   try {
-    parsed = JSON.parse(authState) as typeof parsed
+    document = parseAuthStateDocument(
+      JSON.parse(authState) as unknown,
+      authStateSecretId(Buffer.from(sessionSecret.replace(/\r?\n$/u, ''))),
+    )
   } catch {
     throw new InstallerError('managed authentication state is invalid', ExitCode.conflict)
   }
-  if (parsed.schemaVersion !== 2) throw new InstallerError('managed authentication state is invalid', ExitCode.conflict)
-  if (typeof parsed.administrator?.username !== 'string' || typeof parsed.administrator.passwordHash !== 'string') {
+  const admin = document.accounts.find(account => account.id === 'admin')
+  if (admin?.username === undefined || admin.username === null || admin.passwordHash === null) {
     throw new InstallerError('password reset requires a configured administrator', ExitCode.conflict)
   }
-  parsePasswordHash(parsed.administrator.passwordHash)
+  parsePasswordHash(admin.passwordHash)
   return {
     authState,
     sessionSecret,
@@ -68,6 +72,7 @@ function inspectCredentials(host: InstallerHost, authStateFile: string, sessionS
     authGid: authStat.gid,
     secretUid: secretStat.uid,
     secretGid: secretStat.gid,
+    document,
   }
 }
 
@@ -87,7 +92,6 @@ export async function resetManagedPassword(host: InstallerHost, readPassword: ()
   const service = discoverDshService(host, state.dshService, { dshHome: state.dshHome, dshExecutable: state.dshExecutable })
   if (!['active', 'inactive', 'failed'].includes(service.activeState)) throw new InstallerError('DSH service is changing state; retry password reset after it settles', ExitCode.prerequisite)
   const backup = inspectCredentials(host, state.paths.authStateFile, state.paths.sessionSecretFile, service.uid, service.gid)
-  const parsed = JSON.parse(backup.authState) as { readonly administrator: { readonly username: string } }
   const password = await readPassword()
   try {
     assertAdministratorPassword(password)
@@ -96,11 +100,20 @@ export async function resetManagedPassword(host: InstallerHost, readPassword: ()
   }
   const passwordHash = await hashPassword(password)
   const sessionSecret = host.randomBytes(32).toString('base64url')
-  const document = createAuthStateDocument(authStateSecretId(Buffer.from(sessionSecret)), {
-    username: parsed.administrator.username,
-    passwordHash,
-    configuredAt: Date.now(),
-  })
+  const document: AuthStateDocument = {
+    ...backup.document,
+    secretId: authStateSecretId(Buffer.from(sessionSecret)),
+    accounts: backup.document.accounts.map(account => account.id === 'admin'
+      ? {
+          ...account,
+          passwordHash,
+          status: 'active',
+          authVersion: account.authVersion + 1,
+          configuredAt: Date.now(),
+        }
+      : account),
+    sessions: [],
+  }
   const systemctlPath = systemctl(host)
   const wasActive = service.activeState === 'active'
   let stopped = false

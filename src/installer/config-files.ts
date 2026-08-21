@@ -38,7 +38,11 @@ export function renderEnvironmentFile(request: SetupRequest, paths: ManagedPaths
 
 /** Render the only systemd drop-in owned by setup. */
 export function renderSystemdDropIn(paths: ManagedPaths): string {
-  return `[Service]\nEnvironmentFile=${paths.environmentFile}\n`
+  return `[Service]
+EnvironmentFile=${paths.environmentFile}
+Restart=always
+RestartSec=3
+`
 }
 
 /** Return the persistent, secret-free subset of a request. */

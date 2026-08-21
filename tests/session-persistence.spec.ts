@@ -76,12 +76,12 @@ describe('unified administrator authentication state', () => {
       .toBe('Configured Admin')
     const saved = JSON.parse(readFileSync(authStateFile, 'utf8')) as {
       schemaVersion: number
-      administrator: { id: string; username: string }
+      accounts: { id: string; username: string }[]
       sessions: { authenticationMethod: string }[]
     }
     expect(saved).toMatchObject({
-      schemaVersion: 2,
-      administrator: { id: 'admin', username: 'Configured Admin' },
+      schemaVersion: 3,
+      accounts: [{ id: 'admin', username: 'Configured Admin' }],
       sessions: [{ authenticationMethod: 'login-token' }],
     })
   }, 30_000)
@@ -218,17 +218,27 @@ describe('persistent renewable sessions', () => {
     const duplicateStateFile = join(root, 'duplicate.json')
     const duplicateSession = {
       token: 'a'.repeat(43),
+      accountId: 'admin',
+      accountAuthVersion: 1,
       authenticationMethod: 'password',
       createdAt: 1,
       lastSeenAt: 1,
       expiresAt: 2,
     }
     writeFileSync(duplicateStateFile, `${JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       secretId: 'b'.repeat(43),
-      administrator: {
-        id: 'admin', username: 'test-account', passwordHash: credentials.hash, configuredAt: 1,
-      },
+      accountMode: 'single',
+      accounts: [{
+        id: 'admin',
+        username: 'test-account',
+        passwordHash: credentials.hash,
+        role: 'admin',
+        status: 'active',
+        authVersion: 1,
+        createdAt: 1,
+        configuredAt: 1,
+      }],
       sessions: [duplicateSession, duplicateSession],
     })}\n`, { mode: 0o600 })
     await expect(startTestServer(testConfig(credentials, {

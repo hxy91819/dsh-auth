@@ -1,4 +1,5 @@
 import { dirname, join } from 'node:path'
+import { parseAuthStateDocument } from '../auth-state.js'
 import { DEFAULT_STATE_FILE } from './doctor.js'
 import { InstallerError } from './errors.js'
 import { readInstallState, validateStatePaths } from './plan.js'
@@ -43,6 +44,11 @@ function requireAuthStateShape(host: InstallerHost, path: string, uid: number, g
   const stat = host.stat(path)
   if ((stat.mode & 0o777) !== 0o600 || stat.uid !== uid || stat.gid !== gid) {
     conflict('the managed authentication state has unexpected permissions or ownership', 'AUTH_STATE_INVALID')
+  }
+  try {
+    parseAuthStateDocument(JSON.parse(host.readFile(path)) as unknown)
+  } catch {
+    conflict('the authentication state file is not a valid schema v2/v3 document', 'AUTH_STATE_INVALID')
   }
 }
 
@@ -141,6 +147,11 @@ export function resolveContainerLoginTokenContext(host: InstallerHost, authState
   const stat = host.stat(authStateFile)
   if ((stat.mode & 0o777) !== 0o600) {
     conflict('the authentication state file must have mode 0600', 'AUTH_STATE_INVALID')
+  }
+  try {
+    parseAuthStateDocument(JSON.parse(host.readFile(authStateFile)) as unknown)
+  } catch {
+    conflict('the authentication state file is not a valid schema v2/v3 document', 'AUTH_STATE_INVALID')
   }
   if (caller !== 0 && caller !== stat.uid) {
     throw new InstallerError('login token issue requires root or the authentication state owner', ExitCode.permission, [{

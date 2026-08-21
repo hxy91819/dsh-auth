@@ -113,17 +113,27 @@ const ADMIN_PASSWORD_MAX_POINTS = 128
 export const ADMIN_PASSWORD_MAX_BYTES = 1024
 const ADMIN_USERNAME_MAX_POINTS = 64
 
-/** NFC-normalize a username and reject whitespace, control characters, or length errors. */
-export function parseAdministratorUsername(value: string): string {
+/** NFC-normalize an account username and reject whitespace, control characters, or length errors. */
+export function parseAccountUsername(value: string): string {
   const normalized = value.normalize('NFC')
   if (normalized.trim() !== normalized) {
-    throw new Error('administrator username must not have leading or trailing whitespace')
+    throw new Error('account username must not have leading or trailing whitespace')
   }
   const points = Array.from(normalized).length
   if (points < 1 || points > ADMIN_USERNAME_MAX_POINTS || /\p{C}/u.test(normalized)) {
-    throw new Error(`administrator username must be 1-${String(ADMIN_USERNAME_MAX_POINTS)} Unicode code points without control characters`)
+    throw new Error(`account username must be 1-${String(ADMIN_USERNAME_MAX_POINTS)} Unicode code points without control characters`)
   }
   return normalized
+}
+
+/** Backward-compatible administrator username policy alias. */
+export function parseAdministratorUsername(value: string): string {
+  try {
+    return parseAccountUsername(value)
+  } catch (error) {
+    if (error instanceof Error) throw new Error(error.message.replace('account username', 'administrator username'))
+    throw error
+  }
 }
 
 /** Reject passwords that are too short, too long, or too large in UTF-8. */

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CADDY_PACKAGE_VERSION, CADDY_VERSION, renderCaddyfile, renderCaddyUnit, resolveCaddyPackage } from '../src/installer/caddy.js'
+import { renderSystemdDropIn } from '../src/installer/config-files.js'
 import type { ManagedPaths, SetupRequest } from '../src/installer/types.js'
 import { FakeInstallerHost } from './installer-helpers.js'
 
@@ -104,6 +105,9 @@ describe('Caddy installer contract', () => {
     expect(automatic).toContain('validate --config /run/dsh-auth-caddy/Caddyfile')
     expect(automatic).toContain('BindReadOnlyPaths=/etc/dsh-auth/Caddyfile:/run/dsh-auth-caddy/Caddyfile')
     expect(automatic).toContain('RuntimeDirectory=dsh-auth-caddy')
+    expect(automatic).toContain('Environment=HOME=/var/lib/dsh-auth-caddy')
+    expect(automatic).toContain('Environment=XDG_CONFIG_HOME=/var/lib/dsh-auth-caddy')
+    expect(automatic).toContain('Environment=XDG_DATA_HOME=/var/lib/dsh-auth-caddy')
     expect(automatic).not.toContain('LoadCredential=')
 
     const manual = renderCaddyUnit(request('https', 'manual'), paths())
@@ -112,6 +116,13 @@ describe('Caddy installer contract', () => {
     const rendered = renderCaddyfile(request('https', 'manual'), true)
     expect(rendered).toContain('/run/credentials/dsh-auth-caddy.service/dsh-auth-cert')
     expect(rendered).not.toContain('/etc/ssl/dsh-auth/key.pem')
+  })
+
+  it('renders the DSH service drop-in with auth environment and restart recovery', () => {
+    const rendered = renderSystemdDropIn(paths())
+    expect(rendered).toContain('EnvironmentFile=/etc/dsh-auth/dsh-auth.env')
+    expect(rendered).toContain('Restart=always')
+    expect(rendered).toContain('RestartSec=3')
   })
 
   it('resolves the bundled linux-x64 Caddy binary without downloading', () => {
