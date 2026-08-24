@@ -12,6 +12,7 @@ import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 const NS = 'dsh-auth'
 const STYLE_PLUGIN_ID = 'dsh-auth'
 const AUTH_BASE_PATH_META = 'dsh-auth-base-path'
+const ACCOUNT_REFRESH_MS = 30_000
 
 const zh = {
   'logout.label': '当前会话',
@@ -200,12 +201,15 @@ function parseTeam(value: unknown): CurrentAccountDocument['team'] | undefined {
   const parsed = accounts.flatMap((account): TeamAccountDocument[] => {
     if (typeof account !== 'object' || account === null) return []
     const record = account as Record<string, unknown>
+    const activeSessions = record.activeSessions
     if (
       typeof record.id !== 'string'
       || typeof record.username !== 'string'
       || typeof record.role !== 'string'
       || typeof record.status !== 'string'
-      || typeof record.activeSessions !== 'number'
+      || typeof activeSessions !== 'number'
+      || !Number.isSafeInteger(activeSessions)
+      || activeSessions < 0
       || (record.lastSeenAt !== null && typeof record.lastSeenAt !== 'string')
       || typeof record.current !== 'boolean'
     ) return []
@@ -214,7 +218,7 @@ function parseTeam(value: unknown): CurrentAccountDocument['team'] | undefined {
       username: record.username,
       role: record.role,
       status: record.status,
-      activeSessions: record.activeSessions,
+      activeSessions,
       lastSeenAt: record.lastSeenAt,
       current: record.current,
     }]
@@ -487,18 +491,25 @@ export function CurrentAccountFooter({
   const [loading, setLoading] = useState(true)
   useEffect(() => {
     let cancelled = false
+    const refresh = (): void => {
+      fetchAccount()
+        .then(value => {
+          if (!cancelled) setAccount(value)
+        })
+        .catch(() => {
+          if (!cancelled) setAccount(undefined)
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }
     setLoading(true)
-    fetchAccount()
-      .then(value => {
-        if (!cancelled) setAccount(value)
-      })
-      .catch(() => {
-        if (!cancelled) setAccount(undefined)
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => { cancelled = true }
+    refresh()
+    const timer = window.setInterval(refresh, ACCOUNT_REFRESH_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
   }, [fetchAccount])
   const label = loading ? t('account.loading') : (account?.user.username ?? t('account.unknown'))
   const meta = [

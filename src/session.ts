@@ -189,8 +189,9 @@ export class SessionStore {
   }
 
   listAccountActivity(now: number): readonly PublicAccountActivity[] {
-    const changed = this.prune(now) || this.enforceCapacity()
-    if (changed) this.persist()
+    const pruned = this.prune(now)
+    const capacityEnforced = this.enforceCapacity()
+    if (pruned || capacityEnforced) this.persist()
     const activity = new Map<AccountId, { activeSessions: number; lastSeenAt: number | null }>()
     for (const accountId of this.accounts.keys()) {
       activity.set(accountId, { activeSessions: 0, lastSeenAt: null })

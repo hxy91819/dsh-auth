@@ -197,6 +197,7 @@ describe('browser account identity affordance', () => {
     act(() => { root.unmount() })
     container.remove()
     vi.restoreAllMocks()
+    vi.useRealTimers()
   })
 
   it('fetches the current account session with no-store credentials', async () => {
@@ -277,6 +278,61 @@ describe('browser account identity affordance', () => {
     })
     expect(container.querySelector('.dsh-auth-account-footer-rail')).not.toBeNull()
     expect(container.querySelector('.dsh-auth-account-copy')).toBeNull()
+  })
+
+  it('periodically refreshes the sidebar team activity count', async () => {
+    vi.useFakeTimers()
+    const fetchAccount = vi.fn()
+      .mockResolvedValueOnce({
+        authenticated: true as const,
+        user: { userId: 'acct_test', username: 'teammate', roles: ['member'] },
+        trustedTeamPreview: true,
+        team: { accounts: [{
+          id: 'acct_test',
+          username: 'teammate',
+          role: 'member',
+          status: 'active',
+          activeSessions: 1,
+          lastSeenAt: '2026-08-24T12:00:00.000Z',
+          current: true,
+        }] },
+      })
+      .mockResolvedValueOnce({
+        authenticated: true as const,
+        user: { userId: 'acct_test', username: 'teammate', roles: ['member'] },
+        trustedTeamPreview: true,
+        team: { accounts: [
+          {
+            id: 'acct_test',
+            username: 'teammate',
+            role: 'member',
+            status: 'active',
+            activeSessions: 1,
+            lastSeenAt: '2026-08-24T12:00:00.000Z',
+            current: true,
+          },
+          {
+            id: 'acct_peer',
+            username: 'reviewer',
+            role: 'member',
+            status: 'active',
+            activeSessions: 1,
+            lastSeenAt: '2026-08-24T12:00:30.000Z',
+            current: false,
+          },
+        ] },
+      })
+    await act(async () => {
+      root.render(<CurrentAccountFooter wide fetchAccount={fetchAccount} openAccount={vi.fn()} t={t} />)
+      await Promise.resolve()
+    })
+    expect(container.querySelector('.dsh-auth-account-meta')?.textContent).toContain('1 在线账号')
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000)
+    })
+    expect(fetchAccount).toHaveBeenCalledTimes(2)
+    expect(container.querySelector('.dsh-auth-account-meta')?.textContent).toContain('2 在线账号')
   })
 
   it('opens the authenticated account route on the configured auth prefix', () => {
