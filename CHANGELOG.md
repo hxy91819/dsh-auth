@@ -4,6 +4,7 @@
 
 ### Changes
 
+- feat: add trusted team preview accounts with visible prompt attribution.
 - docs: describe the pull-request release path and stop extra local packed checks.
 - test: reject oversized login bodies at the outer TLS proxy so 413 is deterministic.
 - ci: run packed installer, browser, and lifecycle tests in parallel from one tarball checkpoint.

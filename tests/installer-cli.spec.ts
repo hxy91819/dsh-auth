@@ -1,9 +1,10 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { createAuthStateDocument } from '../src/auth-state.js'
 import { declaredFlagNames } from '../src/installer/cli-parser.js'
 import { runCli } from '../src/cli.js'
 import { NodeInstallerHost } from '../src/installer/host.js'
@@ -336,10 +337,14 @@ function containerHost(callerUid: number): FakeInstallerHost {
   host.uid = callerUid
   host.addDirectory('/srv/app', 0o755)
   host.addDirectory('/srv/app/state', 0o700, 1000, 1000)
-  host.addFile('/srv/app/state/auth-state.json', '{}\n', 0o600, 1000, 1000)
+  host.addFile('/srv/app/state/auth-state.json', authStateText(), 0o600, 1000, 1000)
   host.addDirectory('/srv/app/state/login-tokens', 0o700, 1000, 1000)
   host.addFile('/srv/app/dsh-auth.env', 'DSH_AUTH_STATE_FILE="/srv/app/state/auth-state.json"\nDSH_AUTH_LOGIN_TOKEN_ENABLED=true\n', 0o600, 1000, 1000)
   return host
+}
+
+function authStateText(): string {
+  return `${JSON.stringify(createAuthStateDocument('a'.repeat(43)))}\n`
 }
 
 function containerArgs(): string[] {
@@ -564,7 +569,7 @@ describe('issue-login-token CLI container mode', () => {
 
   it('refuses container callers that are neither root nor the state owner', async () => {
     const host = containerHost(1000)
-    host.addFile('/srv/app/state/auth-state.json', '{}\n', 0o600, 0, 0)
+    host.addFile('/srv/app/state/auth-state.json', authStateText(), 0o600, 0, 0)
     const io = new FakeCliIo(false)
     expect(await runCli(containerArgs(), io, host)).toBe(5)
     expect(io.outputs.join('') + io.errors.join('')).toContain('LOGIN_TOKEN_CALLER_NOT_AUTHORIZED')
@@ -622,7 +627,7 @@ describe('issue-login-token CLI container mode', () => {
       const stateDirectory = join(root, 'state')
       mkdirSync(stateDirectory, { mode: 0o700 })
       writeFileSync(join(root, 'dsh-auth.env'), 'DSH_AUTH_LOGIN_TOKEN_ENABLED=true\n', { mode: 0o600 })
-      writeFileSync(join(root, 'target.json'), '{}\n', { mode: 0o600 })
+      writeFileSync(join(root, 'target.json'), authStateText(), { mode: 0o600 })
       chmodSync(join(root, 'target.json'), 0o600)
       symlinkSync(join(root, 'target.json'), join(stateDirectory, 'auth-state.json'))
       mkdirSync(join(stateDirectory, 'login-tokens'), { mode: 0o700 })
@@ -639,13 +644,13 @@ describe('issue-login-token CLI container mode', () => {
   })
 
   it('refuses a world-writable or symlinked token directory on the real filesystem', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'dsh-auth-issue-token-dir-'))
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-auth-issue-token-dir-')))
     try {
       const stateDirectory = join(root, 'state')
       const tokenDirectory = join(stateDirectory, 'login-tokens')
       mkdirSync(stateDirectory, { mode: 0o700 })
       writeFileSync(join(root, 'dsh-auth.env'), 'DSH_AUTH_LOGIN_TOKEN_ENABLED=true\n', { mode: 0o600 })
-      writeFileSync(join(stateDirectory, 'auth-state.json'), '{}\n', { mode: 0o600 })
+      writeFileSync(join(stateDirectory, 'auth-state.json'), authStateText(), { mode: 0o600 })
       chmodSync(join(stateDirectory, 'auth-state.json'), 0o600)
 
       mkdirSync(tokenDirectory, { mode: 0o777 })

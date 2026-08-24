@@ -1,6 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { handleAdminAccounts } from './admin-accounts.js'
 import { handleAdminPasswordChange } from './admin-password.js'
 import { BROWSER_BOOTSTRAP_FILE, browserBootstrapSource } from './browser-bootstrap.js'
+import {
+  collaborationDocument,
+  handleCollaborationSession,
+  optionalCollaborationSessionId,
+} from './collaboration.js'
 import type { ResolvedConfig } from './config.js'
 import { authCookie, cookieNames, parseCookies } from './cookies.js'
 import { constantTimeTextEqual, CookieSigner } from './crypto.js'
@@ -48,7 +54,7 @@ import {
 import { resolveUiPreferences } from './preferences.js'
 import type { HarnessUiSettings, UiPreferences } from './preferences.js'
 import { SessionStore } from './session.js'
-import type { SessionAuthentication } from './session.js'
+import type { PublicAccountActivity, SessionAuthentication } from './session.js'
 import { TOKEN_BOOTSTRAP_FILE, tokenBootstrapSource } from './token-bootstrap.js'
 
 /** HTTP authentication application mounted into the DSH WebServer. */
@@ -116,7 +122,11 @@ export class AuthApplication {
         return
       }
       if (path === `${this.config.basePath}/session`) {
-        this.session(req, res)
+        this.session(req, res, url)
+        return
+      }
+      if (path === `${this.config.basePath}/collaboration/session`) {
+        await this.handleCollaboration(req, res)
         return
       }
       if (path === `${this.config.basePath}/csrf`) {
@@ -146,6 +156,23 @@ export class AuthApplication {
           renewalHeaders: authenticated => this.renewalHeaders(authenticated),
           logger: this.logger,
           clientId: request => this.clientId(request),
+        })
+        return
+      }
+      if (path === `${this.config.basePath}/admin/accounts`) {
+        await handleAdminAccounts(req, res, {
+          config: this.config,
+          sessions: this.sessions,
+          now: this.now,
+          readHarnessUiSettings: this.readHarnessUiSettings,
+          cookieNames: this.cookieNames,
+          issueCsrf: () => this.issueCsrf(),
+          validCsrf: (request, submitted) => this.validCsrf(request, submitted),
+          cookie: (name, value, maxAgeSeconds) => this.cookie(name, value, maxAgeSeconds),
+          renewalCookies: authenticated => this.renewalCookies(authenticated),
+          renewalHeaders: authenticated => this.renewalHeaders(authenticated),
+          clientId: request => this.clientId(request),
+          logger: this.logger,
         })
         return
       }
@@ -236,18 +263,24 @@ export class AuthApplication {
     const submitted = form.get('password') ?? ''
     const passwordBytes = Buffer.byteLength(submitted, 'utf8')
     const password = passwordBytes <= ADMIN_PASSWORD_MAX_BYTES ? submitted : ''
-    const credentials = this.sessions.passwordCredentials()
+    const credentials = this.sessions.passwordLoginCredential(username, this.config.sessionSecret)
     const [passwordMatches, usernameMatches] = await Promise.all([
       credentials === undefined ? Promise.resolve(false) : verifyPassword(password, credentials.passwordHash),
-      Promise.resolve(constantTimeTextEqual(username, credentials?.username ?? 'admin', this.config.sessionSecret)),
+      Promise.resolve(credentials?.accountId !== undefined
+        && constantTimeTextEqual(username, credentials.username, this.config.sessionSecret)),
     ])
-    if (credentials === undefined || !passwordMatches || !usernameMatches || passwordBytes > ADMIN_PASSWORD_MAX_BYTES) {
+    if (
+      credentials?.accountId === undefined
+      || !passwordMatches
+      || !usernameMatches
+      || passwordBytes > ADMIN_PASSWORD_MAX_BYTES
+    ) {
       this.logger.warn({ event: 'auth.login.failed', authMethod: 'password', reason: 'invalid_credentials', clientId: this.clientId(req) })
       this.renderLogin(req, res, 401, formReturnTo, preferences, 'invalidCredentials')
       return
     }
     this.limiter.reset(limiterKey)
-    const created = this.sessions.create(this.now())
+    const created = this.sessions.create(this.now(), 'password', credentials.accountId)
     this.logger.info({ event: 'auth.login.succeeded', authMethod: 'password', clientId: this.clientId(req) })
     redirect(res, formReturnTo, {
       'set-cookie': [
@@ -276,22 +309,34 @@ export class AuthApplication {
     res.end(req.method === 'HEAD' ? undefined : browserBootstrapSource())
   }
 
-  private session(req: IncomingMessage, res: ServerResponse): void {
+  private session(req: IncomingMessage, res: ServerResponse, url: URL): void {
     if (req.method !== 'GET') {
       write(res, 405, 'method not allowed', { allow: 'GET', 'cache-control': 'no-store' })
       return
     }
-    const authenticated = this.sessions.authenticate(req, this.now())
+    const now = this.now()
+    const authenticated = this.sessions.authenticate(req, now)
     if (authenticated === undefined) {
       writeJson(res, 401, { authenticated: false })
       return
     }
     const { session } = authenticated
+    const accountMode = this.sessions.accountMode()
+    const collaborationSessionId = optionalCollaborationSessionId(url.searchParams.get('sessionId'))
+    const collaboration = accountMode === 'trusted-team-preview' && collaborationSessionId !== undefined
+      ? collaborationDocument(this.sessions.sessionCollaboration(collaborationSessionId, session.accountId))
+      : undefined
     writeJson(res, 200, {
       authenticated: true,
       user: session.user,
+      accountMode,
+      trustedTeamPreview: accountMode === 'trusted-team-preview',
       createdAt: new Date(session.createdAt).toISOString(),
       expiresAt: new Date(session.expiresAt).toISOString(),
+      ...(accountMode === 'trusted-team-preview'
+        ? { team: this.teamActivityDocument(session.accountId, now) }
+        : {}),
+      ...(collaboration === undefined ? {} : { collaboration }),
     }, this.renewalHeaders(authenticated))
   }
 
@@ -320,25 +365,68 @@ export class AuthApplication {
       return
     }
     const preferences = resolveUiPreferences(req, this.readHarnessUiSettings())
-    const authenticated = this.sessions.authenticate(req, this.now())
+    const now = this.now()
+    const authenticated = this.sessions.authenticate(req, now)
     if (authenticated === undefined) {
       const target = encodeURIComponent(`${this.config.basePath}/account`)
       redirect(res, `${this.config.basePath}/login?returnTo=${target}`)
       return
     }
+    const accountMode = this.sessions.accountMode()
     const csrf = this.issueCsrf()
     writeHtml(res, 200, accountPage(
       this.config.basePath,
       authenticated.session,
       csrf.token,
       preferences,
-      this.sessions.passwordCredentials() !== undefined,
+      authenticated.session.accountId === 'admin'
+        ? this.sessions.administratorConfigured()
+        : this.sessions.accountPasswordCredentials(authenticated.session.accountId) !== undefined,
+      accountMode,
+      accountMode === 'trusted-team-preview' ? this.sessions.listAccountActivity(now) : [],
     ), {
       'set-cookie': [
         ...this.renewalCookies(authenticated),
         this.cookie(this.cookieNames.csrf, csrf.value, 10 * 60),
       ],
     })
+  }
+
+  private teamActivityDocument(currentAccountId: string, now: number): {
+    readonly accounts: readonly {
+      readonly id: string
+      readonly username: string
+      readonly role: string
+      readonly status: string
+      readonly activeSessions: number
+      readonly lastSeenAt: string | null
+      readonly current: boolean
+    }[]
+  } {
+    return {
+      accounts: this.sessions.listAccountActivity(now).map(account =>
+        this.teamAccountDocument(account, currentAccountId)),
+    }
+  }
+
+  private teamAccountDocument(account: PublicAccountActivity, currentAccountId: string): {
+    readonly id: string
+    readonly username: string
+    readonly role: string
+    readonly status: string
+    readonly activeSessions: number
+    readonly lastSeenAt: string | null
+    readonly current: boolean
+  } {
+    return {
+      id: account.id,
+      username: account.username ?? 'admin',
+      role: account.role,
+      status: account.status,
+      activeSessions: account.activeSessions,
+      lastSeenAt: account.lastSeenAt === null ? null : new Date(account.lastSeenAt).toISOString(),
+      current: account.id === currentAccountId,
+    }
   }
 
   private async logout(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -460,11 +548,11 @@ export class AuthApplication {
       return
     }
     try {
-      const created = this.sessions.create(this.now(), 'login-token')
+      const created = this.sessions.create(this.now(), 'login-token', 'admin')
       this.tokenStore.releaseClaim(claim)
       this.tokenLimiter.reset(limiterKey)
       this.logger.info({ event: 'auth.login.succeeded', authMethod: 'login-token', clientId: this.clientId(req) })
-      const target = this.sessions.passwordCredentials() !== undefined
+      const target = this.sessions.administratorConfigured()
         ? '/'
         : `${this.config.basePath}/admin/setup?returnTo=%2F`
       redirect(res, target, {
@@ -512,7 +600,7 @@ export class AuthApplication {
       redirect(res, `${this.config.basePath}/login?returnTo=${encodeURIComponent(target)}`)
       return
     }
-    if (this.sessions.passwordCredentials() !== undefined) {
+    if (this.sessions.administratorConfigured()) {
       redirect(res, `${this.config.basePath}/account`, this.renewalHeaders(authenticated))
       return
     }
@@ -540,7 +628,7 @@ export class AuthApplication {
       redirect(res, `${this.config.basePath}/login?returnTo=${encodeURIComponent(target)}`)
       return
     }
-    if (this.sessions.passwordCredentials() !== undefined) {
+    if (this.sessions.administratorConfigured()) {
       writeHtml(res, 200, adminSetupCompletePage(preferences, returnTo), this.renewalHeaders(authenticated))
       return
     }
@@ -624,6 +712,16 @@ export class AuthApplication {
     }))
   }
 
+  private handleCollaboration(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    return handleCollaborationSession(req, res, {
+      config: this.config,
+      sessions: this.sessions,
+      now: this.now,
+      validCsrf: (request, submitted) => this.validCsrf(request, submitted),
+      renewalHeaders: authenticated => this.renewalHeaders(authenticated),
+    })
+  }
+
   private clientId(req: IncomingMessage): string {
     return clientLogId(this.config.sessionSecret, clientAddress(req, this.config))
   }
@@ -632,7 +730,7 @@ export class AuthApplication {
     const suffix = path.startsWith(this.config.basePath) ? path.slice(this.config.basePath.length) : path
     return new Set([
       '', '/login', `/${TOKEN_BOOTSTRAP_FILE}`, '/token', `/${BROWSER_BOOTSTRAP_FILE}`,
-      '/session', '/csrf', '/account', '/admin/setup', '/admin/password', '/logout', '/verify',
+      '/session', '/collaboration/session', '/csrf', '/account', '/admin/setup', '/admin/password', '/logout', '/verify',
     ]).has(suffix) ? suffix || '/' : 'unknown'
   }
 
@@ -661,7 +759,7 @@ export class AuthApplication {
       csrf.token,
       preferences,
       message,
-      this.sessions.passwordCredentials() !== undefined,
+      this.sessions.administratorConfigured(),
     ), {
       'set-cookie': this.cookie(this.cookieNames.csrf, csrf.value, 10 * 60),
     })

@@ -1,5 +1,6 @@
 import type { UiLanguage, UiPreferences } from './preferences.js'
-import type { AuthSession } from './session.js'
+import type { AccountMode } from './auth-state.js'
+import type { AuthSession, PublicAccount, PublicAccountActivity } from './session.js'
 
 function escapeHtml(value: string): string {
   return value
@@ -24,6 +25,11 @@ interface UiCopy {
   readonly accountLede: string
   readonly accountConfigured: string
   readonly accountUnconfigured: string
+  readonly accountMode: string
+  readonly accountSingleMode: string
+  readonly accountTrustedPreview: string
+  readonly accountTrustedPreviewWarning: string
+  readonly manageAccounts: string
   readonly userId: string
   readonly roles: string
   readonly returnToHarness: string
@@ -49,6 +55,31 @@ interface UiCopy {
   readonly setupCompleteTitle: string
   readonly setupCompleteLede: string
   readonly setupForbidden: string
+  readonly teamTitle: string
+  readonly teamLede: string
+  readonly teamEnable: string
+  readonly teamDisable: string
+  readonly teamCreateMember: string
+  readonly teamMembers: string
+  readonly teamActivity: string
+  readonly activeSessions: string
+  readonly lastSeen: string
+  readonly neverSeen: string
+  readonly currentAccount: string
+  readonly teamStatus: string
+  readonly teamCreated: string
+  readonly teamEnabled: string
+  readonly teamDisabled: string
+  readonly teamMemberDisabled: string
+  readonly teamDuplicate: string
+  readonly teamPreviewRequired: string
+  readonly teamAcknowledge: string
+  readonly teamAcknowledgeLabel: string
+  readonly disableMember: string
+  readonly active: string
+  readonly disabled: string
+  readonly pending: string
+  readonly forbidden: string
   readonly usernameWhitespace: string
   readonly usernameInvalid: string
   readonly passwordInvalid: string
@@ -70,6 +101,11 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     accountLede: '当前浏览器已登录 DeepSeek Harness。',
     accountConfigured: '管理员凭据已配置。',
     accountUnconfigured: '管理员凭据尚未配置。本次登录不会再次自动提醒。',
+    accountMode: '账号模式',
+    accountSingleMode: '单管理员模式',
+    accountTrustedPreview: '可信团队预览',
+    accountTrustedPreviewWarning: '可信团队预览已开启：所有账号共享同一个 Harness 实例权限，当前版本不提供私人会话隔离。',
+    manageAccounts: '管理团队账号',
     userId: '用户 ID',
     roles: '角色',
     returnToHarness: '返回 Harness',
@@ -95,6 +131,31 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     setupCompleteTitle: '管理员已设置',
     setupCompleteLede: '管理员凭据已经建立。当前会话可以继续使用。',
     setupForbidden: '此页面仅用于首次令牌登录。',
+    teamTitle: '团队账号预览',
+    teamLede: '为可信团队添加独立登录账号。成员可以使用 Harness 的现有能力，但此版本不隔离个人会话或工具权限。',
+    teamEnable: '开启可信团队预览',
+    teamDisable: '关闭可信团队预览',
+    teamCreateMember: '创建成员账号',
+    teamMembers: '成员',
+    teamActivity: '团队活动',
+    activeSessions: '活跃会话',
+    lastSeen: '最近活动',
+    neverSeen: '暂无活动',
+    currentAccount: '当前账号',
+    teamStatus: '状态',
+    teamCreated: '成员账号已创建。',
+    teamEnabled: '可信团队预览已开启。',
+    teamDisabled: '可信团队预览已关闭，成员会话已退出。',
+    teamMemberDisabled: '成员账号已禁用。',
+    teamDuplicate: '用户名已存在。',
+    teamPreviewRequired: '请先开启可信团队预览。',
+    teamAcknowledge: '输入 trusted-team-preview 以确认这些账号共享整个 Harness 实例权限。',
+    teamAcknowledgeLabel: '确认文本',
+    disableMember: '禁用成员',
+    active: '启用',
+    disabled: '禁用',
+    pending: '待设置',
+    forbidden: '需要管理员账号。',
     usernameWhitespace: '用户名不能包含首尾空白。',
     usernameInvalid: '用户名须为 1–64 个字符，且不能包含控制字符。',
     passwordInvalid: '密码须为 15–128 个字符，且不超过 1024 字节。',
@@ -114,6 +175,11 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     accountLede: 'This browser is signed in to DeepSeek Harness.',
     accountConfigured: 'Administrator credentials are configured.',
     accountUnconfigured: 'Administrator credentials are not configured. This session will not remind you again.',
+    accountMode: 'Account mode',
+    accountSingleMode: 'Single administrator',
+    accountTrustedPreview: 'Trusted team preview',
+    accountTrustedPreviewWarning: 'Trusted team preview is enabled: all accounts share this Harness instance authority. This version does not provide private session isolation.',
+    manageAccounts: 'Manage team accounts',
     userId: 'User ID',
     roles: 'Roles',
     returnToHarness: 'Return to Harness',
@@ -139,6 +205,31 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     setupCompleteTitle: 'Administrator already set up',
     setupCompleteLede: 'Administrator credentials are already configured. This session can continue.',
     setupForbidden: 'This page is only available during first-time token sign-in.',
+    teamTitle: 'Team accounts preview',
+    teamLede: 'Add separate sign-ins for a trusted team. Members can use Harness as it exists today, but this version does not isolate personal conversations or tool authority.',
+    teamEnable: 'Enable trusted team preview',
+    teamDisable: 'Disable trusted team preview',
+    teamCreateMember: 'Create member account',
+    teamMembers: 'Members',
+    teamActivity: 'Team activity',
+    activeSessions: 'Active sessions',
+    lastSeen: 'Last seen',
+    neverSeen: 'No activity yet',
+    currentAccount: 'Current account',
+    teamStatus: 'Status',
+    teamCreated: 'Member account created.',
+    teamEnabled: 'Trusted team preview is enabled.',
+    teamDisabled: 'Trusted team preview is disabled and member sessions were signed out.',
+    teamMemberDisabled: 'Member account disabled.',
+    teamDuplicate: 'That username already exists.',
+    teamPreviewRequired: 'Enable trusted team preview first.',
+    teamAcknowledge: 'Type trusted-team-preview to confirm these accounts share the whole Harness instance authority.',
+    teamAcknowledgeLabel: 'Confirmation text',
+    disableMember: 'Disable member',
+    active: 'Active',
+    disabled: 'Disabled',
+    pending: 'Pending setup',
+    forbidden: 'Administrator account required.',
     usernameWhitespace: 'Username must not have leading or trailing whitespace.',
     usernameInvalid: 'Username must be 1-64 characters without control characters.',
     passwordInvalid: 'Password must be 15-128 characters and at most 1024 bytes.',
@@ -149,6 +240,18 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
 export type AuthMessage = 'invalidCredentials' | 'csrfInvalid' | 'rateLimited'
 export type SetupMessage = 'usernameWhitespace' | 'usernameInvalid' | 'passwordInvalid' | 'passwordMismatch'
 export type PasswordChangeMessage = 'currentPasswordInvalid' | 'passwordInvalid' | 'passwordMismatch' | 'rateLimited'
+export type AccountManagementMessage =
+  | 'teamCreated'
+  | 'teamEnabled'
+  | 'teamDisabled'
+  | 'teamMemberDisabled'
+  | 'teamDuplicate'
+  | 'teamPreviewRequired'
+  | 'usernameWhitespace'
+  | 'usernameInvalid'
+  | 'passwordInvalid'
+  | 'passwordMismatch'
+  | 'forbidden'
 
 const STYLE = `
 :root {
@@ -302,17 +405,34 @@ button:focus-visible, .button:focus-visible { outline: none; box-shadow: 0 0 0 3
 .secondary { margin-top: 20px; border-color: var(--border-l2); background: transparent; color: var(--label-primary); }
 .secondary:hover { background: var(--bg-control-hover); }
 .notice { margin: 20px 0 0; padding: 11px 12px; border: 1px solid color-mix(in srgb, var(--error-label) 18%, transparent); border-radius: 12px; background: var(--error-bg); color: var(--error-label); font-size: 13px; line-height: 20px; }
+.notice.info { border-color: var(--border-l2); background: var(--bg-control); color: var(--label-secondary); }
 .details { margin-top: 28px; padding: 4px 16px; border: 1px solid var(--border-l2); border-radius: 16px; background: var(--bg-control); }
 dl { margin: 0; }
 .detail { display: grid; grid-template-columns: minmax(80px, auto) 1fr; gap: 16px; padding: 13px 0; border-bottom: 1px solid var(--border-l2); font-size: 14px; line-height: 22px; }
 .detail:last-child { border-bottom: 0; }
 dt { color: var(--label-secondary); }
 dd { margin: 0; overflow-wrap: anywhere; text-align: right; }
+.section-title { margin: 28px 0 8px; color: var(--label-primary); font-size: 16px; line-height: 24px; font-weight: 500; }
+.account-list { margin-top: 16px; border: 1px solid var(--border-l2); border-radius: 16px; overflow: hidden; }
+.account-row { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--border-l2); }
+.account-row:last-child { border-bottom: 0; }
+.account-row-current { background: color-mix(in srgb, var(--dsw-static-deepseek-500) 8%, transparent); }
+.account-main { display: flex; gap: 12px; align-items: center; min-width: 0; }
+.account-avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--bg-control-active); color: var(--label-primary); display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; font-size: 13px; font-weight: 600; line-height: 1; }
+.account-copy { min-width: 0; }
+.account-name { font-size: 14px; line-height: 22px; overflow-wrap: anywhere; }
+.account-meta { color: var(--label-tertiary); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
+.account-badge { display: inline-flex; align-items: center; margin-left: 8px; padding: 2px 7px; border: 1px solid var(--border-l2); border-radius: 999px; color: var(--label-secondary); background: var(--bg-control); font-size: 11px; line-height: 16px; vertical-align: 1px; }
+.compact-form { display: inline; }
+.compact-button { width: auto; min-height: 34px; margin-top: 0; padding: 6px 12px; border-radius: 10px; }
+.danger { color: var(--error-label); border-color: color-mix(in srgb, var(--error-label) 28%, transparent); background: transparent; }
+.danger:hover { background: var(--error-bg); }
 @media (max-width: 620px) {
   body { place-items: start center; padding: 20px 12px; }
   .panel { border-radius: 20px; }
   .panel-header { padding: 18px 22px; }
   .content { padding: 28px 24px 32px; }
+  .account-row { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { input, button, .button { transition: none; } }
 `
@@ -382,25 +502,166 @@ export function accountPage(
   csrfToken: string,
   preferences: UiPreferences,
   configured = true,
+  accountMode: AccountMode = 'single',
+  accounts: readonly PublicAccountActivity[] = [],
 ): string {
   const copy = COPY[preferences.language]
   const roles = session.user.roles.join(', ')
   const status = configured ? copy.accountConfigured : copy.accountUnconfigured
+  const modeLabel = accountMode === 'trusted-team-preview' ? copy.accountTrustedPreview : copy.accountSingleMode
+  const warning = accountMode === 'trusted-team-preview'
+    ? `<p class="notice info">${escapeHtml(copy.accountTrustedPreviewWarning)}</p>`
+    : ''
+  const manage = session.user.roles.includes('admin')
+    ? `<a class="button secondary" href="${escapeHtml(basePath)}/admin/accounts">${escapeHtml(copy.manageAccounts)}</a>`
+    : ''
+  const teamActivity = accountMode === 'trusted-team-preview'
+    ? `<h2 class="section-title">${escapeHtml(copy.teamActivity)}</h2>
+      <div class="account-list">${accountRows(basePath, csrfToken, accounts, copy, session.accountId, false)}</div>`
+    : ''
   return document(copy.accountTitle, `<section class="content">
     <h1>${escapeHtml(copy.accountTitle)}</h1>
     <p class="lede">${escapeHtml(copy.accountLede)}</p>
     <p class="lede">${escapeHtml(status)}</p>
+    ${warning}
     <div class="details"><dl>
       <div class="detail"><dt>${escapeHtml(copy.username)}</dt><dd>${escapeHtml(session.user.username)}</dd></div>
       <div class="detail"><dt>${escapeHtml(copy.userId)}</dt><dd>${escapeHtml(session.user.userId)}</dd></div>
       <div class="detail"><dt>${escapeHtml(copy.roles)}</dt><dd>${escapeHtml(roles)}</dd></div>
+      <div class="detail"><dt>${escapeHtml(copy.accountMode)}</dt><dd>${escapeHtml(modeLabel)}</dd></div>
     </dl></div>
+    ${teamActivity}
     ${configured ? `<a class="button secondary" href="${escapeHtml(basePath)}/admin/password">${escapeHtml(copy.resetPassword)}</a>` : ''}
+    ${manage}
     <a class="button secondary" href="/">${escapeHtml(copy.returnToHarness)}</a>
     <form method="post" action="${escapeHtml(basePath)}/logout">
       <input type="hidden" name="csrf" value="${escapeHtml(csrfToken)}">
       <button type="submit">${escapeHtml(copy.signOut)}</button>
     </form>
+  </section>`, preferences)
+}
+
+function accountStatusLabel(copy: UiCopy, status: PublicAccount['status']): string {
+  if (status === 'active') return copy.active
+  if (status === 'disabled') return copy.disabled
+  return copy.pending
+}
+
+function accountInitial(username: string): string {
+  return Array.from(username.trim() || '?')[0]?.toLocaleUpperCase() ?? '?'
+}
+
+function formatInstant(value: number | null, copy: UiCopy): string {
+  return value === null ? copy.neverSeen : new Date(value).toISOString()
+}
+
+function accountMeta(account: PublicAccountActivity, copy: UiCopy): string {
+  const status = accountStatusLabel(copy, account.status)
+  return [
+    account.id,
+    account.role,
+    status,
+    `${copy.activeSessions}: ${String(account.activeSessions)}`,
+    `${copy.lastSeen}: ${formatInstant(account.lastSeenAt, copy)}`,
+  ].join(' · ')
+}
+
+function accountRows(
+  basePath: string,
+  csrfToken: string,
+  accounts: readonly PublicAccountActivity[],
+  copy: UiCopy,
+  currentAccountId?: string,
+  includeActions = true,
+): string {
+  const rows = accounts.map((account) => {
+    const username = account.username ?? 'admin'
+    const current = account.id === currentAccountId
+    const currentBadge = current ? `<span class="account-badge">${escapeHtml(copy.currentAccount)}</span>` : ''
+    const action = includeActions && account.role === 'member' && account.status === 'active'
+      ? `<form class="compact-form" method="post" action="${escapeHtml(basePath)}/admin/accounts">
+          <input type="hidden" name="csrf" value="${escapeHtml(csrfToken)}">
+          <input type="hidden" name="action" value="disable-member">
+          <input type="hidden" name="accountId" value="${escapeHtml(account.id)}">
+          <button class="button secondary danger compact-button" type="submit">${escapeHtml(copy.disableMember)}</button>
+        </form>`
+      : ''
+    return `<div class="account-row${current ? ' account-row-current' : ''}">
+      <div class="account-main">
+        <div class="account-avatar" aria-hidden="true">${escapeHtml(accountInitial(username))}</div>
+        <div class="account-copy">
+          <div class="account-name">${escapeHtml(username)}${currentBadge}</div>
+          <div class="account-meta">${escapeHtml(accountMeta(account, copy))}</div>
+        </div>
+      </div>
+      <div>${action}</div>
+    </div>`
+  })
+  return rows.join('')
+}
+
+/** Render the administrator-only trusted-team account management preview. */
+export function accountManagementPage(
+  basePath: string,
+  csrfToken: string,
+  preferences: UiPreferences,
+  accountMode: AccountMode,
+  accounts: readonly PublicAccountActivity[],
+  currentAccountId: string,
+  message?: AccountManagementMessage,
+): string {
+  const copy = COPY[preferences.language]
+  const notice = message === undefined
+    ? ''
+    : `<p class="notice" role="alert">${escapeHtml(copy[message])}</p>`
+  const enabled = accountMode === 'trusted-team-preview'
+  const modeAction = enabled
+    ? `<form method="post" action="${escapeHtml(basePath)}/admin/accounts">
+        <input type="hidden" name="csrf" value="${escapeHtml(csrfToken)}">
+        <input type="hidden" name="action" value="disable-preview">
+        <button class="secondary danger" type="submit">${escapeHtml(copy.teamDisable)}</button>
+      </form>`
+    : `<form method="post" action="${escapeHtml(basePath)}/admin/accounts">
+        <input type="hidden" name="csrf" value="${escapeHtml(csrfToken)}">
+        <input type="hidden" name="action" value="enable-preview">
+        <p class="lede">${escapeHtml(copy.teamAcknowledge)}</p>
+        <div class="field">
+          <label for="ack">${escapeHtml(copy.teamAcknowledgeLabel)}</label>
+          <input id="ack" name="ack" type="text" autocomplete="off" required>
+        </div>
+        <button type="submit">${escapeHtml(copy.teamEnable)}</button>
+      </form>`
+  const createMember = enabled
+    ? `<h2 class="section-title">${escapeHtml(copy.teamCreateMember)}</h2>
+      <form method="post" action="${escapeHtml(basePath)}/admin/accounts">
+        <input type="hidden" name="csrf" value="${escapeHtml(csrfToken)}">
+        <input type="hidden" name="action" value="create-member">
+        <div class="field">
+          <label for="username">${escapeHtml(copy.username)}</label>
+          <input id="username" name="username" type="text" autocomplete="username" maxlength="128" required>
+        </div>
+        <div class="field">
+          <label for="password">${escapeHtml(copy.password)}</label>
+          <input id="password" name="password" type="password" autocomplete="new-password" required>
+        </div>
+        <div class="field">
+          <label for="confirmPassword">${escapeHtml(copy.confirmPassword)}</label>
+          <input id="confirmPassword" name="confirmPassword" type="password" autocomplete="new-password" required>
+        </div>
+        <button type="submit">${escapeHtml(copy.teamCreateMember)}</button>
+      </form>`
+    : ''
+  return document(copy.teamTitle, `<section class="content">
+    <h1>${escapeHtml(copy.teamTitle)}</h1>
+    <p class="lede">${escapeHtml(copy.teamLede)}</p>
+    <p class="notice info">${escapeHtml(copy.accountTrustedPreviewWarning)}</p>
+    ${notice}
+    ${modeAction}
+    ${createMember}
+    <h2 class="section-title">${escapeHtml(copy.teamMembers)}</h2>
+    <div class="account-list">${accountRows(basePath, csrfToken, accounts, copy, currentAccountId)}</div>
+    <a class="button secondary" href="${escapeHtml(basePath)}/account">${escapeHtml(copy.accountTitle)}</a>
+    <a class="button secondary" href="/">${escapeHtml(copy.returnToHarness)}</a>
   </section>`, preferences)
 }
 

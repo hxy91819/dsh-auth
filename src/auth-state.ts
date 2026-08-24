@@ -20,20 +20,69 @@ export function authStateSecretId(sessionSecret: Buffer): string {
   return createHmac('sha256', sessionSecret).update('dsh-auth-auth-state-v2').digest('base64url')
 }
 
-const AUTH_STATE_VERSION = 2
+const AUTH_STATE_VERSION = 3
 const MAX_AUTH_STATE_BYTES = 1024 * 1024
 const SESSION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u
+const ACCOUNT_ID_PATTERN = /^acct_[A-Za-z0-9_-]{22,}$/u
+const MAX_COLLABORATION_SESSION_ID_LENGTH = 256
+export const MAX_AUTH_ACCOUNTS = 256
+export const MAX_STORED_SESSIONS = 4096
+export const MAX_COLLABORATION_SESSIONS = 512
+const MAX_COLLABORATION_PARTICIPANTS = MAX_AUTH_ACCOUNTS
 
 export type AuthenticationMethod = 'password' | 'login-token'
+export type AccountMode = 'single' | 'trusted-team-preview'
+export type AccountRole = 'admin' | 'member'
+export type AccountStatus = 'pending' | 'active' | 'disabled'
+export type AccountId = 'admin' | `acct_${string}`
 
-export interface AdministratorState {
+interface AdministratorState {
   readonly id: 'admin'
   username: string | null
   passwordHash: string | null
   configuredAt: number | null
 }
 
+export interface AccountState {
+  readonly id: AccountId
+  username: string | null
+  passwordHash: string | null
+  readonly role: AccountRole
+  status: AccountStatus
+  authVersion: number
+  readonly createdAt: number
+  configuredAt: number | null
+}
+
 export interface StoredSession {
+  readonly token: string
+  readonly accountId: AccountId
+  accountAuthVersion: number
+  readonly authenticationMethod: AuthenticationMethod
+  readonly createdAt: number
+  lastSeenAt: number
+  expiresAt: number
+}
+
+interface StoredCollaborationParticipant {
+  readonly accountId: AccountId
+  readonly firstSeenAt: number
+  lastSeenAt: number
+  promptCount: number
+}
+
+export interface StoredCollaborationSession {
+  readonly sessionId: string
+  readonly createdAt: number
+  lastSeenAt: number
+  participants: StoredCollaborationParticipant[]
+}
+
+interface StoredCollaborationState {
+  sessions: StoredCollaborationSession[]
+}
+
+interface StoredSessionV2 {
   readonly token: string
   readonly authenticationMethod: AuthenticationMethod
   readonly createdAt: number
@@ -42,10 +91,12 @@ export interface StoredSession {
 }
 
 export interface AuthStateDocument {
-  readonly schemaVersion: 2
+  readonly schemaVersion: 3
   readonly secretId: string
-  administrator: AdministratorState
+  accountMode: AccountMode
+  accounts: AccountState[]
   sessions: StoredSession[]
+  collaboration: StoredCollaborationState
 }
 
 export interface LoadedAuthState {
@@ -70,9 +121,67 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[], 
   }
 }
 
+function exactKeysWithOptional(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[],
+  label: string,
+): void {
+  const allowed = new Set([...required, ...optional])
+  const actual = Object.keys(value)
+  if (actual.some(key => !allowed.has(key)) || required.some(key => !(key in value))) {
+    throw new Error(`${label} contains unknown or missing fields`)
+  }
+}
+
 function timestamp(value: unknown, label: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`${label} must be a non-negative integer`)
   return value as number
+}
+
+function nullableTimestamp(value: unknown, label: string): number | null {
+  return value === null ? null : timestamp(value, label)
+}
+
+function authVersion(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new Error(`${label} must be a positive integer`)
+  }
+  return value as number
+}
+
+function accountId(value: unknown, label: string): AccountId {
+  if (value === 'admin') return 'admin'
+  if (typeof value === 'string' && ACCOUNT_ID_PATTERN.test(value)) return value as AccountId
+  throw new Error(`${label} is invalid`)
+}
+
+export function parseCollaborationSessionId(value: unknown, label = 'collaboration sessionId'): string {
+  if (
+    typeof value !== 'string'
+    || value.length === 0
+    || value.length > MAX_COLLABORATION_SESSION_ID_LENGTH
+    || value.trim() !== value
+    || /\p{C}/u.test(value)
+  ) {
+    throw new Error(`${label} is invalid`)
+  }
+  return value
+}
+
+function accountUsername(value: unknown, label: string): string | null {
+  if (value === null) return null
+  if (typeof value !== 'string' || value.length === 0 || value.trim() !== value || /\p{C}/u.test(value)) {
+    throw new Error(`${label} is invalid`)
+  }
+  return value.normalize('NFC')
+}
+
+function passwordHash(value: unknown, label: string): string | null {
+  if (value === null) return null
+  if (typeof value !== 'string') throw new Error(`${label} is invalid`)
+  parsePasswordHash(value)
+  return value
 }
 
 function administrator(value: unknown): AdministratorState {
@@ -94,7 +203,43 @@ function administrator(value: unknown): AdministratorState {
   }
 }
 
-function storedSession(value: unknown): StoredSession {
+function account(value: unknown): AccountState {
+  const saved = object(value, 'account')
+  exactKeys(
+    saved,
+    ['id', 'username', 'passwordHash', 'role', 'status', 'authVersion', 'createdAt', 'configuredAt'],
+    'account',
+  )
+  const id = accountId(saved.id, 'account id')
+  if (saved.role !== 'admin' && saved.role !== 'member') throw new Error('account role is invalid')
+  if (saved.status !== 'pending' && saved.status !== 'active' && saved.status !== 'disabled') {
+    throw new Error('account status is invalid')
+  }
+  if (id === 'admin' && saved.role !== 'admin') throw new Error('admin account role must be admin')
+  if (id !== 'admin' && saved.role !== 'member') throw new Error('member account role must be member')
+  if (id !== 'admin' && saved.status === 'pending') throw new Error('member account cannot be pending')
+  const username = accountUsername(saved.username, 'account username')
+  const hash = passwordHash(saved.passwordHash, 'account passwordHash')
+  const configuredAt = nullableTimestamp(saved.configuredAt, 'account configuredAt')
+  const configured = username !== null && hash !== null && configuredAt !== null
+  if (saved.status === 'pending') {
+    if (configured || id !== 'admin') throw new Error('only an unconfigured admin account may be pending')
+  } else if (!configured) {
+    throw new Error('active or disabled accounts must be configured')
+  }
+  return {
+    id,
+    username,
+    passwordHash: hash,
+    role: saved.role,
+    status: saved.status,
+    authVersion: authVersion(saved.authVersion, 'account authVersion'),
+    createdAt: timestamp(saved.createdAt, 'account createdAt'),
+    configuredAt,
+  }
+}
+
+function storedSessionV2(value: unknown): StoredSessionV2 {
   const saved = object(value, 'persisted session')
   exactKeys(
     saved,
@@ -107,7 +252,7 @@ function storedSession(value: unknown): StoredSession {
   if (saved.authenticationMethod !== 'password' && saved.authenticationMethod !== 'login-token') {
     throw new Error('persisted session authenticationMethod is invalid')
   }
-  const session: StoredSession = {
+  const session: StoredSessionV2 = {
     token: saved.token,
     authenticationMethod: saved.authenticationMethod,
     createdAt: timestamp(saved.createdAt, 'persisted session createdAt'),
@@ -118,6 +263,69 @@ function storedSession(value: unknown): StoredSession {
     throw new Error('persisted session timestamps are inconsistent')
   }
   return session
+}
+
+function storedSession(value: unknown): StoredSession {
+  const saved = object(value, 'persisted session')
+  exactKeys(
+    saved,
+    ['token', 'accountId', 'accountAuthVersion', 'authenticationMethod', 'createdAt', 'lastSeenAt', 'expiresAt'],
+    'persisted session',
+  )
+  const session = {
+    ...storedSessionV2({
+      token: saved.token,
+      authenticationMethod: saved.authenticationMethod,
+      createdAt: saved.createdAt,
+      lastSeenAt: saved.lastSeenAt,
+      expiresAt: saved.expiresAt,
+    }),
+    accountId: accountId(saved.accountId, 'persisted session accountId'),
+    accountAuthVersion: authVersion(saved.accountAuthVersion, 'persisted session accountAuthVersion'),
+  }
+  return session
+}
+
+function storedCollaborationParticipant(value: unknown): StoredCollaborationParticipant {
+  const saved = object(value, 'collaboration participant')
+  exactKeys(saved, ['accountId', 'firstSeenAt', 'lastSeenAt', 'promptCount'], 'collaboration participant')
+  const participant = {
+    accountId: accountId(saved.accountId, 'collaboration participant accountId'),
+    firstSeenAt: timestamp(saved.firstSeenAt, 'collaboration participant firstSeenAt'),
+    lastSeenAt: timestamp(saved.lastSeenAt, 'collaboration participant lastSeenAt'),
+    promptCount: timestamp(saved.promptCount, 'collaboration participant promptCount'),
+  }
+  if (participant.firstSeenAt > participant.lastSeenAt) {
+    throw new Error('collaboration participant timestamps are inconsistent')
+  }
+  return participant
+}
+
+function storedCollaborationSession(value: unknown): StoredCollaborationSession {
+  const saved = object(value, 'collaboration session')
+  exactKeys(saved, ['sessionId', 'createdAt', 'lastSeenAt', 'participants'], 'collaboration session')
+  if (!Array.isArray(saved.participants)) throw new Error('collaboration session participants must be an array')
+  if (saved.participants.length > MAX_COLLABORATION_PARTICIPANTS) {
+    throw new Error('authStateFile contains too many collaboration participants')
+  }
+  const entry = {
+    sessionId: parseCollaborationSessionId(saved.sessionId),
+    createdAt: timestamp(saved.createdAt, 'collaboration session createdAt'),
+    lastSeenAt: timestamp(saved.lastSeenAt, 'collaboration session lastSeenAt'),
+    participants: saved.participants.map(storedCollaborationParticipant),
+  }
+  if (entry.createdAt > entry.lastSeenAt) throw new Error('collaboration session timestamps are inconsistent')
+  return entry
+}
+
+function storedCollaborationState(value: unknown): StoredCollaborationState {
+  const saved = object(value, 'collaboration')
+  exactKeys(saved, ['sessions'], 'collaboration')
+  if (!Array.isArray(saved.sessions)) throw new Error('collaboration sessions must be an array')
+  if (saved.sessions.length > MAX_COLLABORATION_SESSIONS) {
+    throw new Error('authStateFile contains too many collaboration sessions')
+  }
+  return { sessions: saved.sessions.map(storedCollaborationSession) }
 }
 
 function readDocument(path: string): Record<string, unknown> | undefined {
@@ -160,38 +368,177 @@ function readDocument(path: string): Record<string, unknown> | undefined {
   }
 }
 
-/** Construct a v2 authentication document for installer-created state. */
+/** Construct a v3 authentication document for installer-created state. */
 export function createAuthStateDocument(
   secretId: string,
   initial?: { readonly username: string; readonly passwordHash: string; readonly configuredAt: number },
 ): AuthStateDocument {
-  const configured = initial === undefined
-    ? { id: 'admin' as const, username: null, passwordHash: null, configuredAt: null }
-    : { id: 'admin' as const, username: initial.username, passwordHash: initial.passwordHash, configuredAt: initial.configuredAt }
   if (initial !== undefined) parsePasswordHash(initial.passwordHash)
-  return { schemaVersion: AUTH_STATE_VERSION, secretId, administrator: configured, sessions: [] }
+  const admin: AccountState = initial === undefined
+    ? {
+        id: 'admin',
+        username: null,
+        passwordHash: null,
+        role: 'admin',
+        status: 'pending',
+        authVersion: 1,
+        createdAt: 0,
+        configuredAt: null,
+      }
+    : {
+        id: 'admin',
+        username: initial.username,
+        passwordHash: initial.passwordHash,
+        role: 'admin',
+        status: 'active',
+        authVersion: 1,
+        createdAt: initial.configuredAt,
+        configuredAt: initial.configuredAt,
+      }
+  return {
+    schemaVersion: AUTH_STATE_VERSION,
+    secretId,
+    accountMode: 'single',
+    accounts: [admin],
+    sessions: [],
+    collaboration: { sessions: [] },
+  }
+}
+
+function accountFromAdministrator(saved: AdministratorState): AccountState {
+  const configured = saved.username !== null && saved.passwordHash !== null && saved.configuredAt !== null
+  return {
+    id: 'admin',
+    username: saved.username,
+    passwordHash: saved.passwordHash,
+    role: 'admin',
+    status: configured ? 'active' : 'pending',
+    authVersion: 1,
+    createdAt: saved.configuredAt ?? 0,
+    configuredAt: saved.configuredAt,
+  }
+}
+
+function assertSecretAndSessions(raw: Record<string, unknown>): void {
+  if (typeof raw.secretId !== 'string' || !SESSION_TOKEN_PATTERN.test(raw.secretId) || !Array.isArray(raw.sessions)) {
+    throw new Error('authStateFile has invalid metadata')
+  }
+  if (raw.sessions.length > MAX_STORED_SESSIONS) throw new Error('authStateFile contains too many sessions')
+}
+
+function assertUniqueSessions(sessions: readonly { readonly token: string }[]): void {
+  if (new Set(sessions.map(session => session.token)).size !== sessions.length) {
+    throw new Error('authStateFile contains a duplicate session')
+  }
+}
+
+function validateDocument(document: AuthStateDocument): void {
+  if (document.accounts.length === 0 || document.accounts.length > MAX_AUTH_ACCOUNTS) {
+    throw new Error('authStateFile contains an invalid account count')
+  }
+  const ids = new Set(document.accounts.map(entry => entry.id))
+  if (ids.size !== document.accounts.length || !ids.has('admin')) {
+    throw new Error('authStateFile contains invalid account ids')
+  }
+  const admins = document.accounts.filter(entry => entry.role === 'admin')
+  if (admins.length !== 1 || admins[0]?.id !== 'admin') throw new Error('authStateFile must contain exactly one admin account')
+  const names = new Set<string>()
+  for (const entry of document.accounts) {
+    if (entry.username === null) continue
+    const normalized = entry.username.normalize('NFC').toLocaleLowerCase('en-US')
+    if (names.has(normalized)) throw new Error('authStateFile contains a duplicate account username')
+    names.add(normalized)
+  }
+  for (const session of document.sessions) {
+    const sessionAccount = document.accounts.find(entry => entry.id === session.accountId)
+    if (sessionAccount === undefined) throw new Error('authStateFile contains a session for an unknown account')
+    if (session.accountAuthVersion !== sessionAccount.authVersion) {
+      throw new Error('authStateFile contains a session with an inconsistent account version')
+    }
+  }
+  const collaborationSessionIds = new Set<string>()
+  for (const session of document.collaboration.sessions) {
+    if (collaborationSessionIds.has(session.sessionId)) {
+      throw new Error('authStateFile contains a duplicate collaboration session')
+    }
+    collaborationSessionIds.add(session.sessionId)
+    const participantIds = new Set<AccountId>()
+    for (const participant of session.participants) {
+      if (!ids.has(participant.accountId)) {
+        throw new Error('authStateFile contains a collaboration participant for an unknown account')
+      }
+      if (participantIds.has(participant.accountId)) {
+        throw new Error('authStateFile contains a duplicate collaboration participant')
+      }
+      participantIds.add(participant.accountId)
+    }
+  }
+}
+
+function parseV2Document(raw: Record<string, unknown>, secretId?: string): AuthStateDocument {
+  exactKeys(raw, ['schemaVersion', 'secretId', 'administrator', 'sessions'], 'authStateFile')
+  assertSecretAndSessions(raw)
+  if (typeof raw.secretId !== 'string' || !Array.isArray(raw.sessions)) throw new Error('authStateFile has invalid metadata')
+  const rawSecretId = raw.secretId
+  const sessions = raw.sessions.map(storedSessionV2)
+  assertUniqueSessions(sessions)
+  const admin = accountFromAdministrator(administrator(raw.administrator))
+  const effectiveSecretId = secretId ?? rawSecretId
+  const document: AuthStateDocument = {
+    schemaVersion: AUTH_STATE_VERSION,
+    secretId: effectiveSecretId,
+    accountMode: 'single',
+    accounts: [admin],
+    sessions: rawSecretId === effectiveSecretId
+      ? sessions.map(session => ({ ...session, accountId: 'admin', accountAuthVersion: admin.authVersion }))
+      : [],
+    collaboration: { sessions: [] },
+  }
+  validateDocument(document)
+  return document
+}
+
+function parseV3Document(raw: Record<string, unknown>, secretId?: string): AuthStateDocument {
+  exactKeysWithOptional(
+    raw,
+    ['schemaVersion', 'secretId', 'accountMode', 'accounts', 'sessions'],
+    ['collaboration'],
+    'authStateFile',
+  )
+  assertSecretAndSessions(raw)
+  if (typeof raw.secretId !== 'string' || !Array.isArray(raw.sessions)) throw new Error('authStateFile has invalid metadata')
+  const rawSecretId = raw.secretId
+  if (raw.accountMode !== 'single' && raw.accountMode !== 'trusted-team-preview') {
+    throw new Error('authStateFile accountMode is invalid')
+  }
+  if (!Array.isArray(raw.accounts)) throw new Error('authStateFile accounts must be an array')
+  const sessions = raw.sessions.map(storedSession)
+  assertUniqueSessions(sessions)
+  const document: AuthStateDocument = {
+    schemaVersion: AUTH_STATE_VERSION,
+    secretId: secretId ?? rawSecretId,
+    accountMode: raw.accountMode,
+    accounts: raw.accounts.map(account),
+    sessions: rawSecretId === (secretId ?? rawSecretId) ? sessions : [],
+    collaboration: raw.collaboration === undefined ? { sessions: [] } : storedCollaborationState(raw.collaboration),
+  }
+  validateDocument(document)
+  return document
+}
+
+/** Strictly parse v2 or v3 authentication JSON into the normalized v3 runtime document. */
+export function parseAuthStateDocument(value: unknown, secretId?: string): AuthStateDocument {
+  const raw = object(value, 'authStateFile')
+  if (raw.schemaVersion === 2) return parseV2Document(raw, secretId)
+  if (raw.schemaVersion === AUTH_STATE_VERSION) return parseV3Document(raw, secretId)
+  throw new Error('authStateFile has an unsupported schemaVersion')
 }
 
 export function loadAuthState(path: string, secretId: string): LoadedAuthState {
   const raw = readDocument(path)
   if (raw === undefined) throw new Error('authStateFile is missing')
-  if (raw.schemaVersion !== AUTH_STATE_VERSION) throw new Error('authStateFile has an unsupported schemaVersion')
-  exactKeys(raw, ['schemaVersion', 'secretId', 'administrator', 'sessions'], 'authStateFile')
-  if (typeof raw.secretId !== 'string' || !SESSION_TOKEN_PATTERN.test(raw.secretId) || !Array.isArray(raw.sessions)) {
-    throw new Error('authStateFile has invalid metadata')
-  }
-  if (raw.sessions.length > 4096) throw new Error('authStateFile contains too many sessions')
-  const sessions = raw.sessions.map(storedSession)
-  if (new Set(sessions.map(session => session.token)).size !== sessions.length) {
-    throw new Error('authStateFile contains a duplicate session')
-  }
-  const document: AuthStateDocument = {
-    schemaVersion: AUTH_STATE_VERSION,
-    secretId,
-    administrator: administrator(raw.administrator),
-    sessions: raw.secretId === secretId ? sessions : [],
-  }
-  return { document, mustPersist: raw.secretId !== secretId }
+  const document = parseAuthStateDocument(raw, secretId)
+  return { document, mustPersist: raw.secretId !== secretId || raw.collaboration === undefined }
 }
 
 function syncFile(path: string): void {

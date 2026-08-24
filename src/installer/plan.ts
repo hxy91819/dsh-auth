@@ -395,8 +395,8 @@ function profileInstallAction(
 function managedFileActions(request: SetupRequest, context: SetupContext): PlanAction[] {
   const paths = context.paths
   const passwordAction = request.adminBootstrap === 'password'
-    ? [{ id: 'write-auth-state', kind: 'write-file' as const, description: 'Write the v2 authentication state with the hashed administrator password.', target: paths.authStateFile, sensitive: true }]
-    : [{ id: 'write-auth-state', kind: 'write-file' as const, description: 'Write an unset v2 authentication state for token initialization.', target: paths.authStateFile }]
+    ? [{ id: 'write-auth-state', kind: 'write-file' as const, description: 'Write the v3 authentication state with the hashed administrator password.', target: paths.authStateFile, sensitive: true }]
+    : [{ id: 'write-auth-state', kind: 'write-file' as const, description: 'Write an unset v3 authentication state for token initialization.', target: paths.authStateFile }]
   return [
     { id: 'create-config-directory', kind: 'create-directory', description: 'Create the permission-restricted configuration directory.', target: paths.configDirectory },
     { id: 'install-caddy-binary', kind: 'write-file', description: 'Copy the checksum-verified Caddy binary bundled in this dsh-auth package.', target: paths.caddyBinary },
@@ -409,7 +409,7 @@ function managedFileActions(request: SetupRequest, context: SetupContext): PlanA
 
 function activationActions(discovery: HostDiscovery, paths: ManagedPaths): PlanAction[] {
   return [
-    { id: 'write-systemd-drop-in', kind: 'write-file', description: 'Install the project-owned EnvironmentFile drop-in without replacing the DSH unit.', target: paths.systemdDropInFile },
+    { id: 'write-systemd-drop-in', kind: 'write-file', description: 'Install the project-owned DSH service drop-in without replacing the DSH unit.', target: paths.systemdDropInFile },
     { id: 'write-caddy-unit', kind: 'write-file', description: 'Install the independent dsh-auth-caddy.service unit.', target: paths.caddyUnitFile },
     commandAction('caddy-validate', 'Validate the managed Caddy configuration before activation.', paths.caddyBinary, ['validate', '--config', paths.caddyfile]),
     commandAction('systemd-daemon-reload', 'Reload systemd unit metadata.', '/usr/bin/systemctl', ['daemon-reload']),

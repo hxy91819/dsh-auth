@@ -76,12 +76,12 @@ describe('unified administrator authentication state', () => {
       .toBe('Configured Admin')
     const saved = JSON.parse(readFileSync(authStateFile, 'utf8')) as {
       schemaVersion: number
-      administrator: { id: string; username: string }
+      accounts: { id: string; username: string }[]
       sessions: { authenticationMethod: string }[]
     }
     expect(saved).toMatchObject({
-      schemaVersion: 2,
-      administrator: { id: 'admin', username: 'Configured Admin' },
+      schemaVersion: 3,
+      accounts: [{ id: 'admin', username: 'Configured Admin' }],
       sessions: [{ authenticationMethod: 'login-token' }],
     })
   }, 30_000)
@@ -135,8 +135,72 @@ describe('unified administrator authentication state', () => {
   }, 30_000)
 })
 
-describe('persistent renewable sessions', () => {
+describe('persistent session activity', () => {
+  it('summarizes per-account browser activity and prunes expired sessions', async () => {
+    const credentials = await testCredentials()
+    const config = testConfig(credentials, {
+      sessionTtlSeconds: 60,
+      idleTtlSeconds: 60,
+      sessionRenewalSeconds: 60,
+    })
+    const store = new SessionStore(config)
 
+    expect(store.setTrustedTeamPreview(true)).toBe('updated')
+    const member = store.createMemberAccount('teammate', credentials.hash, 1_000)
+    expect(member.result).toBe('created')
+    const memberId = member.account?.id
+    if (memberId === undefined) throw new Error('member account was not created')
+    const adminSession = store.create(1_000, 'password', 'admin')
+    const memberSession = store.create(2_000, 'password', memberId)
+
+    expect(store.listAccountActivity(3_000)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'admin',
+        activeSessions: 1,
+        lastSeenAt: 1_000,
+      }),
+      expect.objectContaining({
+        id: memberId,
+        username: 'teammate',
+        activeSessions: 1,
+        lastSeenAt: 2_000,
+      }),
+    ]))
+    expect(store.recordSessionActivity('session-1', memberSession.session, 3_000, 'prompt')).toMatchObject({
+      sessionId: 'session-1',
+      participants: [
+        expect.objectContaining({ id: memberId, username: 'teammate', promptCount: 1, current: true }),
+      ],
+    })
+    expect(store.recordSessionActivity('session-1', adminSession.session, 4_000, 'view')).toMatchObject({
+      sessionId: 'session-1',
+      participants: [
+        expect.objectContaining({ id: 'admin', promptCount: 0, current: true }),
+        expect.objectContaining({ id: memberId, promptCount: 1, current: false }),
+      ],
+    })
+    expect(store.sessionCollaboration('session-1', memberId)).toMatchObject({
+      participants: [
+        expect.objectContaining({ id: 'admin', current: false }),
+        expect.objectContaining({ id: memberId, current: true }),
+      ],
+    })
+    const restarted = new SessionStore(config)
+    expect(restarted.sessionCollaboration('session-1', memberId)).toMatchObject({
+      sessionId: 'session-1',
+      participants: [
+        expect.objectContaining({ id: 'admin', username: 'test-account', promptCount: 0 }),
+        expect.objectContaining({ id: memberId, username: 'teammate', promptCount: 1 }),
+      ],
+    })
+    expect(store.listAccountActivity(70_000)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'admin', activeSessions: 0, lastSeenAt: null }),
+      expect.objectContaining({ id: memberId, activeSessions: 0, lastSeenAt: null }),
+    ]))
+  }, 30_000)
+})
+
+describe('persistent renewable sessions', () => {
   it('survives an application restart, renews after activity, and persists logout revocation', async () => {
     const credentials = await testCredentials()
     const root = mkdtempSync(join(tmpdir(), 'dsh-auth-session-'))
@@ -218,17 +282,27 @@ describe('persistent renewable sessions', () => {
     const duplicateStateFile = join(root, 'duplicate.json')
     const duplicateSession = {
       token: 'a'.repeat(43),
+      accountId: 'admin',
+      accountAuthVersion: 1,
       authenticationMethod: 'password',
       createdAt: 1,
       lastSeenAt: 1,
       expiresAt: 2,
     }
     writeFileSync(duplicateStateFile, `${JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       secretId: 'b'.repeat(43),
-      administrator: {
-        id: 'admin', username: 'test-account', passwordHash: credentials.hash, configuredAt: 1,
-      },
+      accountMode: 'single',
+      accounts: [{
+        id: 'admin',
+        username: 'test-account',
+        passwordHash: credentials.hash,
+        role: 'admin',
+        status: 'active',
+        authVersion: 1,
+        createdAt: 1,
+        configuredAt: 1,
+      }],
       sessions: [duplicateSession, duplicateSession],
     })}\n`, { mode: 0o600 })
     await expect(startTestServer(testConfig(credentials, {

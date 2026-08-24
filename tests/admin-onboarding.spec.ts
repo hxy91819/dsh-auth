@@ -32,6 +32,15 @@ interface OnboardingHarness {
   readonly credentials: TestCredentials
 }
 
+function savedAdmin(path: string): { readonly username: string | null; readonly passwordHash: string | null } {
+  const document = JSON.parse(readFileSync(path, 'utf8')) as {
+    readonly accounts: { readonly id: string; readonly username: string | null; readonly passwordHash: string | null }[]
+  }
+  const admin = document.accounts.find(account => account.id === 'admin')
+  if (admin === undefined) throw new Error('missing admin account')
+  return admin
+}
+
 async function onboardingHarness(options: { readonly configured?: boolean } = {}): Promise<OnboardingHarness> {
   const credentials = await testCredentials()
   const root = mkdtempSync(join(tmpdir(), 'dsh-auth-onboarding-'))
@@ -215,8 +224,7 @@ describe('administrator first-time setup page', () => {
 
     const skipped = await fetch(`${harness.baseUrl}/`, { redirect: 'manual', headers: { cookie: first } })
     expect(skipped.status).not.toBe(303)
-    const saved = JSON.parse(readFileSync(harness.authStateFile, 'utf8')) as { administrator: { username: null } }
-    expect(saved.administrator.username).toBeNull()
+    expect(savedAdmin(harness.authStateFile).username).toBeNull()
 
     const second = await redeemToken(harness)
     const again = await fetch(`${harness.baseUrl}/auth/admin/setup`, {
@@ -245,9 +253,7 @@ describe('administrator first-time setup page', () => {
       const denied = await submitSetup(harness.baseUrl, setup.cookie, setup.csrf, submitted)
       expect(denied.status, submitted.username).toBe(400)
       expect(await denied.text(), submitted.username).toMatch(submitted.notice)
-      expect(JSON.parse(readFileSync(harness.authStateFile, 'utf8'))).toMatchObject({
-        administrator: { username: null, passwordHash: null },
-      })
+      expect(savedAdmin(harness.authStateFile)).toMatchObject({ username: null, passwordHash: null })
     }
   }, 30_000)
 
@@ -355,9 +361,8 @@ describe('administrator first-time setup mutations', () => {
     expect(statuses).toEqual([200, 303])
     const completed = results.find(result => result.status === 200)
     expect(await completed?.text()).toMatch(/already|已设置|已配置/u)
-    const username = (JSON.parse(readFileSync(harness.authStateFile, 'utf8')) as {
-      administrator: { username: string }
-    }).administrator.username
+    const username = savedAdmin(harness.authStateFile).username
+    if (username === null) throw new Error('admin username was not configured')
     expect(['first-owner', 'second-owner']).toContain(username)
     const winner = username === 'first-owner'
       ? { username: 'first-owner', password: firstPassword }

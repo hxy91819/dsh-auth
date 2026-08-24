@@ -6,7 +6,7 @@ English | [简体中文](README.zh-CN.md)
 [![CI](https://github.com/hxy91819/dsh-auth/actions/workflows/ci.yml/badge.svg)](https://github.com/hxy91819/dsh-auth/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/dsh-auth.svg)](LICENSE)
 
-Unofficial community plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). Add a secure administrator login to the DeepSeek Harness Web app. `dsh-auth` keeps Harness on loopback and installs a project-owned Caddy `forward_auth` edge for pages, APIs, downloads, SSE, and WebSockets.
+Unofficial community plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). Add secure browser sign-in to the DeepSeek Harness Web app. `dsh-auth` keeps Harness on loopback and installs a project-owned Caddy `forward_auth` edge for pages, APIs, downloads, SSE, and WebSockets.
 
 Version 0.2.0 is a breaking upgrade from legacy v1 deployments. Previous installer flags, Nginx-managed installations, and old sessions are not migrated. Uninstall the previous installation, then run `setup` again.
 
@@ -201,7 +201,7 @@ sudo dsh-auth setup \
 
 ## Reset the password
 
-Signed-in administrators can open **Settings → General → Reset password**, enter the current password, and set a new one. That updates the stored hash and signs out other browser sessions; it does not rotate the session secret.
+Signed-in accounts can open **Settings → General → Reset password**, enter the current password, and set a new one. That updates the stored hash and signs out that account's other browser sessions; it does not rotate the session secret.
 
 If the current password is unavailable, operators with root on an installation created by `setup` can run the interactive reset:
 
@@ -222,6 +222,18 @@ sudo dsh-auth reset-password \
 ```
 
 The command never accepts a password value in argv and does not print the password, hash, or session secret.
+
+## Trusted team preview accounts
+
+Administrators can open `/auth/account`, then **Manage team accounts**, to enable the trusted team preview and create member accounts. Members sign in with their own username and password, get their own revocable browser sessions, and see their current identity in the Harness sidebar footer and account page.
+
+When the preview is enabled, `/auth/session`, `/auth/account`, and `/auth/admin/accounts` include a team activity view: each account is listed with an avatar-style initial, role, status, active browser-session count, and last-seen timestamp. The sidebar identity chip and the composer identity strip refresh periodically and show how many trusted-team accounts currently have active browser sessions. When the browser is focused on a Harness session, the composer strip also shows the dsh-auth accounts that have viewed or submitted prompts in that Harness session, with prompt counts recorded by dsh-auth collaboration metadata. This is dsh-auth session visibility; it is not a Harness conversation ACL or workspace ownership model.
+
+This is intentionally labeled a preview because Harness 0.1.0-rc.7 still exposes workspaces, sessions, event streams, prompts, and tools as instance-level resources. Member accounts are separate login identities, not isolated tenants. Any trusted-team account should be treated as able to use the existing Harness instance authority until Harness exposes per-request principal, policy, event filtering, and tool-approval hooks. The preview UI repeats this warning whenever it is enabled.
+
+Ordinary browser-submitted prompts receive a visible author line such as `👤 teammate · member`. The Harness composer also shows a preview strip with the current account, role, active trusted-team count, and current-session participants before the user sends. This makes multiple people's turns distinguishable inside one Harness conversation; until Harness provides native message-author metadata or a stable message-row avatar slot, the label is part of the model-visible prompt text rather than an audit-grade immutable author field. Slash commands are not rewritten.
+
+Turning the preview off preserves member accounts but revokes member sessions. Disabling a member account revokes that member's sessions without affecting the administrator or other members.
 
 ## Plain HTTP for an isolated trusted network
 
@@ -359,7 +371,7 @@ The output directory contains `dsh-auth.env`, file-backed credentials, authentic
 - Production cookies are `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, and `__Host-` prefixed. Plain HTTP uses an explicit compatibility cookie mode.
 - Argon2id hashes and random session secrets live in separate permission-restricted files. Persistent opaque sessions use a `0600` authentication-state document.
 - Login, logout, token redemption, and first-time administrator setup enforce CSRF plus exact Origin/Referer checks after trusted-proxy resolution. Authentication responses are `no-store`.
-- Version 2 supports one administrator identity (`admin`) per managed installation. Password and token initialization are an explicit choice. Registration, self-service account recovery, MFA, databases, multi-account policy, and multi-tenancy are outside this release.
+- The runtime authentication state is schema v3. It supports one administrator account (`admin`) plus optional trusted-team member accounts. Password and token initialization are an explicit choice. Registration, self-service account recovery, MFA, databases, private Harness workspaces, multi-account policy, and multi-tenancy are outside this release.
 - Caddy is the only public listener. A standard reverse proxy cannot immediately revoke an already-open WebSocket. Deployments requiring immediate stream termination need a connection-aware edge.
 
 Security reports follow [`SECURITY.md`](SECURITY.md).

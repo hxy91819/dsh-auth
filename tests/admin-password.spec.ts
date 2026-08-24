@@ -178,11 +178,12 @@ describe('authenticated administrator password change', () => {
 
     const saved = JSON.parse(readFileSync(harness.authStateFile, 'utf8')) as {
       readonly secretId: string
-      readonly administrator: { readonly username: string; readonly passwordHash: string }
+      readonly accounts: { readonly id: string; readonly username: string; readonly passwordHash: string }[]
     }
-    expect(saved.administrator.username).toBe('test-account')
-    expect(saved.administrator.passwordHash).not.toBe(harness.credentials.hash)
-    expect(saved.administrator.passwordHash).not.toContain(replacement)
+    const admin = saved.accounts.find(account => account.id === 'admin')
+    expect(admin?.username).toBe('test-account')
+    expect(admin?.passwordHash).not.toBe(harness.credentials.hash)
+    expect(admin?.passwordHash).not.toContain(replacement)
 
     const loginPage = await fetch(`${harness.baseUrl}/auth/login`)
     const oldDenied = await fetch(`${harness.baseUrl}/auth/login`, {

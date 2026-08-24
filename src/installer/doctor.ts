@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
+import { authStateSecretId, parseAuthStateDocument } from '../auth-state.js'
 import { computePackageIdentity } from './build-identity.js'
 import { CADDY_SERVICE_NAME, CADDY_VERSION, renderCaddyfile, renderCaddyUnit, resolveCaddyPackage } from './caddy.js'
 import { renderEnvironmentFile, renderSystemdDropIn } from './config-files.js'
@@ -57,8 +58,13 @@ function managedFileDiagnostics(host: InstallerHost, state: InstallState): Diagn
   if (host.regularFile(state.paths.sessionSecretFile) && !/^[A-Za-z0-9_-]{43}\n?$/u.test(host.readFile(state.paths.sessionSecretFile))) {
     diagnostics.push({ code: 'SESSION_SECRET_INVALID', severity: 'error', message: 'The managed session secret is not a valid 32-byte base64url value.' })
   }
-  if (host.regularFile(state.paths.authStateFile) && !/"schemaVersion":\s*2/u.test(host.readFile(state.paths.authStateFile))) {
-    diagnostics.push({ code: 'AUTH_STATE_INVALID', severity: 'error', message: 'The managed authentication state is not schema v2.' })
+  if (host.regularFile(state.paths.authStateFile) && host.regularFile(state.paths.sessionSecretFile)) {
+    try {
+      const secret = host.readFile(state.paths.sessionSecretFile).replace(/\r?\n$/u, '')
+      parseAuthStateDocument(JSON.parse(host.readFile(state.paths.authStateFile)) as unknown, authStateSecretId(Buffer.from(secret)))
+    } catch {
+      diagnostics.push({ code: 'AUTH_STATE_INVALID', severity: 'error', message: 'The managed authentication state is not a valid schema v2/v3 document.' })
+    }
   }
   return diagnostics
 }

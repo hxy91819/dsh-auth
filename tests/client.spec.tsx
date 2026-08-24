@@ -2,7 +2,20 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { beginBrowserLogout, beginBrowserPasswordChange, LogoutSettingsRow, PasswordSettingsRow } from '../src/client.js'
+import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
+import {
+  attributePromptPayload,
+  beginBrowserAccount,
+  beginBrowserLogout,
+  beginBrowserPasswordChange,
+  CurrentAccountFooter,
+  fetchCurrentAccount,
+  installPromptAttribution,
+  LogoutSettingsRow,
+  PasswordSettingsRow,
+  recordBrowserSessionActivity,
+  TrustedTeamDock,
+} from '../src/client.js'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -13,8 +26,21 @@ const copy = {
   'logout.pending': '正在退出…',
   'logout.error': '退出登录失败，请重试',
   'password.label': '重设密码',
-  'password.description': '更新管理员密码。成功后，其他会话将退出。',
+  'password.description': '更新当前账号密码。成功后，此账号的其他会话将退出。',
   'password.action': '重设',
+  'account.loading': '正在读取账号…',
+  'account.unknown': '未登录',
+  'account.open': '账号',
+  'account.admin': '管理员',
+  'account.member': '成员',
+  'account.preview': '共享权限预览',
+  'account.online': '在线账号',
+  'account.authorPrefix': '发言人',
+  'teamDock.title': '多人协作预览',
+  'teamDock.shared': '共享会话权限',
+  'teamDock.promptStamped': '发言会标记为',
+  'teamDock.participants': '当前会话参与者',
+  'teamDock.waiting': '等待首次会话活动',
 } as const
 
 const t = (key: string): string => key in copy ? copy[key as keyof typeof copy] : key
@@ -94,7 +120,7 @@ describe('Harness settings password-reset row', () => {
       root.render(<PasswordSettingsRow beginPasswordChange={beginPasswordChange} t={t} />)
     })
     expect(container.querySelector('.dsh-auth-settings-title')?.textContent).toBe('重设密码')
-    expect(container.querySelector('.dsh-auth-settings-desc')?.textContent).toBe('更新管理员密码。成功后，其他会话将退出。')
+    expect(container.querySelector('.dsh-auth-settings-desc')?.textContent).toBe('更新当前账号密码。成功后，此账号的其他会话将退出。')
     const button = container.querySelector('button')
     expect(button?.textContent).toBe('重设')
     expect(button?.classList.contains('dsh-auth-password')).toBe(true)
@@ -161,5 +187,483 @@ describe('browser password-change navigation', () => {
     beginBrowserPasswordChange(document, navigate)
     expect(navigate).toHaveBeenCalledWith('/identity/admin/password')
     meta.remove()
+  })
+})
+
+describe('browser account identity affordance', () => {
+  let container: HTMLDivElement
+  let root: Root
+
+  beforeEach(() => {
+    container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+  })
+
+  afterEach(() => {
+    act(() => { root.unmount() })
+    container.remove()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+  })
+
+  it('fetches the current account session with no-store credentials', async () => {
+    const meta = document.createElement('meta')
+    meta.name = 'dsh-auth-base-path'
+    meta.content = '/identity'
+    document.head.append(meta)
+    const fetcher = vi.fn<typeof fetch>(() => Promise.resolve(new Response(JSON.stringify({
+      authenticated: true,
+      user: { userId: 'acct_test', username: 'teammate', roles: ['member'] },
+      trustedTeamPreview: true,
+      team: { accounts: [{
+        id: 'acct_test',
+        username: 'teammate',
+        role: 'member',
+        status: 'active',
+        activeSessions: 1,
+        lastSeenAt: '2026-08-24T12:00:00.000Z',
+        current: true,
+      }] },
+      collaboration: {
+        sessionId: 'session-1',
+        createdAt: '2026-08-24T12:00:00.000Z',
+        lastSeenAt: '2026-08-24T12:00:02.000Z',
+        participants: [{
+          id: 'acct_test',
+          username: 'teammate',
+          role: 'member',
+          status: 'active',
+          firstSeenAt: '2026-08-24T12:00:00.000Z',
+          lastSeenAt: '2026-08-24T12:00:02.000Z',
+          promptCount: 1,
+          current: true,
+        }],
+      },
+    }), { status: 200 })))
+
+    await expect(fetchCurrentAccount(fetcher, document, 'session-1')).resolves.toMatchObject({
+      user: { userId: 'acct_test', username: 'teammate', roles: ['member'] },
+      trustedTeamPreview: true,
+      team: { accounts: [{ activeSessions: 1, current: true }] },
+      collaboration: {
+        sessionId: 'session-1',
+        participants: [{ username: 'teammate', promptCount: 1, current: true }],
+      },
+    })
+    expect(fetcher).toHaveBeenCalledWith('/identity/session?sessionId=session-1', expect.objectContaining({
+      credentials: 'same-origin',
+      cache: 'no-store',
+    }))
+    meta.remove()
+  })
+
+  it('renders the sidebar footer account row in wide and rail states', async () => {
+    const fetchAccount = vi.fn(() => Promise.resolve({
+      authenticated: true as const,
+      user: { userId: 'acct_test', username: 'teammate', roles: ['member'] },
+      trustedTeamPreview: true,
+      team: { accounts: [
+        {
+          id: 'admin',
+          username: 'admin',
+          role: 'admin',
+          status: 'active',
+          activeSessions: 1,
+          lastSeenAt: '2026-08-24T12:00:00.000Z',
+          current: false,
+        },
+        {
+          id: 'acct_test',
+          username: 'teammate',
+          role: 'member',
+          status: 'active',
+          activeSessions: 1,
+          lastSeenAt: '2026-08-24T12:00:01.000Z',
+          current: true,
+        },
+      ] },
+    }))
+    const openAccount = vi.fn()
+    await act(async () => {
+      root.render(<CurrentAccountFooter wide fetchAccount={fetchAccount} openAccount={openAccount} t={t} />)
+      await Promise.resolve()
+    })
+    expect(container.querySelector('.dsh-auth-account-name')?.textContent).toBe('teammate')
+    expect(container.querySelector('.dsh-auth-account-meta')?.textContent).toContain('成员')
+    expect(container.querySelector('.dsh-auth-account-meta')?.textContent).toContain('共享权限预览')
+    expect(container.querySelector('.dsh-auth-account-meta')?.textContent).toContain('2 在线账号')
+    act(() => {
+      container.querySelector('button')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(openAccount).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      root.render(<CurrentAccountFooter wide={false} fetchAccount={fetchAccount} openAccount={openAccount} t={t} />)
+      await Promise.resolve()
+    })
+    expect(container.querySelector('.dsh-auth-account-footer-rail')).not.toBeNull()
+    expect(container.querySelector('.dsh-auth-account-copy')).toBeNull()
+  })
+
+  it('periodically refreshes the sidebar team activity count', async () => {
+    vi.useFakeTimers()
+    const fetchAccount = vi.fn()
+      .mockResolvedValueOnce({
+        authenticated: true as const,
+        user: { userId: 'acct_test', username: 'teammate', roles: ['member'] },
+        trustedTeamPreview: true,
+        team: { accounts: [{
+          id: 'acct_test',
+          username: 'teammate',
+          role: 'member',
+          status: 'active',
+          activeSessions: 1,
+          lastSeenAt: '2026-08-24T12:00:00.000Z',
+          current: true,
+        }] },
+      })
+      .mockResolvedValueOnce({
+        authenticated: true as const,
+        user: { userId: 'acct_test', username: 'teammate', roles: ['member'] },
+        trustedTeamPreview: true,
+        team: { accounts: [
+          {
+            id: 'acct_test',
+            username: 'teammate',
+            role: 'member',
+            status: 'active',
+            activeSessions: 1,
+            lastSeenAt: '2026-08-24T12:00:00.000Z',
+            current: true,
+          },
+          {
+            id: 'acct_peer',
+            username: 'reviewer',
+            role: 'member',
+            status: 'active',
+            activeSessions: 1,
+            lastSeenAt: '2026-08-24T12:00:30.000Z',
+            current: false,
+          },
+        ] },
+      })
+    await act(async () => {
+      root.render(<CurrentAccountFooter wide fetchAccount={fetchAccount} openAccount={vi.fn()} t={t} />)
+      await Promise.resolve()
+    })
+    expect(container.querySelector('.dsh-auth-account-meta')?.textContent).toContain('1 在线账号')
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000)
+    })
+    expect(fetchAccount).toHaveBeenCalledTimes(2)
+    expect(container.querySelector('.dsh-auth-account-meta')?.textContent).toContain('2 在线账号')
+  })
+
+  it('opens the authenticated account route on the configured auth prefix', () => {
+    const meta = document.createElement('meta')
+    meta.name = 'dsh-auth-base-path'
+    meta.content = '/identity'
+    document.head.append(meta)
+    const navigate = vi.fn()
+    beginBrowserAccount(document, navigate)
+    expect(navigate).toHaveBeenCalledWith('/identity/account')
+    meta.remove()
+  })
+})
+
+describe('trusted-team collaboration browser protocol', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('records trusted-team session collaboration with CSRF protection', async () => {
+    const meta = document.createElement('meta')
+    meta.name = 'dsh-auth-base-path'
+    meta.content = '/identity'
+    document.head.append(meta)
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ csrf: 'csrf-token' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        recorded: true,
+        collaboration: {
+          sessionId: 'session-1',
+          createdAt: '2026-08-24T12:00:00.000Z',
+          lastSeenAt: '2026-08-24T12:00:02.000Z',
+          participants: [{
+            id: 'acct_test',
+            username: 'teammate',
+            role: 'member',
+            status: 'active',
+            firstSeenAt: '2026-08-24T12:00:00.000Z',
+            lastSeenAt: '2026-08-24T12:00:02.000Z',
+            promptCount: 1,
+            current: true,
+          }],
+        },
+      }), { status: 200 }))
+
+    await expect(recordBrowserSessionActivity('session-1', 'prompt', fetcher)).resolves.toMatchObject({
+      sessionId: 'session-1',
+      participants: [{ username: 'teammate', promptCount: 1 }],
+    })
+    expect(fetcher).toHaveBeenNthCalledWith(1, '/identity/csrf', expect.objectContaining({
+      credentials: 'same-origin',
+      cache: 'no-store',
+    }))
+    expect(fetcher).toHaveBeenNthCalledWith(2, '/identity/collaboration/session', expect.objectContaining({
+      method: 'POST',
+      credentials: 'same-origin',
+    }))
+    const submitted = fetcher.mock.calls[1]?.[1]
+    expect(submitted?.body).toBeInstanceOf(URLSearchParams)
+    if (!(submitted?.body instanceof URLSearchParams)) throw new Error('missing submitted form body')
+    expect(submitted.body.toString()).toBe('csrf=csrf-token&sessionId=session-1&activity=prompt')
+    meta.remove()
+  })
+})
+
+describe('trusted-team composer dock', () => {
+  let container: HTMLDivElement
+  let root: Root
+
+  beforeEach(() => {
+    container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+  })
+
+  afterEach(() => {
+    act(() => { root.unmount() })
+    container.remove()
+    vi.restoreAllMocks()
+  })
+
+  it('renders the current prompt author, active account count, and session participants', async () => {
+    const fetchAccount = vi.fn(() => Promise.resolve({
+      authenticated: true as const,
+      user: { userId: 'acct_test', username: 'teammate', roles: ['member'] },
+      trustedTeamPreview: true,
+      team: { accounts: [
+        {
+          id: 'admin',
+          username: 'admin',
+          role: 'admin',
+          status: 'active',
+          activeSessions: 1,
+          lastSeenAt: '2026-08-24T12:00:00.000Z',
+          current: false,
+        },
+        {
+          id: 'acct_test',
+          username: 'teammate',
+          role: 'member',
+          status: 'active',
+          activeSessions: 1,
+          lastSeenAt: '2026-08-24T12:00:01.000Z',
+          current: true,
+        },
+      ] },
+      collaboration: {
+        sessionId: 'session-1',
+        createdAt: '2026-08-24T12:00:00.000Z',
+        lastSeenAt: '2026-08-24T12:00:01.000Z',
+        participants: [
+          {
+            id: 'acct_test',
+            username: 'teammate',
+            role: 'member',
+            status: 'active',
+            firstSeenAt: '2026-08-24T12:00:00.000Z',
+            lastSeenAt: '2026-08-24T12:00:01.000Z',
+            promptCount: 1,
+            current: true,
+          },
+          {
+            id: 'admin',
+            username: 'admin',
+            role: 'admin',
+            status: 'active',
+            firstSeenAt: '2026-08-24T12:00:00.000Z',
+            lastSeenAt: '2026-08-24T12:00:00.000Z',
+            promptCount: 0,
+            current: false,
+          },
+        ],
+      },
+    }))
+    const recordSessionActivity = vi.fn(() => Promise.resolve(undefined))
+    const props = {
+      fetchAccount,
+      recordSessionActivity,
+      sessionId: 'session-1',
+      t,
+    } as Parameters<typeof TrustedTeamDock>[0]
+    await act(async () => {
+      root.render(<TrustedTeamDock {...props} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('.dsh-auth-team-dock')).not.toBeNull()
+    expect(container.querySelector('.dsh-auth-team-dock-avatar')?.textContent).toBe('T')
+    expect(container.querySelector('.dsh-auth-team-dock-title')?.textContent).toContain('多人协作预览')
+    expect(container.querySelector('.dsh-auth-team-dock-desc')?.textContent).toContain('teammate · 成员')
+    expect(container.querySelector('.dsh-auth-team-dock-desc')?.textContent).toContain('当前会话参与者: teammate, admin')
+    expect(container.querySelector('.dsh-auth-team-dock-pill')?.textContent).toBe('2 在线账号')
+    expect(fetchAccount).toHaveBeenCalledWith('session-1')
+    expect(recordSessionActivity).toHaveBeenCalledWith('session-1', 'view')
+  })
+})
+
+describe('trusted-team prompt attribution', () => {
+  const account = {
+    authenticated: true as const,
+    user: { userId: 'acct_test', username: 'mason', roles: ['member'] },
+    trustedTeamPreview: true,
+  }
+
+  it('adds a durable visible author line to ordinary session prompts', () => {
+    expect(attributePromptPayload({
+      sessionId: 'session-1',
+      mode: 'queue',
+      content: [{ type: 'text', text: 'please review this' }],
+    }, account)).toMatchObject({
+      content: [{ type: 'text', text: '👤 mason · member\n\nplease review this' }],
+    })
+  })
+
+  it('does not annotate slash commands or anonymous prompts', () => {
+    const command = {
+      sessionId: 'session-1',
+      mode: 'queue',
+      content: [{ type: 'text', text: '/compact' }],
+    }
+    expect(attributePromptPayload(command, account)).toBe(command)
+    const message = {
+      sessionId: 'session-1',
+      mode: 'queue',
+      content: [{ type: 'text', text: 'hello' }],
+    }
+    expect(attributePromptPayload(message, undefined)).toBe(message)
+  })
+
+  it('does not annotate prompts when trusted team preview is disabled', () => {
+    const message = {
+      sessionId: 'session-1',
+      mode: 'queue',
+      content: [{ type: 'text', text: 'hello' }],
+    }
+    expect(attributePromptPayload(message, {
+      authenticated: true,
+      user: { userId: 'admin', username: 'admin', roles: ['admin'] },
+    })).toBe(message)
+  })
+
+  it('replaces an existing author line with the authenticated account', () => {
+    expect(attributePromptPayload({
+      sessionId: 'session-1',
+      mode: 'queue',
+      content: [{ type: 'text', text: '👤 admin · admin\n\nplease approve this' }],
+    }, account)).toMatchObject({
+      content: [{ type: 'text', text: '👤 mason · member\n\nplease approve this' }],
+    })
+  })
+
+  it('wraps typed prompt API calls used by the Harness composer', async () => {
+    const sessionPrompt = vi.fn(() => Promise.resolve({ rpcId: 'rpc_session', result: { ok: true as const, value: { accepted: true } } }))
+    const subagentPrompt = vi.fn(() => Promise.resolve({ rpcId: 'rpc_subagent', result: { ok: true as const, value: { accepted: true } } }))
+    const connection = {
+      api: {
+        sessions: { prompt: sessionPrompt },
+        subagents: { prompt: subagentPrompt },
+      },
+      rpc: { call: vi.fn() },
+    } as unknown as ConnectionHandle
+    const recordActivity = vi.fn(() => Promise.resolve(undefined))
+    const dispose = installPromptAttribution(connection, () => Promise.resolve(account), recordActivity)
+    await connection.api.sessions.prompt({
+      sessionId: 'session-1',
+      mode: 'queue',
+      content: [{ type: 'text', text: 'hello' }],
+    } as Parameters<ConnectionHandle['api']['sessions']['prompt']>[0])
+    await connection.api.subagents.prompt({
+      parentSessionId: 'parent-session',
+      childSessionId: 'child-session',
+      mode: 'continuable',
+      content: [{ type: 'text', text: 'review this' }],
+    } as Parameters<ConnectionHandle['api']['subagents']['prompt']>[0])
+    dispose()
+
+    expect(sessionPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      content: [{ type: 'text', text: '👤 mason · member\n\nhello' }],
+    }), undefined)
+    expect(subagentPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      content: [{ type: 'text', text: '👤 mason · member\n\nreview this' }],
+    }), undefined)
+    expect(recordActivity).toHaveBeenNthCalledWith(1, 'session-1', 'prompt')
+    expect(recordActivity).toHaveBeenNthCalledWith(2, 'child-session', 'prompt')
+  })
+
+  it('does not double-record when typed prompt APIs internally call prompt RPC endpoints', async () => {
+    const call = vi.fn(() => Promise.resolve({ ok: true as const, value: { accepted: true } }))
+    const holder: { connection?: ConnectionHandle } = {}
+    const sessionPrompt = vi.fn((
+      payload: Parameters<ConnectionHandle['api']['sessions']['prompt']>[0],
+      signal?: AbortSignal,
+    ) => {
+      const active = holder.connection
+      if (active === undefined) throw new Error('missing test connection')
+      return active.rpc.call('/api', 'session.prompt', payload, signal)
+        .then(() => ({ rpcId: 'rpc_session', result: { ok: true as const, value: { accepted: true as const } } }))
+    })
+    const connection = {
+      api: {
+        sessions: { prompt: sessionPrompt },
+        subagents: { prompt: vi.fn() },
+      },
+      rpc: { call },
+    } as unknown as ConnectionHandle
+    holder.connection = connection
+    const recordActivity = vi.fn(() => Promise.resolve(undefined))
+    const dispose = installPromptAttribution(connection, () => Promise.resolve(account), recordActivity)
+    await connection.api.sessions.prompt({
+      sessionId: 'session-1',
+      mode: 'queue',
+      content: [{ type: 'text', text: 'hello' }],
+    } as Parameters<ConnectionHandle['api']['sessions']['prompt']>[0])
+    dispose()
+
+    expect(call).toHaveBeenCalledTimes(1)
+    expect(call).toHaveBeenCalledWith('/api', 'session.prompt', expect.objectContaining({
+      content: [{ type: 'text', text: '👤 mason · member\n\nhello' }],
+    }), undefined)
+    expect(recordActivity).toHaveBeenCalledTimes(1)
+    expect(recordActivity).toHaveBeenCalledWith('session-1', 'prompt')
+  })
+
+  it('still wraps generic prompt RPC calls and leaves other endpoints unchanged', async () => {
+    const call = vi.fn(() => Promise.resolve({ ok: true as const, value: { accepted: true } }))
+    const connection = {
+      api: {
+        sessions: { prompt: vi.fn() },
+        subagents: { prompt: vi.fn() },
+      },
+      rpc: { call },
+    } as unknown as ConnectionHandle
+    const recordActivity = vi.fn(() => Promise.resolve(undefined))
+    const dispose = installPromptAttribution(connection, () => Promise.resolve(account), recordActivity)
+    await connection.rpc.call('/api', 'session.prompt', {
+      sessionId: 'session-1',
+      mode: 'queue',
+      content: [{ type: 'text', text: 'hello' }],
+    })
+    await connection.rpc.call('/api', 'session.list', {})
+    dispose()
+
+    expect(call).toHaveBeenNthCalledWith(1, '/api', 'session.prompt', expect.objectContaining({
+      content: [{ type: 'text', text: '👤 mason · member\n\nhello' }],
+    }), undefined)
+    expect(call).toHaveBeenNthCalledWith(2, '/api', 'session.list', {}, undefined)
+    expect(recordActivity).toHaveBeenCalledWith('session-1', 'prompt')
   })
 })
