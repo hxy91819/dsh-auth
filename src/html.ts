@@ -17,6 +17,7 @@ interface UiCopy {
   readonly confirmPassword: string
   readonly signIn: string
   readonly invalidCredentials: string
+  readonly csrfInvalid: string
   readonly rateLimited: string
   readonly cloudConsole: string
   readonly accountTitle: string
@@ -62,6 +63,7 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     confirmPassword: '确认密码',
     signIn: '登录',
     invalidCredentials: '用户名或密码不正确。',
+    csrfInvalid: '登录页面已过期，请使用下方最新表单重新登录。',
     rateLimited: '尝试次数过多，请稍后再试。',
     cloudConsole: '请从云控制台登录。',
     accountTitle: '账户',
@@ -105,6 +107,7 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     confirmPassword: 'Confirm password',
     signIn: 'Sign in',
     invalidCredentials: 'The username or password is incorrect.',
+    csrfInvalid: 'This login page expired. Use the refreshed form below to sign in again.',
     rateLimited: 'Too many attempts. Try again later.',
     cloudConsole: 'Sign in from the cloud console.',
     accountTitle: 'Account',
@@ -143,7 +146,7 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
   },
 }
 
-export type AuthMessage = 'invalidCredentials' | 'rateLimited'
+export type AuthMessage = 'invalidCredentials' | 'csrfInvalid' | 'rateLimited'
 export type SetupMessage = 'usernameWhitespace' | 'usernameInvalid' | 'passwordInvalid' | 'passwordMismatch'
 export type PasswordChangeMessage = 'currentPasswordInvalid' | 'passwordInvalid' | 'passwordMismatch' | 'rateLimited'
 

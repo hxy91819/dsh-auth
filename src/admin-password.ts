@@ -3,6 +3,8 @@ import type { ResolvedConfig } from './config.js'
 import { passwordChangeCompletePage, passwordChangePage, type PasswordChangeMessage } from './html.js'
 import {
   clientAddress,
+  CsrfError,
+  type CsrfFailureReason,
   hasSameOrigin,
   HttpError,
   readForm,
@@ -32,7 +34,7 @@ export interface AdminPasswordContext {
   readonly readHarnessUiSettings: () => HarnessUiSettings
   readonly cookieNames: { readonly session: string; readonly csrf: string }
   readonly issueCsrf: () => { readonly token: string; readonly value: string }
-  readonly validCsrf: (req: IncomingMessage, submitted: string | null) => boolean
+  readonly csrfFailureReason: (req: IncomingMessage, submitted: string | null) => CsrfFailureReason | undefined
   readonly cookie: (name: string, value: string, maxAgeSeconds: number) => string
   readonly renewalCookies: (authenticated: SessionAuthentication) => readonly string[]
   readonly renewalHeaders: (authenticated: SessionAuthentication) => Record<string, string | string[]>
@@ -94,7 +96,8 @@ async function passwordChangePost(
   if (!hasSameOrigin(req, ctx.config)) throw new HttpError(403, 'cross-origin request denied')
   const form = await readForm(req)
   const returnTo = safeReturnTarget(form.get('returnTo'))
-  if (!ctx.validCsrf(req, form.get('csrf'))) throw new HttpError(403, 'invalid CSRF token')
+  const csrfFailure = ctx.csrfFailureReason(req, form.get('csrf'))
+  if (csrfFailure !== undefined) throw new CsrfError(csrfFailure)
   const authenticated = ctx.sessions.authenticate(req, ctx.now())
   if (authenticated === undefined) {
     redirect(res, loginRedirect(ctx, returnTo))

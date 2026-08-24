@@ -259,11 +259,33 @@ describe('observable authentication flow', () => {
 
     const badCsrf = await submitLogin(page.csrfCookie, randomBytes(24).toString('base64url'), credentials.password)
     expect(badCsrf.status).toBe(403)
+    const badCsrfHtml = await badCsrf.text()
+    expect(badCsrfHtml).toContain('This login page expired. Use the refreshed form below to sign in again.')
+    expect(badCsrfHtml).not.toContain(credentials.password)
+    const refreshedCookie = cookiePair(badCsrf.headers, CSRF_COOKIE)
+    expect(refreshedCookie).not.toBe(page.csrfCookie)
+    const recovered = await submitLogin(refreshedCookie, hiddenValue(badCsrfHtml, 'csrf'), credentials.password)
+    expect(recovered.status).toBe(303)
     const tampered = await fetch(`${running.baseUrl}/auth/verify`, {
       headers: { cookie: `${SESSION_COOKIE}=tampered.value`, 'x-original-uri': '//example.invalid' },
     })
     expect(tampered.status).toBe(401)
     expect(tampered.headers.get('x-dsh-auth-login')).toBe('/auth/login?returnTo=%2F')
+  }, 30_000)
+
+  it('reuses a valid login CSRF cookie so separate tabs can submit their forms', async () => {
+    const first = await fetch(`${running.baseUrl}/auth/login`)
+    const firstHtml = await first.text()
+    const firstCookie = cookiePair(first.headers, CSRF_COOKIE)
+    const firstCsrf = hiddenValue(firstHtml, 'csrf')
+
+    const second = await fetch(`${running.baseUrl}/auth/login`, { headers: { cookie: firstCookie } })
+    const secondHtml = await second.text()
+    expect(cookiePair(second.headers, CSRF_COOKIE)).toBe(firstCookie)
+    expect(hiddenValue(secondHtml, 'csrf')).toBe(firstCsrf)
+
+    const accepted = await submitLogin(firstCookie, firstCsrf, credentials.password)
+    expect(accepted.status).toBe(303)
   }, 30_000)
 
   it('supports explicitly configured plain HTTP cookies without weakening the default', async () => {
