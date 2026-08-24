@@ -174,4 +174,52 @@ describe('runtime authentication logs', () => {
       && entry.record.reason === 'origin_denied')).toBe(true)
     expect(JSON.stringify(captured)).not.toMatch(/private|secret=value|hidden-request-value|192\.0\.2\.45/u)
   })
+
+  it('classifies CSRF denials without recording token or cookie values', async () => {
+    const page = await fetch(`${running.baseUrl}/auth/login`)
+    const pageHtml = await page.text()
+    const csrf = hiddenValue(pageHtml, 'csrf')
+    const invalidCookie = `${CSRF_COOKIE}=tampered.value`
+
+    const invalid = await fetch(`${running.baseUrl}/auth/login`, {
+      method: 'POST',
+      headers: { ...proxyHeaders('192.0.2.46'), cookie: invalidCookie },
+      body: new URLSearchParams({ csrf, username: 'operator', password: 'hidden' }),
+    })
+    expect(invalid.status).toBe(403)
+    expect(await invalid.text()).toContain('This login page expired')
+
+    const validCookie = cookiePair(page.headers, CSRF_COOKIE)
+    const mismatch = await fetch(`${running.baseUrl}/auth/login`, {
+      method: 'POST',
+      headers: { ...proxyHeaders('192.0.2.46'), cookie: validCookie },
+      body: new URLSearchParams({ csrf: 'different-token', username: 'operator', password: 'hidden' }),
+    })
+    expect(mismatch.status).toBe(403)
+
+    const formMissing = await fetch(`${running.baseUrl}/auth/login`, {
+      method: 'POST',
+      headers: { ...proxyHeaders('192.0.2.46'), cookie: validCookie },
+      body: new URLSearchParams({ username: 'operator', password: 'hidden' }),
+    })
+    expect(formMissing.status).toBe(403)
+
+    const missing = await fetch(`${running.baseUrl}/auth/login`, {
+      method: 'POST',
+      headers: proxyHeaders('192.0.2.46'),
+      body: new URLSearchParams({ csrf, username: 'operator', password: 'hidden' }),
+    })
+    expect(missing.status).toBe(403)
+
+    const csrfReasons = captured
+      .filter(entry => entry.level === 'warn' && entry.record.event === 'auth.request.denied')
+      .map(entry => entry.record.csrfReason)
+    expect(csrfReasons).toContain('cookie_invalid')
+    expect(csrfReasons).toContain('cookie_missing')
+    expect(csrfReasons).toContain('token_mismatch')
+    expect(csrfReasons).toContain('form_missing')
+    const serialized = JSON.stringify(captured)
+    expect(serialized).not.toContain(invalidCookie)
+    expect(serialized).not.toContain(csrf)
+  }, 30_000)
 })

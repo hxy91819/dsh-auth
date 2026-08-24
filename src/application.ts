@@ -20,6 +20,8 @@ import {
 } from './html.js'
 import {
   clientAddress,
+  CsrfError,
+  type CsrfFailureReason,
   hasSameOrigin,
   headerValue,
   HttpError,
@@ -138,7 +140,7 @@ export class AuthApplication {
           readHarnessUiSettings: this.readHarnessUiSettings,
           cookieNames: this.cookieNames,
           issueCsrf: () => this.issueCsrf(),
-          validCsrf: (request, submitted) => this.validCsrf(request, submitted),
+          csrfFailureReason: (request, submitted) => this.csrfFailureReason(request, submitted),
           cookie: (name, value, maxAgeSeconds) => this.cookie(name, value, maxAgeSeconds),
           renewalCookies: authenticated => this.renewalCookies(authenticated),
           renewalHeaders: authenticated => this.renewalHeaders(authenticated),
@@ -166,6 +168,7 @@ export class AuthApplication {
           clientId: this.clientId(req),
           status: error.status,
           reason,
+          ...(error instanceof CsrfError ? { csrfReason: error.csrfReason } : {}),
         })
         if (route === '/token' && (reason === 'origin_denied' || reason === 'csrf_denied')) {
           writeTokenHtml(res, error.status, tokenDeniedPage(resolveUiPreferences(req, this.readHarnessUiSettings())))
@@ -194,7 +197,7 @@ export class AuthApplication {
         redirect(res, returnTo, this.renewalHeaders(authenticated))
         return
       }
-      this.renderLogin(res, 200, returnTo, preferences)
+      this.renderLogin(req, res, 200, returnTo, preferences)
       return
     }
     if (req.method !== 'POST') {
@@ -204,12 +207,25 @@ export class AuthApplication {
     if (!hasSameOrigin(req, this.config)) throw new HttpError(403, 'cross-origin request denied')
     const form = await readForm(req)
     const formReturnTo = safeReturnTarget(form.get('returnTo'))
-    if (!this.validCsrf(req, form.get('csrf'))) throw new HttpError(403, 'invalid CSRF token')
+    const csrfFailure = this.csrfFailureReason(req, form.get('csrf'))
+    if (csrfFailure !== undefined) {
+      this.logger.warn({
+        event: 'auth.request.denied',
+        route: '/login',
+        method: req.method ?? 'UNKNOWN',
+        clientId: this.clientId(req),
+        status: 403,
+        reason: 'csrf_denied',
+        csrfReason: csrfFailure,
+      })
+      this.renderLogin(req, res, 403, formReturnTo, preferences, 'csrfInvalid', true)
+      return
+    }
     const limiterKey = clientAddress(req, this.config)
     const retryAfter = this.limiter.consume(limiterKey, this.now())
     if (retryAfter !== undefined) {
       this.logger.warn({ event: 'auth.login.failed', authMethod: 'password', reason: 'rate_limited', clientId: this.clientId(req) })
-      const csrf = this.issueCsrf()
+      const csrf = this.issueCsrf(req)
       writeHtml(res, 429, loginPage(this.config.basePath, formReturnTo, csrf.token, preferences, 'rateLimited'), {
         'retry-after': String(retryAfter),
         'set-cookie': this.cookie(this.cookieNames.csrf, csrf.value, 10 * 60),
@@ -227,7 +243,7 @@ export class AuthApplication {
     ])
     if (credentials === undefined || !passwordMatches || !usernameMatches || passwordBytes > ADMIN_PASSWORD_MAX_BYTES) {
       this.logger.warn({ event: 'auth.login.failed', authMethod: 'password', reason: 'invalid_credentials', clientId: this.clientId(req) })
-      this.renderLogin(res, 401, formReturnTo, preferences, 'invalidCredentials')
+      this.renderLogin(req, res, 401, formReturnTo, preferences, 'invalidCredentials')
       return
     }
     this.limiter.reset(limiterKey)
@@ -332,7 +348,7 @@ export class AuthApplication {
     }
     if (!hasSameOrigin(req, this.config)) throw new HttpError(403, 'cross-origin request denied')
     const form = await readForm(req)
-    if (!this.validCsrf(req, form.get('csrf'))) throw new HttpError(403, 'invalid CSRF token')
+    this.assertCsrf(req, form.get('csrf'))
     this.sessions.revoke(req)
     this.logger.info({ event: 'auth.logout.succeeded', clientId: this.clientId(req) })
     redirect(res, `${this.config.basePath}/login`, {
@@ -422,7 +438,7 @@ export class AuthApplication {
       return
     }
     if (!hasSameOrigin(req, this.config)) throw new HttpError(403, 'cross-origin request denied')
-    if (!this.validCsrf(req, form.get('csrf'))) throw new HttpError(403, 'invalid CSRF token')
+    this.assertCsrf(req, form.get('csrf'))
     const submitted = form.get('token')
     if (submitted === null || submitted.length === 0 || submitted.length > 256
       || form.getAll('csrf').length !== 1 || form.getAll('token').length !== 1 || form.size !== 2) {
@@ -517,7 +533,7 @@ export class AuthApplication {
     if (!hasSameOrigin(req, this.config)) throw new HttpError(403, 'cross-origin request denied')
     const form = await readForm(req)
     const returnTo = safeReturnTarget(form.get('returnTo'))
-    if (!this.validCsrf(req, form.get('csrf'))) throw new HttpError(403, 'invalid CSRF token')
+    this.assertCsrf(req, form.get('csrf'))
     const authenticated = this.sessions.authenticate(req, this.now())
     if (authenticated === undefined) {
       const target = `${this.config.basePath}/admin/setup?returnTo=${encodeURIComponent(returnTo)}`
@@ -630,13 +646,15 @@ export class AuthApplication {
   }
 
   private renderLogin(
+    req: IncomingMessage,
     res: ServerResponse,
     status: number,
     returnTo: string,
     preferences: UiPreferences,
     message?: AuthMessage,
+    forceNewCsrf = false,
   ): void {
-    const csrf = this.issueCsrf()
+    const csrf = this.issueCsrf(req, forceNewCsrf)
     writeHtml(res, status, loginPage(
       this.config.basePath,
       returnTo,
@@ -649,15 +667,27 @@ export class AuthApplication {
     })
   }
 
-  private issueCsrf(): { readonly token: string; readonly value: string } {
+  private issueCsrf(req?: IncomingMessage, forceNew = false): { readonly token: string; readonly value: string } {
+    if (!forceNew && req !== undefined) {
+      const value = parseCookies(req.headers.cookie).get(this.cookieNames.csrf)
+      const token = this.csrfSigner.verify(value)
+      if (value !== undefined && token !== undefined) return { token, value }
+    }
     return this.csrfSigner.issue()
   }
 
-  private validCsrf(req: IncomingMessage, submitted: string | null): boolean {
-    if (submitted === null) return false
+  private csrfFailureReason(req: IncomingMessage, submitted: string | null): CsrfFailureReason | undefined {
+    if (submitted === null) return 'form_missing'
     const signed = parseCookies(req.headers.cookie).get(this.cookieNames.csrf)
+    if (signed === undefined) return 'cookie_missing'
     const token = this.csrfSigner.verify(signed)
-    return token !== undefined && constantTimeTextEqual(token, submitted, this.config.sessionSecret)
+    if (token === undefined) return 'cookie_invalid'
+    return constantTimeTextEqual(token, submitted, this.config.sessionSecret) ? undefined : 'token_mismatch'
+  }
+
+  private assertCsrf(req: IncomingMessage, submitted: string | null): void {
+    const failure = this.csrfFailureReason(req, submitted)
+    if (failure !== undefined) throw new CsrfError(failure)
   }
 
   private renewalCookies(authenticated: SessionAuthentication): readonly string[] {

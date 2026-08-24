@@ -24,6 +24,15 @@ export class HttpError extends Error {
   }
 }
 
+export type CsrfFailureReason = 'form_missing' | 'cookie_missing' | 'cookie_invalid' | 'token_mismatch'
+
+/** A CSRF denial whose server-side diagnostic can stay separate from the public error text. */
+export class CsrfError extends HttpError {
+  constructor(readonly csrfReason: CsrfFailureReason) {
+    super(403, 'invalid CSRF token')
+  }
+}
+
 export function headerValue(req: IncomingMessage, name: string): string | undefined {
   const value = req.headers[name]
   return Array.isArray(value) ? value[0] : value
