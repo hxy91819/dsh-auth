@@ -57,6 +57,11 @@ export interface PublicAccount {
   readonly configuredAt: number | null
 }
 
+export interface PublicAccountActivity extends PublicAccount {
+  readonly activeSessions: number
+  readonly lastSeenAt: number | null
+}
+
 export interface PasswordLoginCredential {
   readonly accountId?: AccountId
   readonly username: string
@@ -181,6 +186,27 @@ export class SessionStore {
 
   listAccounts(): readonly PublicAccount[] {
     return Array.from(this.accounts.values(), publicAccount)
+  }
+
+  listAccountActivity(now: number): readonly PublicAccountActivity[] {
+    const changed = this.prune(now) || this.enforceCapacity()
+    if (changed) this.persist()
+    const activity = new Map<AccountId, { activeSessions: number; lastSeenAt: number | null }>()
+    for (const accountId of this.accounts.keys()) {
+      activity.set(accountId, { activeSessions: 0, lastSeenAt: null })
+    }
+    for (const session of this.sessions.values()) {
+      const account = activity.get(session.accountId)
+      if (account === undefined) continue
+      account.activeSessions += 1
+      account.lastSeenAt = account.lastSeenAt === null
+        ? session.lastSeenAt
+        : Math.max(account.lastSeenAt, session.lastSeenAt)
+    }
+    return Array.from(this.accounts.values(), account => ({
+      ...publicAccount(account),
+      ...(activity.get(account.id) ?? { activeSessions: 0, lastSeenAt: null }),
+    }))
   }
 
   accountPasswordCredentials(accountId: AccountId): { readonly username: string; readonly passwordHash: string } | undefined {

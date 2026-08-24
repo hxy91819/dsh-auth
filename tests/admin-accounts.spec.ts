@@ -111,12 +111,42 @@ describe('trusted team account preview', () => {
 
     const member = await login(app.baseUrl, 'teammate', memberPassword)
     const session = await fetch(`${app.baseUrl}/auth/session`, { headers: { cookie: member } })
-    const body = await session.json() as { user: { userId: string; roles: string[] }; trustedTeamPreview: boolean }
+    const body = await session.json() as {
+      user: { userId: string; roles: string[] }
+      trustedTeamPreview: boolean
+      team: {
+        accounts: {
+          username: string
+          role: string
+          status: string
+          activeSessions: number
+          lastSeenAt: string | null
+          current: boolean
+        }[]
+      }
+    }
     expect(body).toMatchObject({
       user: { roles: ['member'] },
       trustedTeamPreview: true,
     })
     expect(body.user.userId).toMatch(/^acct_/u)
+    expect(body.team.accounts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        username: 'test-account',
+        role: 'admin',
+        status: 'active',
+        activeSessions: 1,
+        current: false,
+      }),
+      expect.objectContaining({
+        username: 'teammate',
+        role: 'member',
+        status: 'active',
+        activeSessions: 1,
+        current: true,
+      }),
+    ]))
+    expect(body.team.accounts.find(account => account.username === 'teammate')?.lastSeenAt).toMatch(/T/u)
 
     const verified = await fetch(`${app.baseUrl}/auth/verify`, { headers: { ...proxyHeaders(), cookie: member } })
     expect(verified.status).toBe(204)
@@ -126,6 +156,9 @@ describe('trusted team account preview', () => {
     const account = await fetch(`${app.baseUrl}/auth/account`, { headers: { cookie: member } })
     const accountHtml = await account.text()
     expect(accountHtml).toContain('Trusted team preview is enabled')
+    expect(accountHtml).toContain('Team activity')
+    expect(accountHtml).toContain('Current account')
+    expect(accountHtml).toContain('Active sessions: 1')
     expect(accountHtml).not.toContain('Manage team accounts')
 
     const forbidden = await fetch(`${app.baseUrl}/auth/admin/accounts`, {
@@ -138,12 +171,18 @@ describe('trusted team account preview', () => {
     expect(adminStillValid.status).toBe(204)
 
     const disablePage = await adminAccountsPage(app.baseUrl, admin)
+    expect(disablePage.html).toContain('test-account')
+    expect(disablePage.html).toContain('teammate')
+    expect(disablePage.html).toContain('Active sessions: 1')
     const disabled = await postAdminAccounts(app.baseUrl, admin, disablePage.csrfCookie, disablePage.html, {
       action: 'disable-member',
       accountId: body.user.userId,
     })
     expect(disabled.status).toBe(200)
-    expect(await disabled.text()).toContain('Member account disabled')
+    const disabledHtml = await disabled.text()
+    expect(disabledHtml).toContain('Member account disabled')
+    expect(disabledHtml).toContain('Disabled')
+    expect(disabledHtml).toContain('Active sessions: 0')
     expect((await fetch(`${app.baseUrl}/auth/verify`, { headers: { ...proxyHeaders(), cookie: member } })).status).toBe(401)
     expect((await fetch(`${app.baseUrl}/auth/verify`, { headers: { ...proxyHeaders(), cookie: admin } })).status).toBe(204)
 

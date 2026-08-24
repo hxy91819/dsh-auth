@@ -135,8 +135,44 @@ describe('unified administrator authentication state', () => {
   }, 30_000)
 })
 
-describe('persistent renewable sessions', () => {
+describe('persistent session activity', () => {
+  it('summarizes per-account browser activity and prunes expired sessions', async () => {
+    const credentials = await testCredentials()
+    const store = new SessionStore(testConfig(credentials, {
+      sessionTtlSeconds: 60,
+      idleTtlSeconds: 60,
+      sessionRenewalSeconds: 60,
+    }))
 
+    expect(store.setTrustedTeamPreview(true)).toBe('updated')
+    const member = store.createMemberAccount('teammate', credentials.hash, 1_000)
+    expect(member.result).toBe('created')
+    const memberId = member.account?.id
+    if (memberId === undefined) throw new Error('member account was not created')
+    store.create(1_000, 'password', 'admin')
+    store.create(2_000, 'password', memberId)
+
+    expect(store.listAccountActivity(3_000)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'admin',
+        activeSessions: 1,
+        lastSeenAt: 1_000,
+      }),
+      expect.objectContaining({
+        id: memberId,
+        username: 'teammate',
+        activeSessions: 1,
+        lastSeenAt: 2_000,
+      }),
+    ]))
+    expect(store.listAccountActivity(70_000)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'admin', activeSessions: 0, lastSeenAt: null }),
+      expect.objectContaining({ id: memberId, activeSessions: 0, lastSeenAt: null }),
+    ]))
+  }, 30_000)
+})
+
+describe('persistent renewable sessions', () => {
   it('survives an application restart, renews after activity, and persists logout revocation', async () => {
     const credentials = await testCredentials()
     const root = mkdtempSync(join(tmpdir(), 'dsh-auth-session-'))

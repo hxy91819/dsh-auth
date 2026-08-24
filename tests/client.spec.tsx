@@ -32,6 +32,7 @@ const copy = {
   'account.admin': '管理员',
   'account.member': '成员',
   'account.preview': '共享权限预览',
+  'account.online': '在线账号',
   'account.authorPrefix': '发言人',
 } as const
 
@@ -207,11 +208,21 @@ describe('browser account identity affordance', () => {
       authenticated: true,
       user: { userId: 'acct_test', username: 'teammate', roles: ['member'] },
       trustedTeamPreview: true,
+      team: { accounts: [{
+        id: 'acct_test',
+        username: 'teammate',
+        role: 'member',
+        status: 'active',
+        activeSessions: 1,
+        lastSeenAt: '2026-08-24T12:00:00.000Z',
+        current: true,
+      }] },
     }), { status: 200 })))
 
     await expect(fetchCurrentAccount(fetcher)).resolves.toMatchObject({
       user: { userId: 'acct_test', username: 'teammate', roles: ['member'] },
       trustedTeamPreview: true,
+      team: { accounts: [{ activeSessions: 1, current: true }] },
     })
     expect(fetcher).toHaveBeenCalledWith('/identity/session', expect.objectContaining({
       credentials: 'same-origin',
@@ -225,6 +236,26 @@ describe('browser account identity affordance', () => {
       authenticated: true as const,
       user: { userId: 'acct_test', username: 'teammate', roles: ['member'] },
       trustedTeamPreview: true,
+      team: { accounts: [
+        {
+          id: 'admin',
+          username: 'admin',
+          role: 'admin',
+          status: 'active',
+          activeSessions: 1,
+          lastSeenAt: '2026-08-24T12:00:00.000Z',
+          current: false,
+        },
+        {
+          id: 'acct_test',
+          username: 'teammate',
+          role: 'member',
+          status: 'active',
+          activeSessions: 1,
+          lastSeenAt: '2026-08-24T12:00:01.000Z',
+          current: true,
+        },
+      ] },
     }))
     const openAccount = vi.fn()
     await act(async () => {
@@ -234,6 +265,7 @@ describe('browser account identity affordance', () => {
     expect(container.querySelector('.dsh-auth-account-name')?.textContent).toBe('teammate')
     expect(container.querySelector('.dsh-auth-account-meta')?.textContent).toContain('成员')
     expect(container.querySelector('.dsh-auth-account-meta')?.textContent).toContain('共享权限预览')
+    expect(container.querySelector('.dsh-auth-account-meta')?.textContent).toContain('2 在线账号')
     act(() => {
       container.querySelector('button')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })

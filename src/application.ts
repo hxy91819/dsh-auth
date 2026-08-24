@@ -47,7 +47,7 @@ import {
 import { resolveUiPreferences } from './preferences.js'
 import type { HarnessUiSettings, UiPreferences } from './preferences.js'
 import { SessionStore } from './session.js'
-import type { SessionAuthentication } from './session.js'
+import type { PublicAccountActivity, SessionAuthentication } from './session.js'
 import { TOKEN_BOOTSTRAP_FILE, tokenBootstrapSource } from './token-bootstrap.js'
 
 /** HTTP authentication application mounted into the DSH WebServer. */
@@ -289,19 +289,24 @@ export class AuthApplication {
       write(res, 405, 'method not allowed', { allow: 'GET', 'cache-control': 'no-store' })
       return
     }
-    const authenticated = this.sessions.authenticate(req, this.now())
+    const now = this.now()
+    const authenticated = this.sessions.authenticate(req, now)
     if (authenticated === undefined) {
       writeJson(res, 401, { authenticated: false })
       return
     }
     const { session } = authenticated
+    const accountMode = this.sessions.accountMode()
     writeJson(res, 200, {
       authenticated: true,
       user: session.user,
-      accountMode: this.sessions.accountMode(),
-      trustedTeamPreview: this.sessions.accountMode() === 'trusted-team-preview',
+      accountMode,
+      trustedTeamPreview: accountMode === 'trusted-team-preview',
       createdAt: new Date(session.createdAt).toISOString(),
       expiresAt: new Date(session.expiresAt).toISOString(),
+      ...(accountMode === 'trusted-team-preview'
+        ? { team: this.teamActivityDocument(session.accountId, now) }
+        : {}),
     }, this.renewalHeaders(authenticated))
   }
 
@@ -330,12 +335,14 @@ export class AuthApplication {
       return
     }
     const preferences = resolveUiPreferences(req, this.readHarnessUiSettings())
-    const authenticated = this.sessions.authenticate(req, this.now())
+    const now = this.now()
+    const authenticated = this.sessions.authenticate(req, now)
     if (authenticated === undefined) {
       const target = encodeURIComponent(`${this.config.basePath}/account`)
       redirect(res, `${this.config.basePath}/login?returnTo=${target}`)
       return
     }
+    const accountMode = this.sessions.accountMode()
     const csrf = this.issueCsrf()
     writeHtml(res, 200, accountPage(
       this.config.basePath,
@@ -345,13 +352,51 @@ export class AuthApplication {
       authenticated.session.accountId === 'admin'
         ? this.sessions.administratorConfigured()
         : this.sessions.accountPasswordCredentials(authenticated.session.accountId) !== undefined,
-      this.sessions.accountMode(),
+      accountMode,
+      accountMode === 'trusted-team-preview' ? this.sessions.listAccountActivity(now) : [],
     ), {
       'set-cookie': [
         ...this.renewalCookies(authenticated),
         this.cookie(this.cookieNames.csrf, csrf.value, 10 * 60),
       ],
     })
+  }
+
+  private teamActivityDocument(currentAccountId: string, now: number): {
+    readonly accounts: readonly {
+      readonly id: string
+      readonly username: string
+      readonly role: string
+      readonly status: string
+      readonly activeSessions: number
+      readonly lastSeenAt: string | null
+      readonly current: boolean
+    }[]
+  } {
+    return {
+      accounts: this.sessions.listAccountActivity(now).map(account =>
+        this.teamAccountDocument(account, currentAccountId)),
+    }
+  }
+
+  private teamAccountDocument(account: PublicAccountActivity, currentAccountId: string): {
+    readonly id: string
+    readonly username: string
+    readonly role: string
+    readonly status: string
+    readonly activeSessions: number
+    readonly lastSeenAt: string | null
+    readonly current: boolean
+  } {
+    return {
+      id: account.id,
+      username: account.username ?? 'admin',
+      role: account.role,
+      status: account.status,
+      activeSessions: account.activeSessions,
+      lastSeenAt: account.lastSeenAt === null ? null : new Date(account.lastSeenAt).toISOString(),
+      current: account.id === currentAccountId,
+    }
   }
 
   private async logout(req: IncomingMessage, res: ServerResponse): Promise<void> {

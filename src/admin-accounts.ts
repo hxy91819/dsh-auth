@@ -224,7 +224,8 @@ function renderAccountManagement(
     csrf.token,
     preferences,
     ctx.sessions.accountMode(),
-    ctx.sessions.listAccounts(),
+    ctx.sessions.listAccountActivity(ctx.now()),
+    authenticated.session.accountId,
     message,
   ), {
     'set-cookie': [

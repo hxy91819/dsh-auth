@@ -1,6 +1,6 @@
 import type { UiLanguage, UiPreferences } from './preferences.js'
 import type { AccountMode } from './auth-state.js'
-import type { AuthSession, PublicAccount } from './session.js'
+import type { AuthSession, PublicAccount, PublicAccountActivity } from './session.js'
 
 function escapeHtml(value: string): string {
   return value
@@ -60,6 +60,11 @@ interface UiCopy {
   readonly teamDisable: string
   readonly teamCreateMember: string
   readonly teamMembers: string
+  readonly teamActivity: string
+  readonly activeSessions: string
+  readonly lastSeen: string
+  readonly neverSeen: string
+  readonly currentAccount: string
   readonly teamStatus: string
   readonly teamCreated: string
   readonly teamEnabled: string
@@ -130,6 +135,11 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     teamDisable: '关闭可信团队预览',
     teamCreateMember: '创建成员账号',
     teamMembers: '成员',
+    teamActivity: '团队活动',
+    activeSessions: '活跃会话',
+    lastSeen: '最近活动',
+    neverSeen: '暂无活动',
+    currentAccount: '当前账号',
     teamStatus: '状态',
     teamCreated: '成员账号已创建。',
     teamEnabled: '可信团队预览已开启。',
@@ -198,6 +208,11 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     teamDisable: 'Disable trusted team preview',
     teamCreateMember: 'Create member account',
     teamMembers: 'Members',
+    teamActivity: 'Team activity',
+    activeSessions: 'Active sessions',
+    lastSeen: 'Last seen',
+    neverSeen: 'No activity yet',
+    currentAccount: 'Current account',
     teamStatus: 'Status',
     teamCreated: 'Member account created.',
     teamEnabled: 'Trusted team preview is enabled.',
@@ -398,8 +413,13 @@ dd { margin: 0; overflow-wrap: anywhere; text-align: right; }
 .account-list { margin-top: 16px; border: 1px solid var(--border-l2); border-radius: 16px; overflow: hidden; }
 .account-row { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--border-l2); }
 .account-row:last-child { border-bottom: 0; }
+.account-row-current { background: color-mix(in srgb, var(--dsw-static-deepseek-500) 8%, transparent); }
+.account-main { display: flex; gap: 12px; align-items: center; min-width: 0; }
+.account-avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--bg-control-active); color: var(--label-primary); display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; font-size: 13px; font-weight: 600; line-height: 1; }
+.account-copy { min-width: 0; }
 .account-name { font-size: 14px; line-height: 22px; overflow-wrap: anywhere; }
-.account-meta { color: var(--label-tertiary); font-size: 12px; line-height: 18px; }
+.account-meta { color: var(--label-tertiary); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
+.account-badge { display: inline-flex; align-items: center; margin-left: 8px; padding: 2px 7px; border: 1px solid var(--border-l2); border-radius: 999px; color: var(--label-secondary); background: var(--bg-control); font-size: 11px; line-height: 16px; vertical-align: 1px; }
 .compact-form { display: inline; }
 .compact-button { width: auto; min-height: 34px; margin-top: 0; padding: 6px 12px; border-radius: 10px; }
 .danger { color: var(--error-label); border-color: color-mix(in srgb, var(--error-label) 28%, transparent); background: transparent; }
@@ -480,6 +500,7 @@ export function accountPage(
   preferences: UiPreferences,
   configured = true,
   accountMode: AccountMode = 'single',
+  accounts: readonly PublicAccountActivity[] = [],
 ): string {
   const copy = COPY[preferences.language]
   const roles = session.user.roles.join(', ')
@@ -490,6 +511,10 @@ export function accountPage(
     : ''
   const manage = session.user.roles.includes('admin')
     ? `<a class="button secondary" href="${escapeHtml(basePath)}/admin/accounts">${escapeHtml(copy.manageAccounts)}</a>`
+    : ''
+  const teamActivity = accountMode === 'trusted-team-preview'
+    ? `<h2 class="section-title">${escapeHtml(copy.teamActivity)}</h2>
+      <div class="account-list">${accountRows(basePath, csrfToken, accounts, copy, session.accountId, false)}</div>`
     : ''
   return document(copy.accountTitle, `<section class="content">
     <h1>${escapeHtml(copy.accountTitle)}</h1>
@@ -502,6 +527,7 @@ export function accountPage(
       <div class="detail"><dt>${escapeHtml(copy.roles)}</dt><dd>${escapeHtml(roles)}</dd></div>
       <div class="detail"><dt>${escapeHtml(copy.accountMode)}</dt><dd>${escapeHtml(modeLabel)}</dd></div>
     </dl></div>
+    ${teamActivity}
     ${configured ? `<a class="button secondary" href="${escapeHtml(basePath)}/admin/password">${escapeHtml(copy.resetPassword)}</a>` : ''}
     ${manage}
     <a class="button secondary" href="/">${escapeHtml(copy.returnToHarness)}</a>
@@ -518,11 +544,38 @@ function accountStatusLabel(copy: UiCopy, status: PublicAccount['status']): stri
   return copy.pending
 }
 
-function accountRows(basePath: string, csrfToken: string, accounts: readonly PublicAccount[], copy: UiCopy): string {
+function accountInitial(username: string): string {
+  return Array.from(username.trim() || '?')[0]?.toLocaleUpperCase() ?? '?'
+}
+
+function formatInstant(value: number | null, copy: UiCopy): string {
+  return value === null ? copy.neverSeen : new Date(value).toISOString()
+}
+
+function accountMeta(account: PublicAccountActivity, copy: UiCopy): string {
+  const status = accountStatusLabel(copy, account.status)
+  return [
+    account.id,
+    account.role,
+    status,
+    `${copy.activeSessions}: ${String(account.activeSessions)}`,
+    `${copy.lastSeen}: ${formatInstant(account.lastSeenAt, copy)}`,
+  ].join(' · ')
+}
+
+function accountRows(
+  basePath: string,
+  csrfToken: string,
+  accounts: readonly PublicAccountActivity[],
+  copy: UiCopy,
+  currentAccountId?: string,
+  includeActions = true,
+): string {
   const rows = accounts.map((account) => {
     const username = account.username ?? 'admin'
-    const status = accountStatusLabel(copy, account.status)
-    const action = account.role === 'member' && account.status === 'active'
+    const current = account.id === currentAccountId
+    const currentBadge = current ? `<span class="account-badge">${escapeHtml(copy.currentAccount)}</span>` : ''
+    const action = includeActions && account.role === 'member' && account.status === 'active'
       ? `<form class="compact-form" method="post" action="${escapeHtml(basePath)}/admin/accounts">
           <input type="hidden" name="csrf" value="${escapeHtml(csrfToken)}">
           <input type="hidden" name="action" value="disable-member">
@@ -530,10 +583,13 @@ function accountRows(basePath: string, csrfToken: string, accounts: readonly Pub
           <button class="button secondary danger compact-button" type="submit">${escapeHtml(copy.disableMember)}</button>
         </form>`
       : ''
-    return `<div class="account-row">
-      <div>
-        <div class="account-name">${escapeHtml(username)}</div>
-        <div class="account-meta">${escapeHtml(account.id)} · ${escapeHtml(account.role)} · ${escapeHtml(status)}</div>
+    return `<div class="account-row${current ? ' account-row-current' : ''}">
+      <div class="account-main">
+        <div class="account-avatar" aria-hidden="true">${escapeHtml(accountInitial(username))}</div>
+        <div class="account-copy">
+          <div class="account-name">${escapeHtml(username)}${currentBadge}</div>
+          <div class="account-meta">${escapeHtml(accountMeta(account, copy))}</div>
+        </div>
       </div>
       <div>${action}</div>
     </div>`
@@ -547,7 +603,8 @@ export function accountManagementPage(
   csrfToken: string,
   preferences: UiPreferences,
   accountMode: AccountMode,
-  accounts: readonly PublicAccount[],
+  accounts: readonly PublicAccountActivity[],
+  currentAccountId: string,
   message?: AccountManagementMessage,
 ): string {
   const copy = COPY[preferences.language]
@@ -599,7 +656,7 @@ export function accountManagementPage(
     ${modeAction}
     ${createMember}
     <h2 class="section-title">${escapeHtml(copy.teamMembers)}</h2>
-    <div class="account-list">${accountRows(basePath, csrfToken, accounts, copy)}</div>
+    <div class="account-list">${accountRows(basePath, csrfToken, accounts, copy, currentAccountId)}</div>
     <a class="button secondary" href="${escapeHtml(basePath)}/account">${escapeHtml(copy.accountTitle)}</a>
     <a class="button secondary" href="/">${escapeHtml(copy.returnToHarness)}</a>
   </section>`, preferences)

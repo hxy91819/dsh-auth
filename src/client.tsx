@@ -28,6 +28,7 @@ const zh = {
   'account.admin': '管理员',
   'account.member': '成员',
   'account.preview': '共享权限预览',
+  'account.online': '在线账号',
   'account.authorPrefix': '发言人',
 } as const
 
@@ -48,6 +49,7 @@ const en = {
   'account.admin': 'Admin',
   'account.member': 'Member',
   'account.preview': 'Shared-authority preview',
+  'account.online': 'online accounts',
   'account.authorPrefix': 'Author',
 } as const satisfies Record<AuthLocaleKey, string>
 
@@ -77,6 +79,17 @@ interface CurrentAccountDocument {
     readonly roles: readonly string[]
   }
   readonly trustedTeamPreview?: boolean
+  readonly team?: {
+    readonly accounts: readonly {
+      readonly id: string
+      readonly username: string
+      readonly role: string
+      readonly status: string
+      readonly activeSessions: number
+      readonly lastSeenAt: string | null
+      readonly current: boolean
+    }[]
+  }
 }
 
 interface CurrentAccountInjected {
@@ -98,6 +111,8 @@ interface PromptPayloadShape {
   readonly content?: unknown
   readonly [key: string]: unknown
 }
+
+type TeamAccountDocument = NonNullable<CurrentAccountDocument['team']>['accounts'][number]
 
 export type LogoutSettingsRowProps = PropsLocale<'dsh-auth'> & LogoutSettingsInjected
 
@@ -165,6 +180,7 @@ function parseCurrentAccount(value: unknown): CurrentAccountDocument {
   ) {
     throw new Error('invalid session response')
   }
+  const team = parseTeam(record.team)
   return {
     authenticated: true,
     user: {
@@ -173,7 +189,37 @@ function parseCurrentAccount(value: unknown): CurrentAccountDocument {
       roles: userRecord.roles,
     },
     ...(record.trustedTeamPreview === true ? { trustedTeamPreview: true } : {}),
+    ...(team === undefined ? {} : { team }),
   }
+}
+
+function parseTeam(value: unknown): CurrentAccountDocument['team'] | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const accounts = (value as { readonly accounts?: unknown }).accounts
+  if (!Array.isArray(accounts)) return undefined
+  const parsed = accounts.flatMap((account): TeamAccountDocument[] => {
+    if (typeof account !== 'object' || account === null) return []
+    const record = account as Record<string, unknown>
+    if (
+      typeof record.id !== 'string'
+      || typeof record.username !== 'string'
+      || typeof record.role !== 'string'
+      || typeof record.status !== 'string'
+      || typeof record.activeSessions !== 'number'
+      || (record.lastSeenAt !== null && typeof record.lastSeenAt !== 'string')
+      || typeof record.current !== 'boolean'
+    ) return []
+    return [{
+      id: record.id,
+      username: record.username,
+      role: record.role,
+      status: record.status,
+      activeSessions: record.activeSessions,
+      lastSeenAt: record.lastSeenAt,
+      current: record.current,
+    }]
+  })
+  return { accounts: parsed }
 }
 
 function authBasePath(documentRef: Document): string {
@@ -330,6 +376,12 @@ function accountRoleLabel(account: CurrentAccountDocument | undefined, t: PropsL
   return account.user.roles.includes('admin') ? t('account.admin') : t('account.member')
 }
 
+function onlineAccountLabel(account: CurrentAccountDocument | undefined, t: PropsLocale<'dsh-auth'>['t']): string | undefined {
+  const online = account?.team?.accounts.filter(candidate =>
+    candidate.status === 'active' && candidate.activeSessions > 0).length
+  return online === undefined ? undefined : `${String(online)} ${t('account.online')}`
+}
+
 function shouldAttributePrompt(channel: string, endpoint: string): boolean {
   return channel === '/api' && (endpoint === 'session.prompt' || endpoint === 'subagent.prompt')
 }
@@ -452,6 +504,7 @@ export function CurrentAccountFooter({
   const meta = [
     accountRoleLabel(account, t),
     account?.trustedTeamPreview === true ? t('account.preview') : undefined,
+    onlineAccountLabel(account, t),
   ].filter((value): value is string => value !== undefined).join(' · ')
   return (
     <button
