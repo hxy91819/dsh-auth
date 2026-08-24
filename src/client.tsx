@@ -1,5 +1,5 @@
 /** Browser half: Settings password-reset and sign-out rows. */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -8,7 +8,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { SidebarFooterActionOwnerProps } from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-general/client'
-import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
+import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 
 const NS = 'dsh-auth'
 const STYLE_PLUGIN_ID = 'dsh-auth'
@@ -35,6 +35,8 @@ const zh = {
   'teamDock.title': '多人协作预览',
   'teamDock.shared': '共享会话权限',
   'teamDock.promptStamped': '发言会标记为',
+  'teamDock.participants': '当前会话参与者',
+  'teamDock.waiting': '等待首次会话活动',
 } as const
 
 type AuthLocaleKey = keyof typeof zh
@@ -59,6 +61,8 @@ const en = {
   'teamDock.title': 'Trusted team preview',
   'teamDock.shared': 'Shared session authority',
   'teamDock.promptStamped': 'Prompts will be stamped as',
+  'teamDock.participants': 'Session participants',
+  'teamDock.waiting': 'Waiting for first session activity',
 } as const satisfies Record<AuthLocaleKey, string>
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -98,15 +102,31 @@ interface CurrentAccountDocument {
       readonly current: boolean
     }[]
   }
+  readonly collaboration?: {
+    readonly sessionId: string
+    readonly createdAt: string
+    readonly lastSeenAt: string
+    readonly participants: readonly {
+      readonly id: string
+      readonly username: string
+      readonly role: string
+      readonly status: string
+      readonly firstSeenAt: string
+      readonly lastSeenAt: string
+      readonly promptCount: number
+      readonly current: boolean
+    }[]
+  }
 }
 
 interface CurrentAccountInjected {
-  readonly fetchAccount: () => Promise<CurrentAccountDocument | undefined>
+  readonly fetchAccount: (sessionId?: string) => Promise<CurrentAccountDocument | undefined>
   readonly openAccount: () => void
 }
 
 interface AccountIdentityInjected {
-  readonly fetchAccount: () => Promise<CurrentAccountDocument | undefined>
+  readonly fetchAccount: (sessionId?: string) => Promise<CurrentAccountDocument | undefined>
+  readonly recordSessionActivity: (sessionId: string, activity: CollaborationActivity) => Promise<CurrentAccountDocument['collaboration'] | undefined>
 }
 
 interface LogoutSettingsInjected {
@@ -125,6 +145,8 @@ interface PromptPayloadShape {
 }
 
 type TeamAccountDocument = NonNullable<CurrentAccountDocument['team']>['accounts'][number]
+type SessionParticipantDocument = NonNullable<CurrentAccountDocument['collaboration']>['participants'][number]
+type CollaborationActivity = 'prompt' | 'view'
 
 export type LogoutSettingsRowProps = PropsLocale<'dsh-auth'> & LogoutSettingsInjected
 
@@ -139,7 +161,10 @@ export type CurrentAccountFooterProps =
   & SidebarFooterActionOwnerProps
   & CurrentAccountInjected
 
-export type TrustedTeamDockProps = PropsLocale<'dsh-auth'> & AccountIdentityInjected
+export type TrustedTeamDockProps =
+  & PropsLocale<'dsh-auth'>
+  & PropsRuntime<'conversation.input.dock'>
+  & AccountIdentityInjected
 
 interface SettingsActionRowProps {
   readonly title: string
@@ -176,6 +201,7 @@ const CLIENT_CSS = `
 .dsh-auth-team-dock-desc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}
 .dsh-auth-team-dock-desc strong{font-weight:600;color:var(--dsw-alias-label-primary)}
 .dsh-auth-team-dock-pill{border:1px solid var(--dsw-alias-border-l2);border-radius:999px;color:var(--dsw-alias-label-secondary);white-space:nowrap;padding:2px 8px;font-size:11px;line-height:16px;flex:0 0 auto}
+.dsh-auth-team-dock-people{white-space:nowrap;color:var(--dsw-alias-label-tertiary)}
 `
 
 function parseCsrf(value: unknown): CsrfDocument {
@@ -202,6 +228,7 @@ function parseCurrentAccount(value: unknown): CurrentAccountDocument {
     throw new Error('invalid session response')
   }
   const team = parseTeam(record.team)
+  const collaboration = parseCollaboration(record.collaboration)
   return {
     authenticated: true,
     user: {
@@ -211,6 +238,7 @@ function parseCurrentAccount(value: unknown): CurrentAccountDocument {
     },
     ...(record.trustedTeamPreview === true ? { trustedTeamPreview: true } : {}),
     ...(team === undefined ? {} : { team }),
+    ...(collaboration === undefined ? {} : { collaboration }),
   }
 }
 
@@ -244,6 +272,50 @@ function parseTeam(value: unknown): CurrentAccountDocument['team'] | undefined {
     }]
   })
   return { accounts: parsed }
+}
+
+function parseCollaboration(value: unknown): CurrentAccountDocument['collaboration'] | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const record = value as Record<string, unknown>
+  if (
+    typeof record.sessionId !== 'string'
+    || typeof record.createdAt !== 'string'
+    || typeof record.lastSeenAt !== 'string'
+    || !Array.isArray(record.participants)
+  ) return undefined
+  const participants = record.participants.flatMap((participant): SessionParticipantDocument[] => {
+    if (typeof participant !== 'object' || participant === null) return []
+    const participantRecord = participant as Record<string, unknown>
+    const promptCount = participantRecord.promptCount
+    if (
+      typeof participantRecord.id !== 'string'
+      || typeof participantRecord.username !== 'string'
+      || typeof participantRecord.role !== 'string'
+      || typeof participantRecord.status !== 'string'
+      || typeof participantRecord.firstSeenAt !== 'string'
+      || typeof participantRecord.lastSeenAt !== 'string'
+      || typeof promptCount !== 'number'
+      || !Number.isSafeInteger(promptCount)
+      || promptCount < 0
+      || typeof participantRecord.current !== 'boolean'
+    ) return []
+    return [{
+      id: participantRecord.id,
+      username: participantRecord.username,
+      role: participantRecord.role,
+      status: participantRecord.status,
+      firstSeenAt: participantRecord.firstSeenAt,
+      lastSeenAt: participantRecord.lastSeenAt,
+      promptCount,
+      current: participantRecord.current,
+    }]
+  })
+  return {
+    sessionId: record.sessionId,
+    createdAt: record.createdAt,
+    lastSeenAt: record.lastSeenAt,
+    participants,
+  }
 }
 
 function authBasePath(documentRef: Document): string {
@@ -299,9 +371,11 @@ export function beginBrowserPasswordChange(
 export async function fetchCurrentAccount(
   fetcher: typeof fetch = window.fetch.bind(window),
   documentRef: Document = document,
+  sessionId?: string,
 ): Promise<CurrentAccountDocument | undefined> {
   const basePath = authBasePath(documentRef)
-  const response = await fetcher(`${basePath}/session`, {
+  const query = sessionId === undefined ? '' : `?sessionId=${encodeURIComponent(sessionId)}`
+  const response = await fetcher(`${basePath}/session${query}`, {
     method: 'GET',
     credentials: 'same-origin',
     cache: 'no-store',
@@ -310,6 +384,41 @@ export async function fetchCurrentAccount(
   if (response.status === 401) return undefined
   if (!response.ok) throw new Error(`session request failed with status ${String(response.status)}`)
   return parseCurrentAccount(await response.json())
+}
+
+/** Record lightweight trusted-team participation for one Harness session. */
+export async function recordBrowserSessionActivity(
+  sessionId: string,
+  activity: CollaborationActivity,
+  fetcher: typeof fetch = window.fetch.bind(window),
+  documentRef: Document = document,
+): Promise<CurrentAccountDocument['collaboration'] | undefined> {
+  const basePath = authBasePath(documentRef)
+  const csrfResponse = await fetcher(`${basePath}/csrf`, {
+    method: 'GET',
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: { accept: 'application/json' },
+  })
+  if (csrfResponse.status === 401) return undefined
+  if (!csrfResponse.ok) throw new Error(`CSRF request failed with status ${String(csrfResponse.status)}`)
+  const { csrf } = parseCsrf(await csrfResponse.json())
+  const response = await fetcher(`${basePath}/collaboration/session`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/x-www-form-urlencoded;charset=UTF-8',
+    },
+    body: new URLSearchParams({ csrf, sessionId, activity }),
+  })
+  if (response.status === 401) return undefined
+  if (!response.ok) throw new Error(`collaboration request failed with status ${String(response.status)}`)
+  const value = await response.json() as unknown
+  return typeof value === 'object' && value !== null
+    ? parseCollaboration((value as { readonly collaboration?: unknown }).collaboration)
+    : undefined
 }
 
 /** Open the authenticated account page on this origin. */
@@ -410,32 +519,36 @@ function onlineAccountLabel(account: CurrentAccountDocument | undefined, t: Prop
   return online === undefined ? undefined : `${String(online)} ${t('account.online')}`
 }
 
-function useAccountIdentity(fetchAccount: () => Promise<CurrentAccountDocument | undefined>) {
+function sessionParticipantLabel(
+  collaboration: CurrentAccountDocument['collaboration'],
+  t: PropsLocale<'dsh-auth'>['t'],
+): string {
+  const participants = collaboration?.participants ?? []
+  if (participants.length === 0) return t('teamDock.waiting')
+  const names = participants.slice(0, 4).map(participant => participant.username)
+  const suffix = participants.length > names.length ? ` +${String(participants.length - names.length)}` : ''
+  return `${t('teamDock.participants')}: ${names.join(', ')}${suffix}`
+}
+
+function useAccountIdentity(
+  fetchAccount: (sessionId?: string) => Promise<CurrentAccountDocument | undefined>,
+  sessionId?: string,
+) {
   const [account, setAccount] = useState<CurrentAccountDocument | undefined>()
   const [loading, setLoading] = useState(true)
+  const refresh = useCallback(() => {
+    fetchAccount(sessionId)
+      .then(setAccount)
+      .catch(() => { setAccount(undefined) })
+      .finally(() => { setLoading(false) })
+  }, [fetchAccount, sessionId])
   useEffect(() => {
-    let cancelled = false
-    const refresh = (): void => {
-      fetchAccount()
-        .then(value => {
-          if (!cancelled) setAccount(value)
-        })
-        .catch(() => {
-          if (!cancelled) setAccount(undefined)
-        })
-        .finally(() => {
-          if (!cancelled) setLoading(false)
-        })
-    }
     setLoading(true)
     refresh()
     const timer = window.setInterval(refresh, ACCOUNT_REFRESH_MS)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [fetchAccount])
-  return { account, loading }
+    return () => { window.clearInterval(timer) }
+  }, [refresh])
+  return { account, loading, refresh }
 }
 
 function shouldAttributePrompt(channel: string, endpoint: string): boolean {
@@ -465,6 +578,15 @@ function authorLine(account: CurrentAccountDocument): string {
 
 const AUTHOR_LINE_PATTERN = /^👤 .+(?: · (?:admin|member))?\n\n/u
 
+function promptSessionId(payload: unknown): string | undefined {
+  if (typeof payload !== 'object' || payload === null) return undefined
+  const record = payload as Record<string, unknown>
+  const candidate = typeof record.childSessionId === 'string'
+    ? record.childSessionId
+    : typeof record.sessionId === 'string' ? record.sessionId : undefined
+  return candidate === undefined || candidate.length === 0 ? undefined : candidate
+}
+
 /** Add a visible, durable author label to browser-submitted prompts. */
 export function attributePromptPayload(payload: unknown, account: CurrentAccountDocument | undefined): unknown {
   if (account?.trustedTeamPreview !== true || typeof payload !== 'object' || payload === null) return payload
@@ -492,22 +614,62 @@ export function attributePromptPayload(payload: unknown, account: CurrentAccount
 export function installPromptAttribution(
   connection: ConnectionHandle,
   fetchAccount: () => Promise<CurrentAccountDocument | undefined> = () => fetchCurrentAccount(),
+  recordActivity: (sessionId: string, activity: CollaborationActivity) => Promise<unknown> = () => Promise.resolve(undefined),
 ): () => void {
   const sessions = connection.api.sessions as { prompt: ConnectionHandle['api']['sessions']['prompt'] }
   const subagents = connection.api.subagents as { prompt: ConnectionHandle['api']['subagents']['prompt'] }
   const originalSessionPrompt = sessions.prompt.bind(connection.api.sessions)
   const originalSubagentPrompt = subagents.prompt.bind(connection.api.subagents)
-  const attributedPayload = async <Payload,>(payload: Payload): Promise<Payload> => {
+  let wrappedApiPromptDepth = 0
+  const attributedPayload = async <Payload,>(payload: Payload): Promise<{
+    readonly account: CurrentAccountDocument | undefined
+    readonly payload: Payload
+  }> => {
     let account: CurrentAccountDocument | undefined
     try {
       account = await fetchAccount()
     } catch {
       account = undefined
     }
-    return attributePromptPayload(payload, account) as Payload
+    return { account, payload: attributePromptPayload(payload, account) as Payload }
   }
-  const wrappedSessionPrompt: ConnectionHandle['api']['sessions']['prompt'] = async (payload, signal) => originalSessionPrompt(await attributedPayload(payload), signal)
-  const wrappedSubagentPrompt: ConnectionHandle['api']['subagents']['prompt'] = async (payload, signal) => originalSubagentPrompt(await attributedPayload(payload), signal)
+  const recordPromptActivity = async (
+    sessionId: string | undefined,
+    account: CurrentAccountDocument | undefined,
+  ): Promise<void> => {
+    if (sessionId === undefined || account?.trustedTeamPreview !== true) return
+    try {
+      await recordActivity(sessionId, 'prompt')
+    } catch {
+      // Collaboration metadata is best-effort; prompt delivery must not depend on it.
+    }
+  }
+  const wrappedSessionPrompt: ConnectionHandle['api']['sessions']['prompt'] = async (payload, signal) => {
+    const sessionId = promptSessionId(payload)
+    const attributed = await attributedPayload(payload)
+    wrappedApiPromptDepth += 1
+    let result: Awaited<ReturnType<ConnectionHandle['api']['sessions']['prompt']>>
+    try {
+      result = await originalSessionPrompt(attributed.payload, signal)
+    } finally {
+      wrappedApiPromptDepth -= 1
+    }
+    await recordPromptActivity(sessionId, attributed.account)
+    return result
+  }
+  const wrappedSubagentPrompt: ConnectionHandle['api']['subagents']['prompt'] = async (payload, signal) => {
+    const sessionId = promptSessionId(payload)
+    const attributed = await attributedPayload(payload)
+    wrappedApiPromptDepth += 1
+    let result: Awaited<ReturnType<ConnectionHandle['api']['subagents']['prompt']>>
+    try {
+      result = await originalSubagentPrompt(attributed.payload, signal)
+    } finally {
+      wrappedApiPromptDepth -= 1
+    }
+    await recordPromptActivity(sessionId, attributed.account)
+    return result
+  }
   sessions.prompt = wrappedSessionPrompt
   subagents.prompt = wrappedSubagentPrompt
   const rpc = connection.rpc
@@ -516,13 +678,14 @@ export function installPromptAttribution(
     if (!shouldAttributePrompt(channel, endpoint)) {
       return original(channel, endpoint, payload, signal)
     }
-    let account: CurrentAccountDocument | undefined
-    try {
-      account = await fetchAccount()
-    } catch {
-      account = undefined
+    if (wrappedApiPromptDepth > 0) {
+      return original(channel, endpoint, payload, signal)
     }
-    return original(channel, endpoint, attributePromptPayload(payload, account), signal)
+    const sessionId = promptSessionId(payload)
+    const attributed = await attributedPayload(payload)
+    const result = await original(channel, endpoint, attributed.payload, signal)
+    await recordPromptActivity(sessionId, attributed.account)
+    return result
   }
   rpc.call = wrapped
   return () => {
@@ -566,10 +729,29 @@ export function CurrentAccountFooter({
 }
 
 /** Render the per-session trusted-team identity strip above the composer. */
-export function TrustedTeamDock({ fetchAccount, t }: TrustedTeamDockProps) {
-  const { account } = useAccountIdentity(fetchAccount)
+export function TrustedTeamDock({
+  fetchAccount,
+  recordSessionActivity,
+  sessionId,
+  t,
+}: TrustedTeamDockProps) {
+  const { account, refresh } = useAccountIdentity(fetchAccount, sessionId)
+  const [recordedCollaboration, setRecordedCollaboration] = useState<CurrentAccountDocument['collaboration']>()
+  useEffect(() => {
+    if (account?.trustedTeamPreview !== true) return undefined
+    let cancelled = false
+    recordSessionActivity(sessionId, 'view')
+      .then(collaboration => {
+        if (cancelled) return
+        setRecordedCollaboration(collaboration)
+        refresh()
+      })
+      .catch(() => undefined)
+    return () => { cancelled = true }
+  }, [account?.trustedTeamPreview, recordSessionActivity, refresh, sessionId])
   if (account?.trustedTeamPreview !== true) return null
   const online = onlineAccountCount(account)
+  const collaboration = account.collaboration ?? recordedCollaboration
   return (
     <div className="dsh-auth-team-dock" role="status" aria-live="polite">
       <span className="dsh-auth-team-dock-avatar" aria-hidden="true">{accountInitial(account)}</span>
@@ -579,6 +761,7 @@ export function TrustedTeamDock({ fetchAccount, t }: TrustedTeamDockProps) {
         </span>
         <span className="dsh-auth-team-dock-desc">
           {t('teamDock.promptStamped')} <strong>{account.user.username} · {accountRoleLabel(account, t)}</strong>
+          <span className="dsh-auth-team-dock-people"> · {sessionParticipantLabel(collaboration, t)}</span>
         </span>
       </span>
       {online !== undefined && <span className="dsh-auth-team-dock-pill">{String(online)} {t('account.online')}</span>}
@@ -629,11 +812,16 @@ export function apply(ctx: ClientContext): void {
     order: 10,
     locale: NS,
     inject: (): AccountIdentityInjected => ({
-      fetchAccount: () => fetchCurrentAccount(),
+      fetchAccount: sessionId => fetchCurrentAccount(undefined, undefined, sessionId),
+      recordSessionActivity: (sessionId, activity) => recordBrowserSessionActivity(sessionId, activity),
     }),
   }, TrustedTeamDock))
   ctx.effect(
-    () => installPromptAttribution(ctx.connection, () => fetchCurrentAccount()),
+    () => installPromptAttribution(
+      ctx.connection,
+      () => fetchCurrentAccount(),
+      (sessionId, activity) => recordBrowserSessionActivity(sessionId, activity),
+    ),
     'dsh-auth: trusted-team prompt attribution',
   )
 }

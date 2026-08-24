@@ -13,6 +13,7 @@ import {
   installPromptAttribution,
   LogoutSettingsRow,
   PasswordSettingsRow,
+  recordBrowserSessionActivity,
   TrustedTeamDock,
 } from '../src/client.js'
 
@@ -38,6 +39,8 @@ const copy = {
   'teamDock.title': '多人协作预览',
   'teamDock.shared': '共享会话权限',
   'teamDock.promptStamped': '发言会标记为',
+  'teamDock.participants': '当前会话参与者',
+  'teamDock.waiting': '等待首次会话活动',
 } as const
 
 const t = (key: string): string => key in copy ? copy[key as keyof typeof copy] : key
@@ -222,14 +225,33 @@ describe('browser account identity affordance', () => {
         lastSeenAt: '2026-08-24T12:00:00.000Z',
         current: true,
       }] },
+      collaboration: {
+        sessionId: 'session-1',
+        createdAt: '2026-08-24T12:00:00.000Z',
+        lastSeenAt: '2026-08-24T12:00:02.000Z',
+        participants: [{
+          id: 'acct_test',
+          username: 'teammate',
+          role: 'member',
+          status: 'active',
+          firstSeenAt: '2026-08-24T12:00:00.000Z',
+          lastSeenAt: '2026-08-24T12:00:02.000Z',
+          promptCount: 1,
+          current: true,
+        }],
+      },
     }), { status: 200 })))
 
-    await expect(fetchCurrentAccount(fetcher)).resolves.toMatchObject({
+    await expect(fetchCurrentAccount(fetcher, document, 'session-1')).resolves.toMatchObject({
       user: { userId: 'acct_test', username: 'teammate', roles: ['member'] },
       trustedTeamPreview: true,
       team: { accounts: [{ activeSessions: 1, current: true }] },
+      collaboration: {
+        sessionId: 'session-1',
+        participants: [{ username: 'teammate', promptCount: 1, current: true }],
+      },
     })
-    expect(fetcher).toHaveBeenCalledWith('/identity/session', expect.objectContaining({
+    expect(fetcher).toHaveBeenCalledWith('/identity/session?sessionId=session-1', expect.objectContaining({
       credentials: 'same-origin',
       cache: 'no-store',
     }))
@@ -351,6 +373,55 @@ describe('browser account identity affordance', () => {
   })
 })
 
+describe('trusted-team collaboration browser protocol', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('records trusted-team session collaboration with CSRF protection', async () => {
+    const meta = document.createElement('meta')
+    meta.name = 'dsh-auth-base-path'
+    meta.content = '/identity'
+    document.head.append(meta)
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ csrf: 'csrf-token' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        recorded: true,
+        collaboration: {
+          sessionId: 'session-1',
+          createdAt: '2026-08-24T12:00:00.000Z',
+          lastSeenAt: '2026-08-24T12:00:02.000Z',
+          participants: [{
+            id: 'acct_test',
+            username: 'teammate',
+            role: 'member',
+            status: 'active',
+            firstSeenAt: '2026-08-24T12:00:00.000Z',
+            lastSeenAt: '2026-08-24T12:00:02.000Z',
+            promptCount: 1,
+            current: true,
+          }],
+        },
+      }), { status: 200 }))
+
+    await expect(recordBrowserSessionActivity('session-1', 'prompt', fetcher)).resolves.toMatchObject({
+      sessionId: 'session-1',
+      participants: [{ username: 'teammate', promptCount: 1 }],
+    })
+    expect(fetcher).toHaveBeenNthCalledWith(1, '/identity/csrf', expect.objectContaining({
+      credentials: 'same-origin',
+      cache: 'no-store',
+    }))
+    expect(fetcher).toHaveBeenNthCalledWith(2, '/identity/collaboration/session', expect.objectContaining({
+      method: 'POST',
+      credentials: 'same-origin',
+    }))
+    const submitted = fetcher.mock.calls[1]?.[1]
+    expect(submitted?.body).toBeInstanceOf(URLSearchParams)
+    if (!(submitted?.body instanceof URLSearchParams)) throw new Error('missing submitted form body')
+    expect(submitted.body.toString()).toBe('csrf=csrf-token&sessionId=session-1&activity=prompt')
+    meta.remove()
+  })
+})
+
 describe('trusted-team composer dock', () => {
   let container: HTMLDivElement
   let root: Root
@@ -367,7 +438,7 @@ describe('trusted-team composer dock', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders the current prompt author and active trusted-team count', async () => {
+  it('renders the current prompt author, active account count, and session participants', async () => {
     const fetchAccount = vi.fn(() => Promise.resolve({
       authenticated: true as const,
       user: { userId: 'acct_test', username: 'teammate', roles: ['member'] },
@@ -392,9 +463,44 @@ describe('trusted-team composer dock', () => {
           current: true,
         },
       ] },
+      collaboration: {
+        sessionId: 'session-1',
+        createdAt: '2026-08-24T12:00:00.000Z',
+        lastSeenAt: '2026-08-24T12:00:01.000Z',
+        participants: [
+          {
+            id: 'acct_test',
+            username: 'teammate',
+            role: 'member',
+            status: 'active',
+            firstSeenAt: '2026-08-24T12:00:00.000Z',
+            lastSeenAt: '2026-08-24T12:00:01.000Z',
+            promptCount: 1,
+            current: true,
+          },
+          {
+            id: 'admin',
+            username: 'admin',
+            role: 'admin',
+            status: 'active',
+            firstSeenAt: '2026-08-24T12:00:00.000Z',
+            lastSeenAt: '2026-08-24T12:00:00.000Z',
+            promptCount: 0,
+            current: false,
+          },
+        ],
+      },
     }))
+    const recordSessionActivity = vi.fn(() => Promise.resolve(undefined))
+    const props = {
+      fetchAccount,
+      recordSessionActivity,
+      sessionId: 'session-1',
+      t,
+    } as Parameters<typeof TrustedTeamDock>[0]
     await act(async () => {
-      root.render(<TrustedTeamDock fetchAccount={fetchAccount} t={t} />)
+      root.render(<TrustedTeamDock {...props} />)
+      await Promise.resolve()
       await Promise.resolve()
     })
 
@@ -402,7 +508,10 @@ describe('trusted-team composer dock', () => {
     expect(container.querySelector('.dsh-auth-team-dock-avatar')?.textContent).toBe('T')
     expect(container.querySelector('.dsh-auth-team-dock-title')?.textContent).toContain('多人协作预览')
     expect(container.querySelector('.dsh-auth-team-dock-desc')?.textContent).toContain('teammate · 成员')
+    expect(container.querySelector('.dsh-auth-team-dock-desc')?.textContent).toContain('当前会话参与者: teammate, admin')
     expect(container.querySelector('.dsh-auth-team-dock-pill')?.textContent).toBe('2 在线账号')
+    expect(fetchAccount).toHaveBeenCalledWith('session-1')
+    expect(recordSessionActivity).toHaveBeenCalledWith('session-1', 'view')
   })
 })
 
@@ -470,7 +579,8 @@ describe('trusted-team prompt attribution', () => {
       },
       rpc: { call: vi.fn() },
     } as unknown as ConnectionHandle
-    const dispose = installPromptAttribution(connection, () => Promise.resolve(account))
+    const recordActivity = vi.fn(() => Promise.resolve(undefined))
+    const dispose = installPromptAttribution(connection, () => Promise.resolve(account), recordActivity)
     await connection.api.sessions.prompt({
       sessionId: 'session-1',
       mode: 'queue',
@@ -490,6 +600,45 @@ describe('trusted-team prompt attribution', () => {
     expect(subagentPrompt).toHaveBeenCalledWith(expect.objectContaining({
       content: [{ type: 'text', text: '👤 mason · member\n\nreview this' }],
     }), undefined)
+    expect(recordActivity).toHaveBeenNthCalledWith(1, 'session-1', 'prompt')
+    expect(recordActivity).toHaveBeenNthCalledWith(2, 'child-session', 'prompt')
+  })
+
+  it('does not double-record when typed prompt APIs internally call prompt RPC endpoints', async () => {
+    const call = vi.fn(() => Promise.resolve({ ok: true as const, value: { accepted: true } }))
+    const holder: { connection?: ConnectionHandle } = {}
+    const sessionPrompt = vi.fn((
+      payload: Parameters<ConnectionHandle['api']['sessions']['prompt']>[0],
+      signal?: AbortSignal,
+    ) => {
+      const active = holder.connection
+      if (active === undefined) throw new Error('missing test connection')
+      return active.rpc.call('/api', 'session.prompt', payload, signal)
+        .then(() => ({ rpcId: 'rpc_session', result: { ok: true as const, value: { accepted: true as const } } }))
+    })
+    const connection = {
+      api: {
+        sessions: { prompt: sessionPrompt },
+        subagents: { prompt: vi.fn() },
+      },
+      rpc: { call },
+    } as unknown as ConnectionHandle
+    holder.connection = connection
+    const recordActivity = vi.fn(() => Promise.resolve(undefined))
+    const dispose = installPromptAttribution(connection, () => Promise.resolve(account), recordActivity)
+    await connection.api.sessions.prompt({
+      sessionId: 'session-1',
+      mode: 'queue',
+      content: [{ type: 'text', text: 'hello' }],
+    } as Parameters<ConnectionHandle['api']['sessions']['prompt']>[0])
+    dispose()
+
+    expect(call).toHaveBeenCalledTimes(1)
+    expect(call).toHaveBeenCalledWith('/api', 'session.prompt', expect.objectContaining({
+      content: [{ type: 'text', text: '👤 mason · member\n\nhello' }],
+    }), undefined)
+    expect(recordActivity).toHaveBeenCalledTimes(1)
+    expect(recordActivity).toHaveBeenCalledWith('session-1', 'prompt')
   })
 
   it('still wraps generic prompt RPC calls and leaves other endpoints unchanged', async () => {
@@ -501,7 +650,8 @@ describe('trusted-team prompt attribution', () => {
       },
       rpc: { call },
     } as unknown as ConnectionHandle
-    const dispose = installPromptAttribution(connection, () => Promise.resolve(account))
+    const recordActivity = vi.fn(() => Promise.resolve(undefined))
+    const dispose = installPromptAttribution(connection, () => Promise.resolve(account), recordActivity)
     await connection.rpc.call('/api', 'session.prompt', {
       sessionId: 'session-1',
       mode: 'queue',
@@ -514,5 +664,6 @@ describe('trusted-team prompt attribution', () => {
       content: [{ type: 'text', text: '👤 mason · member\n\nhello' }],
     }), undefined)
     expect(call).toHaveBeenNthCalledWith(2, '/api', 'session.list', {}, undefined)
+    expect(recordActivity).toHaveBeenCalledWith('session-1', 'prompt')
   })
 })

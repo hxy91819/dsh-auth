@@ -2,6 +2,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { handleAdminAccounts } from './admin-accounts.js'
 import { handleAdminPasswordChange } from './admin-password.js'
 import { BROWSER_BOOTSTRAP_FILE, browserBootstrapSource } from './browser-bootstrap.js'
+import {
+  collaborationDocument,
+  handleCollaborationSession,
+  optionalCollaborationSessionId,
+} from './collaboration.js'
 import type { ResolvedConfig } from './config.js'
 import { authCookie, cookieNames, parseCookies } from './cookies.js'
 import { constantTimeTextEqual, CookieSigner } from './crypto.js'
@@ -115,7 +120,11 @@ export class AuthApplication {
         return
       }
       if (path === `${this.config.basePath}/session`) {
-        this.session(req, res)
+        this.session(req, res, url)
+        return
+      }
+      if (path === `${this.config.basePath}/collaboration/session`) {
+        await this.handleCollaboration(req, res)
         return
       }
       if (path === `${this.config.basePath}/csrf`) {
@@ -284,7 +293,7 @@ export class AuthApplication {
     res.end(req.method === 'HEAD' ? undefined : browserBootstrapSource())
   }
 
-  private session(req: IncomingMessage, res: ServerResponse): void {
+  private session(req: IncomingMessage, res: ServerResponse, url: URL): void {
     if (req.method !== 'GET') {
       write(res, 405, 'method not allowed', { allow: 'GET', 'cache-control': 'no-store' })
       return
@@ -297,6 +306,10 @@ export class AuthApplication {
     }
     const { session } = authenticated
     const accountMode = this.sessions.accountMode()
+    const collaborationSessionId = optionalCollaborationSessionId(url.searchParams.get('sessionId'))
+    const collaboration = accountMode === 'trusted-team-preview' && collaborationSessionId !== undefined
+      ? collaborationDocument(this.sessions.sessionCollaboration(collaborationSessionId, session.accountId))
+      : undefined
     writeJson(res, 200, {
       authenticated: true,
       user: session.user,
@@ -307,6 +320,7 @@ export class AuthApplication {
       ...(accountMode === 'trusted-team-preview'
         ? { team: this.teamActivityDocument(session.accountId, now) }
         : {}),
+      ...(collaboration === undefined ? {} : { collaboration }),
     }, this.renewalHeaders(authenticated))
   }
 
@@ -682,6 +696,16 @@ export class AuthApplication {
     }))
   }
 
+  private handleCollaboration(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    return handleCollaborationSession(req, res, {
+      config: this.config,
+      sessions: this.sessions,
+      now: this.now,
+      validCsrf: (request, submitted) => this.validCsrf(request, submitted),
+      renewalHeaders: authenticated => this.renewalHeaders(authenticated),
+    })
+  }
+
   private clientId(req: IncomingMessage): string {
     return clientLogId(this.config.sessionSecret, clientAddress(req, this.config))
   }
@@ -690,7 +714,7 @@ export class AuthApplication {
     const suffix = path.startsWith(this.config.basePath) ? path.slice(this.config.basePath.length) : path
     return new Set([
       '', '/login', `/${TOKEN_BOOTSTRAP_FILE}`, '/token', `/${BROWSER_BOOTSTRAP_FILE}`,
-      '/session', '/csrf', '/account', '/admin/setup', '/admin/password', '/logout', '/verify',
+      '/session', '/collaboration/session', '/csrf', '/account', '/admin/setup', '/admin/password', '/logout', '/verify',
     ]).has(suffix) ? suffix || '/' : 'unknown'
   }
 

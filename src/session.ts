@@ -4,7 +4,9 @@ import {
   authStateSecretId,
   loadAuthState,
   MAX_AUTH_ACCOUNTS,
+  MAX_COLLABORATION_SESSIONS,
   MAX_STORED_SESSIONS,
+  parseCollaborationSessionId,
   persistAuthState,
   type AccountId,
   type AccountMode,
@@ -12,6 +14,7 @@ import {
   type AccountState,
   type AccountStatus,
   type AuthenticationMethod,
+  type StoredCollaborationSession,
   type StoredSession,
 } from './auth-state.js'
 import type { ResolvedConfig } from './config.js'
@@ -62,6 +65,26 @@ export interface PublicAccountActivity extends PublicAccount {
   readonly lastSeenAt: number | null
 }
 
+interface PublicSessionParticipant {
+  readonly id: AccountId
+  readonly username: string
+  readonly role: AccountRole
+  readonly status: AccountStatus
+  readonly firstSeenAt: number
+  readonly lastSeenAt: number
+  readonly promptCount: number
+  readonly current: boolean
+}
+
+export interface PublicSessionCollaboration {
+  readonly sessionId: string
+  readonly createdAt: number
+  readonly lastSeenAt: number
+  readonly participants: readonly PublicSessionParticipant[]
+}
+
+export type CollaborationActivity = 'prompt' | 'view'
+
 export interface PasswordLoginCredential {
   readonly accountId?: AccountId
   readonly username: string
@@ -80,6 +103,18 @@ function cloneSessions(sessions: ReadonlyMap<string, StoredSession>): Map<string
   return new Map(Array.from(sessions, ([token, session]) => [token, { ...session }]))
 }
 
+function cloneCollaboration(
+  collaboration: ReadonlyMap<string, StoredCollaborationSession>,
+): Map<string, StoredCollaborationSession> {
+  return new Map(Array.from(collaboration, ([sessionId, session]) => [
+    sessionId,
+    {
+      ...session,
+      participants: session.participants.map(participant => ({ ...participant })),
+    },
+  ]))
+}
+
 function newAccountId(): AccountId {
   return `acct_${randomBytes(16).toString('base64url')}` as AccountId
 }
@@ -92,6 +127,7 @@ function publicAccount(account: AccountState): PublicAccount {
 export class SessionStore {
   private readonly sessions = new Map<string, StoredSession>()
   private readonly accounts = new Map<AccountId, AccountState>()
+  private readonly collaboration = new Map<string, StoredCollaborationSession>()
   private readonly signer: CookieSigner
   private readonly cookieName: string
   private readonly secretId: string
@@ -105,6 +141,9 @@ export class SessionStore {
     this.mode = loaded.document.accountMode
     for (const account of loaded.document.accounts) this.accounts.set(account.id, account)
     for (const session of loaded.document.sessions) this.sessions.set(session.token, session)
+    for (const session of loaded.document.collaboration.sessions) {
+      this.collaboration.set(session.sessionId, session)
+    }
     const changed = this.prune(now()) || this.enforceCapacity()
     if (loaded.mustPersist || changed) this.persist()
   }
@@ -208,6 +247,54 @@ export class SessionStore {
       ...publicAccount(account),
       ...(activity.get(account.id) ?? { activeSessions: 0, lastSeenAt: null }),
     }))
+  }
+
+  sessionCollaboration(sessionId: string, currentAccountId: AccountId): PublicSessionCollaboration | undefined {
+    if (this.mode !== 'trusted-team-preview') return undefined
+    const normalizedSessionId = parseCollaborationSessionId(sessionId)
+    const session = this.collaboration.get(normalizedSessionId)
+    return session === undefined ? undefined : this.publicSessionCollaboration(session, currentAccountId)
+  }
+
+  recordSessionActivity(
+    sessionId: string,
+    currentSession: AuthSession,
+    now: number,
+    activity: CollaborationActivity,
+  ): PublicSessionCollaboration | undefined {
+    if (this.mode !== 'trusted-team-preview') return undefined
+    const normalizedSessionId = parseCollaborationSessionId(sessionId)
+    let view: PublicSessionCollaboration | undefined
+    this.mutate(() => {
+      while (this.collaboration.size >= MAX_COLLABORATION_SESSIONS && !this.collaboration.has(normalizedSessionId)) {
+        this.deleteOldestCollaboration()
+      }
+      let session = this.collaboration.get(normalizedSessionId)
+      if (session === undefined) {
+        session = {
+          sessionId: normalizedSessionId,
+          createdAt: now,
+          lastSeenAt: now,
+          participants: [],
+        }
+        this.collaboration.set(normalizedSessionId, session)
+      }
+      session.lastSeenAt = Math.max(session.lastSeenAt, now)
+      let participant = session.participants.find(entry => entry.accountId === currentSession.accountId)
+      if (participant === undefined) {
+        participant = {
+          accountId: currentSession.accountId,
+          firstSeenAt: now,
+          lastSeenAt: now,
+          promptCount: 0,
+        }
+        session.participants.push(participant)
+      }
+      participant.lastSeenAt = Math.max(participant.lastSeenAt, now)
+      if (activity === 'prompt') participant.promptCount = Math.min(Number.MAX_SAFE_INTEGER, participant.promptCount + 1)
+      view = this.publicSessionCollaboration(session, currentSession.accountId)
+    })
+    return view
   }
 
   accountPasswordCredentials(accountId: AccountId): { readonly username: string; readonly passwordHash: string } | undefined {
@@ -377,6 +464,32 @@ export class SessionStore {
     return { ...session, user: this.currentUser(account) }
   }
 
+  private publicSessionCollaboration(
+    session: StoredCollaborationSession,
+    currentAccountId: AccountId,
+  ): PublicSessionCollaboration {
+    const participants = session.participants.flatMap((participant): PublicSessionParticipant[] => {
+      const account = this.accounts.get(participant.accountId)
+      if (account === undefined) return []
+      return [{
+        id: account.id,
+        username: account.username ?? 'admin',
+        role: account.role,
+        status: account.status,
+        firstSeenAt: participant.firstSeenAt,
+        lastSeenAt: participant.lastSeenAt,
+        promptCount: participant.promptCount,
+        current: account.id === currentAccountId,
+      }]
+    }).sort((left, right) => right.lastSeenAt - left.lastSeenAt)
+    return {
+      sessionId: session.sessionId,
+      createdAt: session.createdAt,
+      lastSeenAt: session.lastSeenAt,
+      participants,
+    }
+  }
+
   private expired(session: StoredSession, now: number): boolean {
     return session.expiresAt <= now || session.lastSeenAt + this.config.idleTtlSeconds * 1000 <= now
   }
@@ -407,6 +520,18 @@ export class SessionStore {
         return
       }
     }
+  }
+
+  private deleteOldestCollaboration(): void {
+    let oldestSessionId: string | undefined
+    let oldestSeenAt = Infinity
+    for (const [sessionId, session] of this.collaboration) {
+      if (session.lastSeenAt < oldestSeenAt) {
+        oldestSessionId = sessionId
+        oldestSeenAt = session.lastSeenAt
+      }
+    }
+    if (oldestSessionId !== undefined) this.collaboration.delete(oldestSessionId)
   }
 
   private enforceCapacity(): boolean {
@@ -453,6 +578,7 @@ export class SessionStore {
     const mode = this.mode
     const accounts = cloneAccounts(this.accounts)
     const sessions = cloneSessions(this.sessions)
+    const collaboration = cloneCollaboration(this.collaboration)
     try {
       const result = operation()
       this.persist()
@@ -463,6 +589,8 @@ export class SessionStore {
       for (const [id, account] of accounts) this.accounts.set(id, account)
       this.sessions.clear()
       for (const [token, session] of sessions) this.sessions.set(token, session)
+      this.collaboration.clear()
+      for (const [sessionId, session] of collaboration) this.collaboration.set(sessionId, session)
       throw error
     }
   }
@@ -474,6 +602,7 @@ export class SessionStore {
       accountMode: this.mode,
       accounts: Array.from(this.accounts.values()),
       sessions: Array.from(this.sessions.values()),
+      collaboration: { sessions: Array.from(this.collaboration.values()) },
     })
   }
 }

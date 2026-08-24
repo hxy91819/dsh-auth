@@ -69,6 +69,16 @@ async function adminAccountsPage(baseUrl: string, session: string): Promise<{
   return { html, csrfCookie: cookiePair(page.headers, CSRF_COOKIE) }
 }
 
+async function csrf(baseUrl: string, session: string): Promise<{
+  readonly csrfToken: string
+  readonly csrfCookie: string
+}> {
+  const response = await fetch(`${baseUrl}/auth/csrf`, { headers: { cookie: session } })
+  expect(response.status).toBe(200)
+  const body = await response.json() as { csrf: string }
+  return { csrfToken: body.csrf, csrfCookie: cookiePair(response.headers, CSRF_COOKIE) }
+}
+
 function postAdminAccounts(
   baseUrl: string,
   session: string,
@@ -147,6 +157,60 @@ describe('trusted team account preview', () => {
       }),
     ]))
     expect(body.team.accounts.find(account => account.username === 'teammate')?.lastSeenAt).toMatch(/T/u)
+
+    const memberCsrf = await csrf(app.baseUrl, member)
+    const memberActivity = await fetch(`${app.baseUrl}/auth/collaboration/session`, {
+      method: 'POST',
+      headers: { ...proxyHeaders(), cookie: `${member}; ${memberCsrf.csrfCookie}` },
+      body: new URLSearchParams({
+        csrf: memberCsrf.csrfToken,
+        sessionId: 'harness-session-1',
+        activity: 'prompt',
+      }),
+    })
+    expect(memberActivity.status).toBe(200)
+    await expect(memberActivity.json()).resolves.toMatchObject({
+      recorded: true,
+      collaboration: {
+        sessionId: 'harness-session-1',
+        participants: [
+          expect.objectContaining({ username: 'teammate', promptCount: 1, current: true }),
+        ],
+      },
+    })
+
+    const adminView = await fetch(`${app.baseUrl}/auth/session?sessionId=harness-session-1`, {
+      headers: { cookie: admin },
+    })
+    expect(adminView.status).toBe(200)
+    await expect(adminView.json()).resolves.toMatchObject({
+      collaboration: {
+        sessionId: 'harness-session-1',
+        participants: [
+          expect.objectContaining({ username: 'teammate', promptCount: 1, current: false }),
+        ],
+      },
+    })
+
+    const adminCsrf = await csrf(app.baseUrl, admin)
+    const adminActivity = await fetch(`${app.baseUrl}/auth/collaboration/session`, {
+      method: 'POST',
+      headers: { ...proxyHeaders(), cookie: `${admin}; ${adminCsrf.csrfCookie}` },
+      body: new URLSearchParams({
+        csrf: adminCsrf.csrfToken,
+        sessionId: 'harness-session-1',
+        activity: 'view',
+      }),
+    })
+    expect(adminActivity.status).toBe(200)
+    await expect(adminActivity.json()).resolves.toMatchObject({
+      collaboration: {
+        participants: [
+          expect.objectContaining({ username: 'test-account', promptCount: 0, current: true }),
+          expect.objectContaining({ username: 'teammate', promptCount: 1, current: false }),
+        ],
+      },
+    })
 
     const verified = await fetch(`${app.baseUrl}/auth/verify`, { headers: { ...proxyHeaders(), cookie: member } })
     expect(verified.status).toBe(204)

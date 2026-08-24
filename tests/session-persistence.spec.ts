@@ -138,19 +138,20 @@ describe('unified administrator authentication state', () => {
 describe('persistent session activity', () => {
   it('summarizes per-account browser activity and prunes expired sessions', async () => {
     const credentials = await testCredentials()
-    const store = new SessionStore(testConfig(credentials, {
+    const config = testConfig(credentials, {
       sessionTtlSeconds: 60,
       idleTtlSeconds: 60,
       sessionRenewalSeconds: 60,
-    }))
+    })
+    const store = new SessionStore(config)
 
     expect(store.setTrustedTeamPreview(true)).toBe('updated')
     const member = store.createMemberAccount('teammate', credentials.hash, 1_000)
     expect(member.result).toBe('created')
     const memberId = member.account?.id
     if (memberId === undefined) throw new Error('member account was not created')
-    store.create(1_000, 'password', 'admin')
-    store.create(2_000, 'password', memberId)
+    const adminSession = store.create(1_000, 'password', 'admin')
+    const memberSession = store.create(2_000, 'password', memberId)
 
     expect(store.listAccountActivity(3_000)).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -165,6 +166,33 @@ describe('persistent session activity', () => {
         lastSeenAt: 2_000,
       }),
     ]))
+    expect(store.recordSessionActivity('session-1', memberSession.session, 3_000, 'prompt')).toMatchObject({
+      sessionId: 'session-1',
+      participants: [
+        expect.objectContaining({ id: memberId, username: 'teammate', promptCount: 1, current: true }),
+      ],
+    })
+    expect(store.recordSessionActivity('session-1', adminSession.session, 4_000, 'view')).toMatchObject({
+      sessionId: 'session-1',
+      participants: [
+        expect.objectContaining({ id: 'admin', promptCount: 0, current: true }),
+        expect.objectContaining({ id: memberId, promptCount: 1, current: false }),
+      ],
+    })
+    expect(store.sessionCollaboration('session-1', memberId)).toMatchObject({
+      participants: [
+        expect.objectContaining({ id: 'admin', current: false }),
+        expect.objectContaining({ id: memberId, current: true }),
+      ],
+    })
+    const restarted = new SessionStore(config)
+    expect(restarted.sessionCollaboration('session-1', memberId)).toMatchObject({
+      sessionId: 'session-1',
+      participants: [
+        expect.objectContaining({ id: 'admin', username: 'test-account', promptCount: 0 }),
+        expect.objectContaining({ id: memberId, username: 'teammate', promptCount: 1 }),
+      ],
+    })
     expect(store.listAccountActivity(70_000)).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'admin', activeSessions: 0, lastSeenAt: null }),
       expect.objectContaining({ id: memberId, activeSessions: 0, lastSeenAt: null }),

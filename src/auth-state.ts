@@ -24,8 +24,11 @@ const AUTH_STATE_VERSION = 3
 const MAX_AUTH_STATE_BYTES = 1024 * 1024
 const SESSION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u
 const ACCOUNT_ID_PATTERN = /^acct_[A-Za-z0-9_-]{22,}$/u
+const MAX_COLLABORATION_SESSION_ID_LENGTH = 256
 export const MAX_AUTH_ACCOUNTS = 256
 export const MAX_STORED_SESSIONS = 4096
+export const MAX_COLLABORATION_SESSIONS = 512
+const MAX_COLLABORATION_PARTICIPANTS = MAX_AUTH_ACCOUNTS
 
 export type AuthenticationMethod = 'password' | 'login-token'
 export type AccountMode = 'single' | 'trusted-team-preview'
@@ -61,6 +64,24 @@ export interface StoredSession {
   expiresAt: number
 }
 
+interface StoredCollaborationParticipant {
+  readonly accountId: AccountId
+  readonly firstSeenAt: number
+  lastSeenAt: number
+  promptCount: number
+}
+
+export interface StoredCollaborationSession {
+  readonly sessionId: string
+  readonly createdAt: number
+  lastSeenAt: number
+  participants: StoredCollaborationParticipant[]
+}
+
+interface StoredCollaborationState {
+  sessions: StoredCollaborationSession[]
+}
+
 interface StoredSessionV2 {
   readonly token: string
   readonly authenticationMethod: AuthenticationMethod
@@ -75,6 +96,7 @@ export interface AuthStateDocument {
   accountMode: AccountMode
   accounts: AccountState[]
   sessions: StoredSession[]
+  collaboration: StoredCollaborationState
 }
 
 export interface LoadedAuthState {
@@ -99,6 +121,19 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[], 
   }
 }
 
+function exactKeysWithOptional(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[],
+  label: string,
+): void {
+  const allowed = new Set([...required, ...optional])
+  const actual = Object.keys(value)
+  if (actual.some(key => !allowed.has(key)) || required.some(key => !(key in value))) {
+    throw new Error(`${label} contains unknown or missing fields`)
+  }
+}
+
 function timestamp(value: unknown, label: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`${label} must be a non-negative integer`)
   return value as number
@@ -119,6 +154,19 @@ function accountId(value: unknown, label: string): AccountId {
   if (value === 'admin') return 'admin'
   if (typeof value === 'string' && ACCOUNT_ID_PATTERN.test(value)) return value as AccountId
   throw new Error(`${label} is invalid`)
+}
+
+export function parseCollaborationSessionId(value: unknown, label = 'collaboration sessionId'): string {
+  if (
+    typeof value !== 'string'
+    || value.length === 0
+    || value.length > MAX_COLLABORATION_SESSION_ID_LENGTH
+    || value.trim() !== value
+    || /\p{C}/u.test(value)
+  ) {
+    throw new Error(`${label} is invalid`)
+  }
+  return value
 }
 
 function accountUsername(value: unknown, label: string): string | null {
@@ -238,6 +286,48 @@ function storedSession(value: unknown): StoredSession {
   return session
 }
 
+function storedCollaborationParticipant(value: unknown): StoredCollaborationParticipant {
+  const saved = object(value, 'collaboration participant')
+  exactKeys(saved, ['accountId', 'firstSeenAt', 'lastSeenAt', 'promptCount'], 'collaboration participant')
+  const participant = {
+    accountId: accountId(saved.accountId, 'collaboration participant accountId'),
+    firstSeenAt: timestamp(saved.firstSeenAt, 'collaboration participant firstSeenAt'),
+    lastSeenAt: timestamp(saved.lastSeenAt, 'collaboration participant lastSeenAt'),
+    promptCount: timestamp(saved.promptCount, 'collaboration participant promptCount'),
+  }
+  if (participant.firstSeenAt > participant.lastSeenAt) {
+    throw new Error('collaboration participant timestamps are inconsistent')
+  }
+  return participant
+}
+
+function storedCollaborationSession(value: unknown): StoredCollaborationSession {
+  const saved = object(value, 'collaboration session')
+  exactKeys(saved, ['sessionId', 'createdAt', 'lastSeenAt', 'participants'], 'collaboration session')
+  if (!Array.isArray(saved.participants)) throw new Error('collaboration session participants must be an array')
+  if (saved.participants.length > MAX_COLLABORATION_PARTICIPANTS) {
+    throw new Error('authStateFile contains too many collaboration participants')
+  }
+  const entry = {
+    sessionId: parseCollaborationSessionId(saved.sessionId),
+    createdAt: timestamp(saved.createdAt, 'collaboration session createdAt'),
+    lastSeenAt: timestamp(saved.lastSeenAt, 'collaboration session lastSeenAt'),
+    participants: saved.participants.map(storedCollaborationParticipant),
+  }
+  if (entry.createdAt > entry.lastSeenAt) throw new Error('collaboration session timestamps are inconsistent')
+  return entry
+}
+
+function storedCollaborationState(value: unknown): StoredCollaborationState {
+  const saved = object(value, 'collaboration')
+  exactKeys(saved, ['sessions'], 'collaboration')
+  if (!Array.isArray(saved.sessions)) throw new Error('collaboration sessions must be an array')
+  if (saved.sessions.length > MAX_COLLABORATION_SESSIONS) {
+    throw new Error('authStateFile contains too many collaboration sessions')
+  }
+  return { sessions: saved.sessions.map(storedCollaborationSession) }
+}
+
 function readDocument(path: string): Record<string, unknown> | undefined {
   let descriptor: number | undefined
   try {
@@ -305,7 +395,14 @@ export function createAuthStateDocument(
         createdAt: initial.configuredAt,
         configuredAt: initial.configuredAt,
       }
-  return { schemaVersion: AUTH_STATE_VERSION, secretId, accountMode: 'single', accounts: [admin], sessions: [] }
+  return {
+    schemaVersion: AUTH_STATE_VERSION,
+    secretId,
+    accountMode: 'single',
+    accounts: [admin],
+    sessions: [],
+    collaboration: { sessions: [] },
+  }
 }
 
 function accountFromAdministrator(saved: AdministratorState): AccountState {
@@ -359,6 +456,23 @@ function validateDocument(document: AuthStateDocument): void {
       throw new Error('authStateFile contains a session with an inconsistent account version')
     }
   }
+  const collaborationSessionIds = new Set<string>()
+  for (const session of document.collaboration.sessions) {
+    if (collaborationSessionIds.has(session.sessionId)) {
+      throw new Error('authStateFile contains a duplicate collaboration session')
+    }
+    collaborationSessionIds.add(session.sessionId)
+    const participantIds = new Set<AccountId>()
+    for (const participant of session.participants) {
+      if (!ids.has(participant.accountId)) {
+        throw new Error('authStateFile contains a collaboration participant for an unknown account')
+      }
+      if (participantIds.has(participant.accountId)) {
+        throw new Error('authStateFile contains a duplicate collaboration participant')
+      }
+      participantIds.add(participant.accountId)
+    }
+  }
 }
 
 function parseV2Document(raw: Record<string, unknown>, secretId?: string): AuthStateDocument {
@@ -378,13 +492,19 @@ function parseV2Document(raw: Record<string, unknown>, secretId?: string): AuthS
     sessions: rawSecretId === effectiveSecretId
       ? sessions.map(session => ({ ...session, accountId: 'admin', accountAuthVersion: admin.authVersion }))
       : [],
+    collaboration: { sessions: [] },
   }
   validateDocument(document)
   return document
 }
 
 function parseV3Document(raw: Record<string, unknown>, secretId?: string): AuthStateDocument {
-  exactKeys(raw, ['schemaVersion', 'secretId', 'accountMode', 'accounts', 'sessions'], 'authStateFile')
+  exactKeysWithOptional(
+    raw,
+    ['schemaVersion', 'secretId', 'accountMode', 'accounts', 'sessions'],
+    ['collaboration'],
+    'authStateFile',
+  )
   assertSecretAndSessions(raw)
   if (typeof raw.secretId !== 'string' || !Array.isArray(raw.sessions)) throw new Error('authStateFile has invalid metadata')
   const rawSecretId = raw.secretId
@@ -400,6 +520,7 @@ function parseV3Document(raw: Record<string, unknown>, secretId?: string): AuthS
     accountMode: raw.accountMode,
     accounts: raw.accounts.map(account),
     sessions: rawSecretId === (secretId ?? rawSecretId) ? sessions : [],
+    collaboration: raw.collaboration === undefined ? { sessions: [] } : storedCollaborationState(raw.collaboration),
   }
   validateDocument(document)
   return document
@@ -417,7 +538,7 @@ export function loadAuthState(path: string, secretId: string): LoadedAuthState {
   const raw = readDocument(path)
   if (raw === undefined) throw new Error('authStateFile is missing')
   const document = parseAuthStateDocument(raw, secretId)
-  return { document, mustPersist: raw.secretId !== secretId }
+  return { document, mustPersist: raw.secretId !== secretId || raw.collaboration === undefined }
 }
 
 function syncFile(path: string): void {
