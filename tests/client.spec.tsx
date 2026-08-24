@@ -13,6 +13,7 @@ import {
   installPromptAttribution,
   LogoutSettingsRow,
   PasswordSettingsRow,
+  TrustedTeamDock,
 } from '../src/client.js'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -34,6 +35,9 @@ const copy = {
   'account.preview': '共享权限预览',
   'account.online': '在线账号',
   'account.authorPrefix': '发言人',
+  'teamDock.title': '多人协作预览',
+  'teamDock.shared': '共享会话权限',
+  'teamDock.promptStamped': '发言会标记为',
 } as const
 
 const t = (key: string): string => key in copy ? copy[key as keyof typeof copy] : key
@@ -344,6 +348,61 @@ describe('browser account identity affordance', () => {
     beginBrowserAccount(document, navigate)
     expect(navigate).toHaveBeenCalledWith('/identity/account')
     meta.remove()
+  })
+})
+
+describe('trusted-team composer dock', () => {
+  let container: HTMLDivElement
+  let root: Root
+
+  beforeEach(() => {
+    container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+  })
+
+  afterEach(() => {
+    act(() => { root.unmount() })
+    container.remove()
+    vi.restoreAllMocks()
+  })
+
+  it('renders the current prompt author and active trusted-team count', async () => {
+    const fetchAccount = vi.fn(() => Promise.resolve({
+      authenticated: true as const,
+      user: { userId: 'acct_test', username: 'teammate', roles: ['member'] },
+      trustedTeamPreview: true,
+      team: { accounts: [
+        {
+          id: 'admin',
+          username: 'admin',
+          role: 'admin',
+          status: 'active',
+          activeSessions: 1,
+          lastSeenAt: '2026-08-24T12:00:00.000Z',
+          current: false,
+        },
+        {
+          id: 'acct_test',
+          username: 'teammate',
+          role: 'member',
+          status: 'active',
+          activeSessions: 1,
+          lastSeenAt: '2026-08-24T12:00:01.000Z',
+          current: true,
+        },
+      ] },
+    }))
+    await act(async () => {
+      root.render(<TrustedTeamDock fetchAccount={fetchAccount} t={t} />)
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('.dsh-auth-team-dock')).not.toBeNull()
+    expect(container.querySelector('.dsh-auth-team-dock-avatar')?.textContent).toBe('T')
+    expect(container.querySelector('.dsh-auth-team-dock-title')?.textContent).toContain('多人协作预览')
+    expect(container.querySelector('.dsh-auth-team-dock-desc')?.textContent).toContain('teammate · 成员')
+    expect(container.querySelector('.dsh-auth-team-dock-pill')?.textContent).toBe('2 在线账号')
   })
 })
 

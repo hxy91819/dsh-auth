@@ -18,7 +18,7 @@ Include the affected version, impact, minimal reproduction, deployment mode, and
 
 This package provides authentication, not tenant isolation or fine-grained authorization. User IDs and roles are identity metadata; they do not create an independent Harness RBAC system. A successful login receives the authority already available to the configured Harness deployment, which may include reading workspaces, changing settings, starting agents, and executing tools.
 
-Trusted team preview accounts are separate login identities that share one Harness instance authority. They are appropriate only for mutually trusted collaborators. dsh-auth exposes account/session activity for those trusted users, including active browser-session counts and last-seen timestamps. They do not provide private conversations, per-workspace access control, native or audit-grade prompt/controller attribution inside Harness, per-user tool permissions, or audit-grade attribution for model/tool actions.
+Trusted team preview accounts are separate login identities that share one Harness instance authority. They are appropriate only for mutually trusted collaborators. dsh-auth exposes account/session activity for those trusted users, including active browser-session counts and last-seen timestamps, and can show/send visible prompt author labels for browser-submitted prompts. These labels are user-visible collaboration affordances, not immutable Harness metadata. They do not provide private conversations, per-workspace access control, native or audit-grade prompt/controller attribution inside Harness, per-user tool permissions, or audit-grade attribution for model/tool actions.
 
 ## Trust boundaries
 

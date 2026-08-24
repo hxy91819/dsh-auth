@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { SidebarFooterActionOwnerProps } from '@deepseek-ai/dsh-client-ui-sidebar/client'
@@ -31,6 +32,9 @@ const zh = {
   'account.preview': '共享权限预览',
   'account.online': '在线账号',
   'account.authorPrefix': '发言人',
+  'teamDock.title': '多人协作预览',
+  'teamDock.shared': '共享会话权限',
+  'teamDock.promptStamped': '发言会标记为',
 } as const
 
 type AuthLocaleKey = keyof typeof zh
@@ -52,6 +56,9 @@ const en = {
   'account.preview': 'Shared-authority preview',
   'account.online': 'online accounts',
   'account.authorPrefix': 'Author',
+  'teamDock.title': 'Trusted team preview',
+  'teamDock.shared': 'Shared session authority',
+  'teamDock.promptStamped': 'Prompts will be stamped as',
 } as const satisfies Record<AuthLocaleKey, string>
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -98,6 +105,10 @@ interface CurrentAccountInjected {
   readonly openAccount: () => void
 }
 
+interface AccountIdentityInjected {
+  readonly fetchAccount: () => Promise<CurrentAccountDocument | undefined>
+}
+
 interface LogoutSettingsInjected {
   readonly beginLogout: () => Promise<void>
 }
@@ -128,6 +139,8 @@ export type CurrentAccountFooterProps =
   & SidebarFooterActionOwnerProps
   & CurrentAccountInjected
 
+export type TrustedTeamDockProps = PropsLocale<'dsh-auth'> & AccountIdentityInjected
+
 interface SettingsActionRowProps {
   readonly title: string
   readonly description: string
@@ -156,6 +169,13 @@ const CLIENT_CSS = `
 .dsh-auth-account-copy{min-width:0;flex:1;display:flex;flex-direction:column;gap:2px}
 .dsh-auth-account-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:18px;color:var(--dsw-alias-label-primary)}
 .dsh-auth-account-meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}
+.dsh-auth-team-dock{box-sizing:border-box;width:100%;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-module-platform);border-radius:14px;color:var(--dsw-alias-label-primary);align-items:center;gap:10px;padding:8px 10px;display:flex}
+.dsh-auth-team-dock-avatar{width:28px;height:28px;border-radius:50%;background:var(--dsw-alias-bg-container);color:var(--dsw-alias-label-primary);align-items:center;justify-content:center;display:flex;font-size:12px;font-weight:600;line-height:1;flex:0 0 auto}
+.dsh-auth-team-dock-copy{min-width:0;flex:1;display:flex;flex-direction:column;gap:2px}
+.dsh-auth-team-dock-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
+.dsh-auth-team-dock-desc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}
+.dsh-auth-team-dock-desc strong{font-weight:600;color:var(--dsw-alias-label-primary)}
+.dsh-auth-team-dock-pill{border:1px solid var(--dsw-alias-border-l2);border-radius:999px;color:var(--dsw-alias-label-secondary);white-space:nowrap;padding:2px 8px;font-size:11px;line-height:16px;flex:0 0 auto}
 `
 
 function parseCsrf(value: unknown): CsrfDocument {
@@ -380,10 +400,42 @@ function accountRoleLabel(account: CurrentAccountDocument | undefined, t: PropsL
   return account.user.roles.includes('admin') ? t('account.admin') : t('account.member')
 }
 
-function onlineAccountLabel(account: CurrentAccountDocument | undefined, t: PropsLocale<'dsh-auth'>['t']): string | undefined {
-  const online = account?.team?.accounts.filter(candidate =>
+function onlineAccountCount(account: CurrentAccountDocument | undefined): number | undefined {
+  return account?.team?.accounts.filter(candidate =>
     candidate.status === 'active' && candidate.activeSessions > 0).length
+}
+
+function onlineAccountLabel(account: CurrentAccountDocument | undefined, t: PropsLocale<'dsh-auth'>['t']): string | undefined {
+  const online = onlineAccountCount(account)
   return online === undefined ? undefined : `${String(online)} ${t('account.online')}`
+}
+
+function useAccountIdentity(fetchAccount: () => Promise<CurrentAccountDocument | undefined>) {
+  const [account, setAccount] = useState<CurrentAccountDocument | undefined>()
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    let cancelled = false
+    const refresh = (): void => {
+      fetchAccount()
+        .then(value => {
+          if (!cancelled) setAccount(value)
+        })
+        .catch(() => {
+          if (!cancelled) setAccount(undefined)
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }
+    setLoading(true)
+    refresh()
+    const timer = window.setInterval(refresh, ACCOUNT_REFRESH_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [fetchAccount])
+  return { account, loading }
 }
 
 function shouldAttributePrompt(channel: string, endpoint: string): boolean {
@@ -487,30 +539,7 @@ export function CurrentAccountFooter({
   openAccount,
   t,
 }: CurrentAccountFooterProps) {
-  const [account, setAccount] = useState<CurrentAccountDocument | undefined>()
-  const [loading, setLoading] = useState(true)
-  useEffect(() => {
-    let cancelled = false
-    const refresh = (): void => {
-      fetchAccount()
-        .then(value => {
-          if (!cancelled) setAccount(value)
-        })
-        .catch(() => {
-          if (!cancelled) setAccount(undefined)
-        })
-        .finally(() => {
-          if (!cancelled) setLoading(false)
-        })
-    }
-    setLoading(true)
-    refresh()
-    const timer = window.setInterval(refresh, ACCOUNT_REFRESH_MS)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [fetchAccount])
+  const { account, loading } = useAccountIdentity(fetchAccount)
   const label = loading ? t('account.loading') : (account?.user.username ?? t('account.unknown'))
   const meta = [
     accountRoleLabel(account, t),
@@ -533,6 +562,27 @@ export function CurrentAccountFooter({
         </span>
       )}
     </button>
+  )
+}
+
+/** Render the per-session trusted-team identity strip above the composer. */
+export function TrustedTeamDock({ fetchAccount, t }: TrustedTeamDockProps) {
+  const { account } = useAccountIdentity(fetchAccount)
+  if (account?.trustedTeamPreview !== true) return null
+  const online = onlineAccountCount(account)
+  return (
+    <div className="dsh-auth-team-dock" role="status" aria-live="polite">
+      <span className="dsh-auth-team-dock-avatar" aria-hidden="true">{accountInitial(account)}</span>
+      <span className="dsh-auth-team-dock-copy">
+        <span className="dsh-auth-team-dock-title">
+          {t('teamDock.title')} · {t('teamDock.shared')}
+        </span>
+        <span className="dsh-auth-team-dock-desc">
+          {t('teamDock.promptStamped')} <strong>{account.user.username} · {accountRoleLabel(account, t)}</strong>
+        </span>
+      </span>
+      {online !== undefined && <span className="dsh-auth-team-dock-pill">{String(online)} {t('account.online')}</span>}
+    </div>
   )
 }
 
@@ -573,6 +623,15 @@ export function apply(ctx: ClientContext): void {
       openAccount: () => { beginBrowserAccount() },
     }),
   }, CurrentAccountFooter))
+  ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
+    name: 'conversation.input.dock',
+    id: 'dsh-auth-trusted-team-dock',
+    order: 10,
+    locale: NS,
+    inject: (): AccountIdentityInjected => ({
+      fetchAccount: () => fetchCurrentAccount(),
+    }),
+  }, TrustedTeamDock))
   ctx.effect(
     () => installPromptAttribution(ctx.connection, () => fetchCurrentAccount()),
     'dsh-auth: trusted-team prompt attribution',
