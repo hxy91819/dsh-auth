@@ -7,6 +7,10 @@ description: Design and run real end-to-end regression tests for dsh-auth behavi
 
 Lock the product contract at the public boundary. Focused tests remain necessary, but they do not replace a feasible real DSH/Caddy/browser or installer reproduction.
 
+## Landing gate
+
+For applicable changes, load and use this skill before review and land. A PR is E2E-complete only when the relevant public-boundary command passes on its exact HEAD; focused tests and `pnpm run check` alone do not satisfy the gate. If no public-boundary run is feasible, record the concrete blocker and the closest owner-level coverage in the PR description.
+
 ## Workflow
 
 1. State the observable contract before editing:
