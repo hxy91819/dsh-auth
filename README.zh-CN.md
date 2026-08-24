@@ -6,7 +6,7 @@
 [![CI](https://github.com/hxy91819/dsh-auth/actions/workflows/ci.yml/badge.svg)](https://github.com/hxy91819/dsh-auth/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/dsh-auth.svg)](LICENSE)
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的非官方社区插件。为 DeepSeek Harness Web 应用增加安全的管理员登录。`dsh-auth` 让 Harness 只监听回环地址，并安装由本项目维护的 Caddy `forward_auth` 边缘，覆盖页面、API、下载、SSE 和 WebSocket。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的非官方社区插件。为 DeepSeek Harness Web 应用增加安全的浏览器登录。`dsh-auth` 让 Harness 只监听回环地址，并安装由本项目维护的 Caddy `forward_auth` 边缘，覆盖页面、API、下载、SSE 和 WebSocket。
 
 0.2.0 相对旧版 v1 部署是破坏性升级。旧安装器参数、由 Nginx 管理的安装，以及旧会话都不会迁移。请先卸载旧安装，再重新执行 `setup`。
 
@@ -184,7 +184,7 @@ sudo dsh-auth setup \
 
 ## 重置密码
 
-已登录管理员可以打开 **设置 → 通用 → 重置密码**，输入当前密码并设置新密码。这会更新存储的哈希，并让其他浏览器会话退出；不会轮换会话密钥。
+已登录账号可以打开 **设置 → 通用 → 重置密码**，输入当前密码并设置新密码。这会更新存储的哈希，并让该账号的其他浏览器会话退出；不会轮换会话密钥。
 
 如果当前密码不可用，对由 `setup` 创建的安装拥有 root 权限的运维人员可以运行交互式重置：
 
@@ -205,6 +205,16 @@ sudo dsh-auth reset-password \
 ```
 
 该命令从不在 argv 中接受密码值，也不会打印密码、哈希或会话密钥。
+
+## 可信团队预览账号
+
+管理员可以打开 `/auth/account`，点击 **管理团队账号**，启用可信团队预览并创建成员账号。成员使用自己的用户名和密码登录，拥有自己的可吊销浏览器会话，并能在 Harness 侧栏底部和账号页看到当前身份。
+
+之所以仍标记为预览，是因为 Harness 0.1.0-rc.7 的工作区、会话、事件流、prompt 和工具仍是实例级资源。成员账号是独立登录身份，不是隔离租户。在 Harness 暴露每次请求的 principal、策略、事件过滤和工具审批钩子前，应把所有可信团队账号都视为拥有当前 Harness 实例既有权限。预览 UI 会在启用时重复提示这个边界。
+
+预览开启后，浏览器提交的普通 prompt 会在文本前添加可见的发言人行，例如 `👤 teammate · member`。这让同一 Harness 会话中的多人发言可以被区分；但在 Harness 提供原生消息作者元数据前，这个标识会进入模型上下文，不是审计级别的不可篡改作者字段。斜杠命令不会被改写。
+
+关闭预览会保留成员账号，但会吊销成员会话。禁用某个成员账号会吊销该成员的会话，不影响管理员或其他成员。
 
 ## 隔离可信网络上的明文 HTTP
 
@@ -290,7 +300,7 @@ dsh-auth setup \
 - 生产 Cookie 为 `HttpOnly`、`Secure`、`SameSite=Lax`、`Path=/`，并带 `__Host-` 前缀。明文 HTTP 使用显式兼容 Cookie 模式。
 - Argon2id 哈希和随机会话密钥分别存放在权限受限的文件中。持久不透明会话使用 `0600` 的认证状态文档。
 - 登录、退出、令牌兑换和首次管理员设置会在受信代理解析后强制 CSRF 以及精确的 Origin/Referer 检查。认证响应为 `no-store`。
-- 第 2 版每个受管安装只支持一个管理员身份（`admin`）。密码初始化和令牌初始化是明确选项。注册、自助账户恢复、MFA、数据库、多账户策略和多租户不在本版本范围内。
+- 运行时认证状态使用 schema v3。它支持一个管理员账号（`admin`）以及可选的可信团队成员账号。密码初始化和令牌初始化是明确选项。注册、自助账户恢复、MFA、数据库、私有 Harness 工作区、多账号策略和多租户不在本版本范围内。
 - Caddy 是唯一的公开监听器。标准反向代理无法立即吊销已经打开的 WebSocket。需要立即终止流的部署必须使用连接感知边缘。
 
 安全报告请遵循 [`SECURITY.md`](SECURITY.md)。

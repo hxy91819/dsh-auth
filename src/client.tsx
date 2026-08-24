@@ -355,21 +355,21 @@ function authorLine(account: CurrentAccountDocument): string {
   return `👤 ${account.user.username} · ${role}`
 }
 
-function hasAuthorLine(content: readonly PromptContentPart[]): boolean {
-  return /^👤 .+(?: · (?:admin|member))?\n\n/u.test(firstText(content))
-}
+const AUTHOR_LINE_PATTERN = /^👤 .+(?: · (?:admin|member))?\n\n/u
 
 /** Add a visible, durable author label to browser-submitted prompts. */
 export function attributePromptPayload(payload: unknown, account: CurrentAccountDocument | undefined): unknown {
-  if (account === undefined || typeof payload !== 'object' || payload === null) return payload
+  if (account?.trustedTeamPreview !== true || typeof payload !== 'object' || payload === null) return payload
   const prompt = payload as PromptPayloadShape
   const content = promptContentParts(prompt.content)
-  if (content === undefined || isSlashCommandPrompt(content) || hasAuthorLine(content)) return payload
+  if (content === undefined || isSlashCommandPrompt(content)) return payload
   const prefix = `${authorLine(account)}\n\n`
   const textIndex = content.findIndex(part => part.type === 'text' && typeof part.text === 'string')
   const nextContent = textIndex === -1
     ? [{ type: 'text', text: prefix.trimEnd() }, ...content]
-    : content.map((part, index) => index === textIndex ? { ...part, text: `${prefix}${part.text ?? ''}` } : part)
+    : content.map((part, index) => index === textIndex
+      ? { ...part, text: `${prefix}${(part.text ?? '').replace(AUTHOR_LINE_PATTERN, '')}` }
+      : part)
   return {
     ...prompt,
     content: nextContent,

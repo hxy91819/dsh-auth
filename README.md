@@ -229,6 +229,8 @@ Administrators can open `/auth/account`, then **Manage team accounts**, to enabl
 
 This is intentionally labeled a preview because Harness 0.1.0-rc.7 still exposes workspaces, sessions, event streams, prompts, and tools as instance-level resources. Member accounts are separate login identities, not isolated tenants. Any trusted-team account should be treated as able to use the existing Harness instance authority until Harness exposes per-request principal, policy, event filtering, and tool-approval hooks. The preview UI repeats this warning whenever it is enabled.
 
+When the preview is enabled, ordinary browser-submitted prompts receive a visible author line such as `👤 teammate · member`. This makes multiple people's turns distinguishable inside one Harness conversation; until Harness provides native message-author metadata, the label is part of the model-visible prompt text rather than an audit-grade immutable author field. Slash commands are not rewritten.
+
 Turning the preview off preserves member accounts but revokes member sessions. Disabling a member account revokes that member's sessions without affecting the administrator or other members.
 
 ## Plain HTTP for an isolated trusted network

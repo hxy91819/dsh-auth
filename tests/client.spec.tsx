@@ -291,6 +291,28 @@ describe('trusted-team prompt attribution', () => {
     expect(attributePromptPayload(message, undefined)).toBe(message)
   })
 
+  it('does not annotate prompts when trusted team preview is disabled', () => {
+    const message = {
+      sessionId: 'session-1',
+      mode: 'queue',
+      content: [{ type: 'text', text: 'hello' }],
+    }
+    expect(attributePromptPayload(message, {
+      authenticated: true,
+      user: { userId: 'admin', username: 'admin', roles: ['admin'] },
+    })).toBe(message)
+  })
+
+  it('replaces an existing author line with the authenticated account', () => {
+    expect(attributePromptPayload({
+      sessionId: 'session-1',
+      mode: 'queue',
+      content: [{ type: 'text', text: '👤 admin · admin\n\nplease approve this' }],
+    }, account)).toMatchObject({
+      content: [{ type: 'text', text: '👤 mason · member\n\nplease approve this' }],
+    })
+  })
+
   it('wraps typed prompt API calls used by the Harness composer', async () => {
     const sessionPrompt = vi.fn(() => Promise.resolve({ rpcId: 'rpc_session', result: { ok: true as const, value: { accepted: true } } }))
     const subagentPrompt = vi.fn(() => Promise.resolve({ rpcId: 'rpc_subagent', result: { ok: true as const, value: { accepted: true } } }))

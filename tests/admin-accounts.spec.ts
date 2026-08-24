@@ -10,6 +10,7 @@ import {
   testCredentials,
   type TestCredentials,
 } from './helpers.js'
+import type { AuthEventLogger, AuthLogRecord } from '../src/logging.js'
 
 const servers: Server[] = []
 
@@ -17,11 +18,26 @@ afterEach(() => {
   for (const server of servers.splice(0)) server.close()
 })
 
-async function harness(): Promise<{ readonly baseUrl: string; readonly credentials: TestCredentials }> {
+interface CapturedRecord {
+  readonly level: 'error' | 'info' | 'warn'
+  readonly record: AuthLogRecord
+}
+
+async function harness(): Promise<{
+  readonly baseUrl: string
+  readonly credentials: TestCredentials
+  readonly captured: CapturedRecord[]
+}> {
   const credentials = await testCredentials()
-  const server = await startTestServer(testConfig(credentials))
+  const captured: CapturedRecord[] = []
+  const logger: AuthEventLogger = {
+    info: record => { captured.push({ level: 'info', record }) },
+    warn: record => { captured.push({ level: 'warn', record }) },
+    error: record => { captured.push({ level: 'error', record }) },
+  }
+  const server = await startTestServer(testConfig(credentials), undefined, undefined, undefined, logger)
   servers.push(server.server)
-  return { baseUrl: server.baseUrl, credentials }
+  return { baseUrl: server.baseUrl, credentials, captured }
 }
 
 async function login(baseUrl: string, username: string, password: string): Promise<string> {
@@ -130,5 +146,17 @@ describe('trusted team account preview', () => {
     expect(await disabled.text()).toContain('Member account disabled')
     expect((await fetch(`${app.baseUrl}/auth/verify`, { headers: { ...proxyHeaders(), cookie: member } })).status).toBe(401)
     expect((await fetch(`${app.baseUrl}/auth/verify`, { headers: { ...proxyHeaders(), cookie: admin } })).status).toBe(204)
+
+    expect(app.captured.some(entry => entry.level === 'info'
+      && entry.record.event === 'auth.account-mode.updated'
+      && entry.record.mode === 'trusted-team-preview'
+      && entry.record.changed === true)).toBe(true)
+    expect(app.captured.some(entry => entry.level === 'info'
+      && entry.record.event === 'auth.member-account.created'
+      && entry.record.targetAccountId === body.user.userId)).toBe(true)
+    expect(app.captured.some(entry => entry.level === 'info'
+      && entry.record.event === 'auth.member-account.disabled'
+      && entry.record.targetAccountId === body.user.userId)).toBe(true)
+    expect(JSON.stringify(app.captured)).not.toContain(memberPassword)
   }, 30_000)
 })

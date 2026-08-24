@@ -160,6 +160,8 @@ export class AuthApplication {
           cookie: (name, value, maxAgeSeconds) => this.cookie(name, value, maxAgeSeconds),
           renewalCookies: authenticated => this.renewalCookies(authenticated),
           renewalHeaders: authenticated => this.renewalHeaders(authenticated),
+          clientId: request => this.clientId(request),
+          logger: this.logger,
         })
         return
       }
