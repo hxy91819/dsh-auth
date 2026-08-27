@@ -46,6 +46,8 @@ export interface HostDiscovery {
 export interface SetupRequest {
   readonly mode: EdgeMode
   readonly behindTlsProxy?: boolean
+  /** Acknowledged plain HTTP on an intranet literal address outside RFC1918/ULA. */
+  readonly authorizeInsecureAddress?: boolean
   readonly outputDirectory?: string
   readonly dshService?: string
   readonly dshHome?: string

@@ -55,10 +55,12 @@ function isPrivateAddress(value: string): boolean {
   return /^f[cd][0-9a-f]{0,2}:/iu.test(value)
 }
 
-function validateListenAddress(value: string, mode: EdgeMode): string {
+function validateListenAddress(value: string, mode: EdgeMode, authorizeInsecure: boolean): string {
   if (isIP(value) === 0) usage('listen address must be a literal IP address')
-  if (mode === 'http' && !isPrivateAddress(value)) {
-    usage('plain HTTP listen address must be loopback or an RFC1918/ULA private address')
+  if (mode === 'http' && !isPrivateAddress(value) && !authorizeInsecure) {
+    // Corporate intranets often use globally-routable IP space for hosts unreachable
+    // from the internet; expose plain HTTP there only through explicit acknowledgment.
+    usage('plain HTTP listen address must be loopback or an RFC1918/ULA private address; pass --authorize-insecure-address to accept another intranet literal address')
   }
   return value
 }
@@ -120,7 +122,7 @@ function validateTokenPolicy(input: SetupRequest): void {
 function validateDeploymentInputs(input: SetupRequest): void {
   validateProfile(input.profile)
   validateHostPort(input.upstream, 'upstream')
-  validateListenAddress(input.listenAddress, input.mode)
+  validateListenAddress(input.listenAddress, input.mode, input.authorizeInsecureAddress === true)
   validatePort(input.httpPort, 'HTTP port')
   validatePort(input.httpsPort, 'HTTPS port')
   validatePackageSource(input.packageSource)
@@ -135,6 +137,9 @@ function validateDeploymentInputs(input: SetupRequest): void {
 }
 
 function validateTransport(input: SetupRequest): void {
+  if (input.authorizeInsecureAddress === true && input.mode !== 'http') {
+    usage('--authorize-insecure-address applies only to --mode http')
+  }
   if (input.behindTlsProxy === true && (input.mode !== 'http' || !isLoopbackAddress(input.listenAddress))) {
     usage('--behind-tls-proxy requires --mode http and a loopback --listen-address')
   }

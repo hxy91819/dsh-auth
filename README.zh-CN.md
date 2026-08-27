@@ -112,12 +112,14 @@ sudo dsh-auth setup \
 | `--non-interactive` | 在 TTY 上 | | 关闭提示。 |
 | `--json` | 否 | | 输出一份 JSON 文档。不会关闭提示。 |
 | `--mode` | 否 | `https` | `https` 或 `http`。 |
+| `--authorize-insecure-address` | 超出 RFC1918/ULA 的明文 HTTP | 关闭 | 显式确认在私网段之外的内网字面量地址上使用明文 HTTP。HTTPS 模式拒绝该旗标。 |
+| `--behind-tls-proxy` | 否 | 关闭 | 让受管 HTTP 鉴权边缘只监听回环地址，要求可信的 HTTPS 转发头，并签发 Secure Cookie。 |
 | `--admin-bootstrap` | 非提示模式时 | | `password` 或 `login-token`。 |
 | `--admin-username` | 密码安装时 | | 初始管理员登录名。 |
 | `--login-token` | 非提示模式时 | | `enabled` 或 `disabled`。令牌初始化必须为 `enabled`。 |
 | `--login-token-error-message-zh` | 否 | 内置中文文案 | 可选的 1–500 字符中文令牌失败页文本。需要 `--login-token enabled`。 |
 | `--login-token-error-message-en` | 否 | 内置英文文案 | 可选的 1–500 字符英文令牌失败页文本。需要 `--login-token enabled`。 |
-| `--listen-address` | HTTP | HTTPS 为 `0.0.0.0` | 字面量 IP 绑定地址。HTTP 仍必须显式指定私网或回环地址。 |
+| `--listen-address` | HTTP | HTTPS 为 `0.0.0.0` | 字面量 IP 绑定地址。明文 HTTP 必须是私网或回环地址；其他内网字面量地址需要 `--authorize-insecure-address` 显式确认。 |
 | `--dsh-service` | 系统安装 | | 精确的现有 DSH Web systemd 单元。仅在使用 `--output-dir` 时可省略。 |
 | `--password-file` 或 `--password-stdin` | 就绪密码的 `setup` | | 密码来源。`plan` 和令牌初始化不使用。未变化的重复执行会跳过。 |
 | `--server-name` | `--mode https` | | 公开 HTTPS 主机名。 |
@@ -220,7 +222,20 @@ sudo dsh-auth setup \
   --http-port 8080
 ```
 
-不要在不受信任的网络上使用此模式。HTTPS 是生产默认值。
+很多企业内网使用全局可路由的 IP 段（例如 `9.x.x.x`）承载只在内网可用的服务器。安装器默认仍会拒绝这类地址上的明文 HTTP；传入 `--authorize-insecure-address` 即表示你已确认接受更弱的传输安全，此后该安装关闭 HSTS 与 Secure Cookie，并以 `http://<地址>:<端口>` 作为公开来源：
+
+```sh
+sudo dsh-auth setup \
+  --admin-bootstrap password \
+  --admin-username operator \
+  --login-token disabled \
+  --mode http \
+  --listen-address 9.135.102.192 \
+  --http-port 80 \
+  --authorize-insecure-address
+```
+
+只在确认该地址确实无法从互联网访问、且内网本身可信时才使用此确认；安装器无法核实可达性。HTTPS 是生产默认值。
 
 ## 诊断、卸载与 v1 重装
 
