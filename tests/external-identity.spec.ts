@@ -84,7 +84,7 @@ describe('TaihuAccessTokenProvider', () => {
     }), { status: 200 }))))
     const server = await startTestServer(config)
     try {
-      const start = await httpFetch(`${server.baseUrl}/auth/login?provider=ioa`, { redirect: 'manual' })
+      const start = await httpFetch(`${server.baseUrl}/auth/login/ioa`, { redirect: 'manual' })
       expect(start.status).toBe(303)
       const authUrl = new URL(start.headers.get('location') ?? '')
       const callback = await httpFetch(`${server.baseUrl}/auth/callback?code=one-time&state=${encodeURIComponent(authUrl.searchParams.get('state') ?? '')}`, {

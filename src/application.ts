@@ -109,6 +109,10 @@ export class AuthApplication {
         await this.login(req, res, url)
         return
       }
+      if (path === `${this.config.basePath}/login/ioa`) {
+        this.externalLogin(req, res, safeReturnTarget(url.searchParams.get('returnTo')))
+        return
+      }
       if (path === `${this.config.basePath}/callback`) {
         await this.externalCallback(req, res, url)
         return
@@ -200,10 +204,6 @@ export class AuthApplication {
 
   private async login(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const returnTo = safeReturnTarget(url.searchParams.get('returnTo'))
-    if (req.method === 'GET' && url.searchParams.get('provider') === 'ioa') {
-      this.externalLogin(req, res, returnTo)
-      return
-    }
     const preferences = resolveUiPreferences(req, this.readHarnessUiSettings())
     if (req.method === 'GET') {
       const authenticated = this.sessions.authenticate(req, this.now())
@@ -753,7 +753,7 @@ export class AuthApplication {
       preferences,
       message,
       this.sessions.passwordCredentials() !== undefined,
-      this.externalProvider === undefined ? undefined : `${this.config.basePath}/login?provider=ioa&returnTo=${encodeURIComponent(returnTo)}`,
+      this.externalProvider === undefined ? undefined : `${this.config.basePath}/login/ioa?returnTo=${encodeURIComponent(returnTo)}`,
     ), {
       'set-cookie': this.cookie(this.cookieNames.csrf, csrf.value, 10 * 60),
     })
