@@ -773,7 +773,9 @@ export class AuthApplication {
       preferences,
       message,
       this.sessions.passwordCredentials() !== undefined,
-      this.externalProvider === undefined ? undefined : `${this.config.basePath}/login/ioa?returnTo=${encodeURIComponent(returnTo)}`,
+      this.externalProvider === undefined || this.config.gatewayIdentity !== undefined
+        ? undefined
+        : `${this.config.basePath}/login/ioa?returnTo=${encodeURIComponent(returnTo)}`,
     ), {
       'set-cookie': this.cookie(this.cookieNames.csrf, csrf.value, 10 * 60),
     })
