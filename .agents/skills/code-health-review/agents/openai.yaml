@@ -1,0 +1,6 @@
+interface:
+  display_name: "Code Health Review"
+  short_description: "Judge PR code-health regressions and next actions"
+  default_prompt: "Use $code-health-review to analyze this PR's code-health evidence and return a pass or fix-recommended decision."
+policy:
+  allow_implicit_invocation: false

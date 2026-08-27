@@ -30,6 +30,8 @@
 
 ## Change map
 
+When one fix or review spans several surfaces below — routes and sessions, edge template, installer/lifecycle, client UI, packaging — use `$cross-surface-pr-review` to classify the shared mechanism before closing the change.
+
 - HTTP routes, login/logout, password change, CSRF, proxy trust: `src/application.ts`, `src/admin-password.ts`, `src/http.ts`, `tests/auth-http.spec.ts`, and `tests/admin-password.spec.ts`.
 - Session persistence, expiry, renewal, revocation: `src/session.ts`, `src/cookies.ts`, and `tests/session-persistence.spec.ts`.
 - Password hashing and CLI generation: `src/password.ts`, `src/cli.ts`, and `tests/password.spec.ts`.
@@ -51,7 +53,7 @@ corepack pnpm run check:caddy
 git diff --check
 ```
 
-`pnpm run check` is code health plus functional checks, not Caddy or E2E. Each commit owns the size, complexity, and duplication findings it introduces. Treat those reports as advice: judge whether a split is worth it; if the current shape should stay, add a precise per-rule suppression comment with the reason in the same commit.
+`pnpm run check` is code health plus functional checks, not Caddy or E2E. Each commit owns the size, complexity, and duplication findings it introduces. Treat those reports as advice: judge whether a split is worth it; if the current shape should stay, add a precise per-rule suppression comment with the reason in the same commit. Use `$code-health-review` when interpreting a Code Health report or judging a PR's findings.
 
 Run `corepack pnpm run test:e2e` for changes to authentication policy, edge routing, browser integration, session persistence, packaging, or release behavior. The command owns a disposable DSH profile, secrets, processes, and ports; it requires Caddy (or a verified test binary), OpenSSL, `ss`, and Chrome or Chromium and leaves existing services untouched.
 
