@@ -324,6 +324,8 @@ export class AuthApplication {
       this.logger.warn({
         event: 'auth.external.exchange.failed',
         reason: error instanceof Error ? error.message : 'unknown_error',
+        ...(error instanceof Error && error.cause instanceof Error ? { cause: error.cause.message } : {}),
+        ...(error instanceof Error && typeof error.cause === 'object' && error.cause !== null && 'code' in error.cause ? { causeCode: String(error.cause.code) } : {}),
       })
       write(res, 502, 'external identity provider unavailable', { 'cache-control': 'no-store' })
       return
