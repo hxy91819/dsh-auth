@@ -560,6 +560,20 @@ async function proveOversizedAuthBody(httpsPort, innerPort) {
   return publicEdge.status
 }
 
+async function proveForwardedMetadataDenials(innerPort, httpsPort) {
+  const valid = {
+    'x-forwarded-host': `localhost:${String(httpsPort)}`,
+    'x-forwarded-proto': 'https',
+    'x-real-ip': '127.0.0.1',
+  }
+  for (const missing of ['x-forwarded-host', 'x-forwarded-proto', 'x-real-ip']) {
+    const headers = { ...valid }
+    delete headers[missing]
+    const response = await requestHttp(innerPort, '/', { headers })
+    assert(response.status === 421, `inner HTTP edge accepted a request missing ${missing}`)
+  }
+}
+
 async function proveTokenAuthenticityDenial(httpsPort, authStateFile, innerPort) {
   const origin = `https://localhost:${String(httpsPort)}`
   const issued = issueLoginToken(authStateFile, origin)
@@ -775,6 +789,7 @@ async function main() {
       },
     })
     assert(invalidForwarding.status === 421, 'inner HTTP edge accepted a non-HTTPS forwarded protocol')
+    await proveForwardedMetadataDenials(innerPort, httpsPort)
 
     const outerConfig = join(edgeRoot, 'Caddyfile.outer')
     const formattedOuter = checked(caddyExecutable, ['fmt', '-'], {
