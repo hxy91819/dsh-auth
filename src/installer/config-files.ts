@@ -46,6 +46,7 @@ export function persistentRequest(request: SetupRequest): InstallState['request'
   return {
     mode: request.mode,
     ...(request.behindTlsProxy === true ? { behindTlsProxy: true } : {}),
+    ...(request.authorizeInsecureAddress === true ? { authorizeInsecureAddress: true } : {}),
     ...(request.outputDirectory === undefined ? {} : { outputDirectory: request.outputDirectory }),
     ...(request.dshService === undefined ? {} : { dshService: request.dshService }),
     ...(request.dshHome === undefined ? {} : { dshHome: request.dshHome }),

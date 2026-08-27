@@ -301,6 +301,46 @@ describe('installer CLI', () => {
     }
   })
 
+  it('requires an explicit acknowledgment for plain HTTP outside RFC1918/ULA', async () => {
+    const args = [
+      'setup', '--non-interactive', '--json', '--output-dir', '/export/intranet-http',
+      '--mode', 'http', '--listen-address', '203.0.113.10', '--password-stdin',
+      '--admin-bootstrap', 'password', '--admin-username', 'admin', '--login-token', 'enabled',
+    ]
+
+    const refused = new FakeCliIo(false, [], [], PASSWORD)
+    expect(await runCli(args, refused, outputHost())).toBe(2)
+    expect(`${refused.outputs.join('')}${refused.errors.join('')}`).toContain('--authorize-insecure-address')
+
+    const host = outputHost()
+    const io = new FakeCliIo(false, [], [], PASSWORD)
+    const authorized = args.includes('--authorize-insecure-address') ? args : [...args, '--authorize-insecure-address']
+    expect(await runCli(authorized, io, host)).toBe(0)
+    expect(host.readFile('/export/intranet-http/dsh-auth.env')).toContain('DSH_AUTH_SECURE_COOKIES=false')
+    expect(host.readFile('/export/intranet-http/Caddyfile')).toContain('bind 203.0.113.10')
+    expect(host.readFile('/export/intranet-http/Caddyfile')).not.toContain('Strict-Transport-Security')
+
+    const state = JSON.parse(host.readFile('/export/intranet-http/install-state.json')) as {
+      request: Record<string, unknown>
+      fingerprint: string
+      publicOrigin: string
+    }
+    expect(state.request).toMatchObject({ mode: 'http', listenAddress: '203.0.113.10', authorizeInsecureAddress: true })
+    expect(state.publicOrigin).toBe('http://203.0.113.10:8080')
+
+    const rerun = new FakeCliIo(false)
+    expect(await runCli([...authorized, '--dry-run'], rerun, host)).toBe(0)
+    expect((JSON.parse(rerun.outputs.join('')) as { status: string }).status).toBe('unchanged')
+
+    const httpsIo = new FakeCliIo(false)
+    expect(await runCli([
+      'setup', '--non-interactive', '--json', '--output-dir', '/export/insecure-https',
+      '--mode', 'https', '--server-name', 'auth.example.test', '--authorize-insecure-address',
+      '--admin-bootstrap', 'login-token', '--login-token', 'enabled',
+    ], httpsIo, outputHost())).toBe(2)
+    expect(`${httpsIo.outputs.join('')}${httpsIo.errors.join('')}`).toContain('applies only to --mode http')
+  })
+
   it('keeps issue-login-token options out of setup and plan', async () => {
     const io = new FakeCliIo(false)
     expect(await runCli(['plan', ...OUTPUT_ARGS, '--ttl-seconds', '60'], io, outputHost())).toBe(2)

@@ -119,12 +119,13 @@ sudo dsh-auth setup \
 | `--json` | no | | Emit one JSON document. Does not disable prompts. |
 | `--mode` | no | `https` | `https` or `http`. |
 | `--behind-tls-proxy` | no | disabled | Keep the managed HTTP edge on loopback, require trusted HTTPS forwarding headers, and issue Secure cookies. |
+| `--authorize-insecure-address` | plain HTTP beyond RFC1918/ULA | disabled | Acknowledge plain HTTP on an intranet literal address outside the private ranges. HTTPS mode rejects it. |
 | `--admin-bootstrap` | when not prompting | | `password` or `login-token`. |
 | `--admin-username` | password setup | | Initial administrator login name. |
 | `--login-token` | when not prompting | | `enabled` or `disabled`. Token initialization requires `enabled`. |
 | `--login-token-error-message-zh` | no | built-in Chinese copy | Optional 1–500 character Chinese token-failure page text. Requires `--login-token enabled`. |
 | `--login-token-error-message-en` | no | built-in English copy | Optional 1–500 character English token-failure page text. Requires `--login-token enabled`. |
-| `--listen-address` | HTTP | `0.0.0.0` for HTTPS | Literal IP bind address. HTTP still requires an explicit private or loopback address. |
+| `--listen-address` | HTTP | `0.0.0.0` for HTTPS | Literal IP bind address. Plain HTTP requires a private or loopback address unless `--authorize-insecure-address` acknowledges another intranet literal address. |
 | `--dsh-service` | system setup | | Exact existing DSH Web systemd unit. Omit only with `--output-dir`. |
 | `--password-file` or `--password-stdin` | ready password `setup` | | Password source. Not used by `plan` or token initialization. Unchanged reruns skip it. |
 | `--server-name` | `--mode https` | | Public HTTPS hostname. |
@@ -237,7 +238,20 @@ sudo dsh-auth setup \
   --http-port 8080
 ```
 
-Do not use this mode on an untrusted network. HTTPS is the production default.
+Many corporate intranets host server addresses in globally-routable IP space, such as `9.x.x.x`, while keeping them unreachable from the Internet. Plain HTTP on such an address stays refused until you pass `--authorize-insecure-address` as explicit acknowledgment of the weaker transport. The managed edge then disables HSTS and Secure cookies for that installation and derives the public origin from `http://<address>:<port>`:
+
+```sh
+sudo dsh-auth setup \
+  --admin-bootstrap password \
+  --admin-username operator \
+  --login-token disabled \
+  --mode http \
+  --listen-address 9.135.102.192 \
+  --http-port 80 \
+  --authorize-insecure-address
+```
+
+Only use this acknowledgment where the address is genuinely unreachable from the Internet and the network itself is trusted; the installer cannot verify reachability. HTTPS is the production default.
 
 ## TLS terminated by an outer reverse proxy
 

@@ -246,6 +246,7 @@ async function setupRequest(parsed: ParsedArguments, io: CliIo, interactive: boo
   return validateSetupRequest({
     mode: inputs.mode,
     ...(parsed.flags.has('--behind-tls-proxy') ? { behindTlsProxy: true } : {}),
+    ...(parsed.flags.has('--authorize-insecure-address') ? { authorizeInsecureAddress: true } : {}),
     ...(outputDirectory === undefined ? {} : { outputDirectory }),
     ...(inputs.dshService === undefined ? {} : { dshService: inputs.dshService }),
     ...(dshHome === undefined ? {} : { dshHome }),

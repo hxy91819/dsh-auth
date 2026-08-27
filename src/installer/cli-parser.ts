@@ -31,6 +31,7 @@ const FLAG_DECLARATIONS: readonly FlagDeclaration[] = [
   { name: '--password-file', kind: 'value', valueHint: '/absolute/path', help: 'password from a 0600 secret file; choose one source' },
   { name: '--mode', kind: 'value', valueHint: 'https|http', help: 'public edge mode (default: https)' },
   { name: '--behind-tls-proxy', kind: 'boolean', help: 'loopback HTTP behind a trusted TLS reverse proxy' },
+  { name: '--authorize-insecure-address', kind: 'boolean', help: 'plain HTTP on an intranet address outside RFC1918/ULA' },
   { name: '--upstream', kind: 'value', valueHint: '127.0.0.1:PORT', help: 'optional loopback DSH listener (default: 127.0.0.1:3080)' },
   { name: '--listen-address', kind: 'value', valueHint: 'IP', help: 'Caddy bind address (default: 0.0.0.0 for HTTPS)' },
   { name: '--http-port', kind: 'value', valueHint: 'PORT', help: 'optional HTTP/redirect port (default: 80, or 8080 for HTTP)' },
@@ -207,7 +208,8 @@ flags and unknown flags fail with exit code 2. Global flags may precede the
 command. --json does not disable prompts; automation must pass
 --non-interactive.
 
-Plain HTTP is accepted only on loopback or RFC1918/ULA addresses. The
+Plain HTTP binds freely only on loopback or RFC1918/ULA addresses; another
+intranet literal IP additionally requires --authorize-insecure-address. The
 --behind-tls-proxy mode additionally requires loopback. Automatic
 TLS rejects certificate parameters; manual TLS requires both. Uninstall
 requires --authorize-uninstall when prompts are disabled. Password reset
