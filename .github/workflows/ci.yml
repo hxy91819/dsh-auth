@@ -117,7 +117,7 @@ jobs:
       - name: Install PTY support
         run: sudo apt-get update && sudo apt-get install --yes util-linux
       - run: pnpm install --frozen-lockfile
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: packed-tarball
           path: packed
@@ -139,7 +139,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Compile gitignored lib for the checkout E2E helper
         run: pnpm run build
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: packed-tarball
           path: packed
@@ -161,7 +161,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Compile gitignored lib for the checkout E2E helper
         run: pnpm run build
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: packed-tarball
           path: packed
@@ -173,7 +173,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: packed-tarball
           path: packed

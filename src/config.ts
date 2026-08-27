@@ -72,7 +72,7 @@ export interface ConfigInput {
   readonly externalIdentity?: ExternalIdentityConfigInput
 }
 
-export interface ExternalIdentityConfigInput {
+interface ExternalIdentityConfigInput {
   readonly enabled?: boolean
   readonly paasId?: string
   readonly tokenFile?: string
@@ -85,7 +85,7 @@ export interface ExternalIdentityConfigInput {
   readonly allowedDepartmentPrefixes?: readonly string[]
 }
 
-export interface ExternalIdentityConfig {
+interface ExternalIdentityConfig {
   readonly enabled: boolean
   readonly paasId: string
   readonly token: string

@@ -56,6 +56,7 @@ import { TOKEN_BOOTSTRAP_FILE, tokenBootstrapSource } from './token-bootstrap.js
 export class AuthApplication {
   private readonly sessions: SessionStore
   private readonly csrfSigner: CookieSigner
+  private readonly externalStateSigner: CookieSigner
   private readonly limiter: LoginLimiter
   private readonly tokenLimiter: LoginLimiter
   private readonly tokenStore: LoginTokenStore | undefined
@@ -71,6 +72,7 @@ export class AuthApplication {
   ) {
     this.sessions = new SessionStore(config, now)
     this.csrfSigner = new CookieSigner(config.sessionSecret)
+    this.externalStateSigner = new CookieSigner(config.sessionSecret)
     this.cookieNames = cookieNames(config.secureCookies)
     this.externalProvider = config.externalIdentity === undefined ? undefined : new TaihuAccessTokenProvider(config.externalIdentity)
     this.limiter = new LoginLimiter(
@@ -199,7 +201,7 @@ export class AuthApplication {
   private async login(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const returnTo = safeReturnTarget(url.searchParams.get('returnTo'))
     if (req.method === 'GET' && url.searchParams.get('provider') === 'ioa') {
-      this.externalLogin(res, returnTo)
+      this.externalLogin(req, res, returnTo)
       return
     }
     const preferences = resolveUiPreferences(req, this.readHarnessUiSettings())
@@ -269,26 +271,31 @@ export class AuthApplication {
     })
   }
 
-  private externalLogin(res: ServerResponse, returnTo: string): void {
+  private externalLogin(req: IncomingMessage, res: ServerResponse, returnTo: string): void {
     if (this.externalProvider === undefined || this.config.externalIdentity === undefined) {
       write(res, 404, 'external identity login is not enabled', { 'cache-control': 'no-store' })
       return
     }
     const now = this.now()
-    for (const [state, value] of this.externalStates) if (value.expiresAt <= now) this.externalStates.delete(state)
-    while (this.externalStates.size >= 128) {
-      const oldest = this.externalStates.keys().next().value
-      if (oldest === undefined) break
-      this.externalStates.delete(oldest)
+    const retryAfter = this.limiter.consume(`external:${this.clientId(req)}`, now)
+    if (retryAfter !== undefined) {
+      write(res, 429, 'too many external login attempts', { 'cache-control': 'no-store', 'retry-after': String(retryAfter) })
+      return
     }
-    const state = randomOAuthValue()
+    for (const [state, value] of this.externalStates) if (value.expiresAt <= now) this.externalStates.delete(state)
+    if (this.externalStates.size >= 128) {
+      write(res, 429, 'too many external login attempts', { 'cache-control': 'no-store', 'retry-after': '60' })
+      return
+    }
+    const stateCookie = this.externalStateSigner.issue()
+    const state = stateCookie.token
     const nonce = randomOAuthValue()
     this.externalStates.set(state, { returnTo, expiresAt: now + 10 * 60 * 1000 })
     redirect(res, this.externalProvider.authorizationUrl({
       state,
       nonce,
       redirectUri: this.config.externalIdentity.callbackUrl,
-    }))
+    }), { 'set-cookie': this.cookie(this.externalStateCookieName(), stateCookie.value, 10 * 60) })
   }
 
   private async externalCallback(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
@@ -302,13 +309,14 @@ export class AuthApplication {
     }
     const state = url.searchParams.get('state')
     const code = url.searchParams.get('code')
+    const stateCookie = parseCookies(req.headers.cookie).get(this.externalStateCookieName())
     const saved = state === null ? undefined : this.externalStates.get(state)
-    if (saved === undefined || saved.expiresAt <= this.now() || code === null) {
+    if (state === null || this.externalStateSigner.verify(stateCookie) !== state || saved === undefined || saved.expiresAt <= this.now() || code === null) {
       if (state !== null) this.externalStates.delete(state)
       write(res, 400, 'invalid external login response', { 'cache-control': 'no-store' })
       return
     }
-    if (state !== null) this.externalStates.delete(state)
+    this.externalStates.delete(state)
     let identity: ExternalIdentity
     try {
       identity = await this.externalProvider.exchangeCode({ code, redirectUri: this.config.externalIdentity.callbackUrl })
@@ -327,6 +335,7 @@ export class AuthApplication {
       'set-cookie': [
         this.cookie(this.cookieNames.session, created.cookieValue, this.config.sessionTtlSeconds),
         this.cookie(this.cookieNames.csrf, '', 0),
+        this.cookie(this.externalStateCookieName(), '', 0),
       ],
     })
   }
@@ -786,5 +795,9 @@ export class AuthApplication {
 
   private cookie(name: string, value: string, maxAgeSeconds: number): string {
     return authCookie(name, value, maxAgeSeconds, this.config.secureCookies)
+  }
+
+  private externalStateCookieName(): string {
+    return this.config.secureCookies ? '__Host-dsh_auth_external_state' : 'dsh_auth_external_state'
   }
 }

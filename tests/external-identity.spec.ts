@@ -87,7 +87,10 @@ describe('TaihuAccessTokenProvider', () => {
       const start = await httpFetch(`${server.baseUrl}/auth/login?provider=ioa`, { redirect: 'manual' })
       expect(start.status).toBe(303)
       const authUrl = new URL(start.headers.get('location') ?? '')
-      const callback = await httpFetch(`${server.baseUrl}/auth/callback?code=one-time&state=${encodeURIComponent(authUrl.searchParams.get('state') ?? '')}`, { redirect: 'manual' })
+      const callback = await httpFetch(`${server.baseUrl}/auth/callback?code=one-time&state=${encodeURIComponent(authUrl.searchParams.get('state') ?? '')}`, {
+        redirect: 'manual',
+        headers: { cookie: start.headers.get('set-cookie')?.split(';', 1)[0] ?? '' },
+      })
       expect(callback.status).toBe(303)
       expect(callback.headers.get('set-cookie')).toContain('dsh_auth_session=')
     } finally {
