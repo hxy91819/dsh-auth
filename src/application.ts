@@ -36,6 +36,7 @@ import {
 } from './http.js'
 import { LoginLimiter } from './limiter.js'
 import { randomOAuthValue, TaihuAccessTokenProvider, type ExternalIdentity, type ExternalIdentityProvider } from './external-identity.js'
+import { resolveGatewayIdentity } from './gateway-identity.js'
 import { LoginTokenStore, createNodeTokenHost } from './login-token-store.js'
 import { clientLogId, errorLogFields, silentAuthLogger } from './logging.js'
 import type { AuthEventLogger } from './logging.js'
@@ -168,7 +169,7 @@ export class AuthApplication {
         return
       }
       if (path === `${this.config.basePath}/verify`) {
-        this.verify(req, res)
+        await this.verify(req, res)
         return
       }
       write(res, 404, 'not found')
@@ -453,7 +454,7 @@ export class AuthApplication {
     })
   }
 
-  private verify(req: IncomingMessage, res: ServerResponse): void {
+  private async verify(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       write(res, 405, 'method not allowed', { allow: 'GET, HEAD', 'cache-control': 'no-store' })
       return
@@ -462,7 +463,20 @@ export class AuthApplication {
       write(res, 403, 'cross-origin request denied', { 'cache-control': 'no-store' })
       return
     }
-    const authenticated = this.sessions.authenticate(req, this.now())
+    let authenticated = this.sessions.authenticate(req, this.now())
+    if (authenticated === undefined && this.config.gatewayIdentity !== undefined) {
+      try {
+        const identity = await resolveGatewayIdentity(req, this.config.gatewayIdentity, this.now())
+        if (identity !== undefined && this.externalIdentityAllowed(identity)) {
+          const created = this.sessions.create(this.now(), 'external', identity)
+          authenticated = { session: created.session, renewalCookieValue: created.cookieValue }
+          res.setHeader('set-cookie', this.renewalCookies(authenticated))
+          this.logger.info({ event: 'auth.gateway.succeeded', clientId: this.clientId(req) })
+        }
+      } catch (error) {
+        this.logger.warn({ event: 'auth.gateway.failed', reason: error instanceof Error ? error.message : 'invalid_identity' })
+      }
+    }
     if (authenticated === undefined) {
       const original = safeReturnTarget(headerValue(req, 'x-original-uri'))
       const login = `${this.config.basePath}/login?returnTo=${encodeURIComponent(original)}`

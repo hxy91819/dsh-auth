@@ -189,5 +189,8 @@
     "forward-auth"
   ],
   "license": "MIT",
-  "packageManager": "pnpm@10.14.0"
+  "packageManager": "pnpm@10.14.0",
+  "dependencies": {
+    "jose": "6.2.9"
+  }
 }

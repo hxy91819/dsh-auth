@@ -70,6 +70,13 @@ export interface ConfigInput {
   readonly loginTokenBlockSeconds?: number
   readonly trustedProxyAddresses?: readonly string[]
   readonly externalIdentity?: ExternalIdentityConfigInput
+  readonly gatewayIdentity?: GatewayIdentityConfigInput
+}
+
+interface GatewayIdentityConfigInput {
+  readonly enabled?: boolean
+  readonly tokenFile?: string
+  readonly safeMode?: boolean
 }
 
 interface ExternalIdentityConfigInput {
@@ -120,6 +127,7 @@ export interface ResolvedConfig {
   readonly loginTokenBlockSeconds: number
   readonly trustedProxyAddresses: ReadonlySet<string>
   readonly externalIdentity?: ExternalIdentityConfig
+  readonly gatewayIdentity?: { readonly token: string; readonly safeMode: boolean }
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -346,6 +354,13 @@ export function resolveConfig(value: unknown): ResolvedConfig {
     Math.min(sessionTtlSeconds, idleTtlSeconds),
   )
   const resolvedExternalIdentity = externalIdentity(input)
+  const gatewayRaw = input.gatewayIdentity as Record<string, unknown> | undefined
+  const gatewayEnabled = gatewayRaw?.enabled === true || process.env.DSH_AUTH_GATEWAY_ENABLED === 'true'
+  const gatewayTokenFile = typeof gatewayRaw?.tokenFile === 'string' ? gatewayRaw.tokenFile : process.env.DSH_AUTH_GATEWAY_TOKEN_FILE
+  const gatewaySafeMode = gatewayRaw?.safeMode !== false && process.env.DSH_AUTH_GATEWAY_SAFE_MODE !== 'false'
+  const resolvedGatewayIdentity = gatewayEnabled
+    ? { token: inspectSecretFile(requiredAbsolutePath({ tokenFile: gatewayTokenFile }, 'tokenFile'), 'gatewayIdentity.tokenFile'), safeMode: gatewaySafeMode }
+    : undefined
   return {
     basePath: AUTH_BASE_PATH,
     authStateFile,
@@ -367,6 +382,7 @@ export function resolveConfig(value: unknown): ResolvedConfig {
     loginTokenBlockSeconds: integer(input, 'loginTokenBlockSeconds', 5 * 60, 1, 24 * 60 * 60),
     trustedProxyAddresses: new Set(proxyAddressList(input)),
     ...(resolvedExternalIdentity === undefined ? {} : { externalIdentity: resolvedExternalIdentity }),
+    ...(resolvedGatewayIdentity === undefined ? {} : { gatewayIdentity: resolvedGatewayIdentity }),
   }
 }
 
