@@ -567,8 +567,7 @@ async function proveForwardedMetadataDenials(innerPort, httpsPort) {
     'x-real-ip': '127.0.0.1',
   }
   for (const missing of ['x-forwarded-host', 'x-forwarded-proto', 'x-real-ip']) {
-    const headers = { ...valid }
-    delete headers[missing]
+    const headers = Object.fromEntries(Object.entries(valid).filter(([name]) => name !== missing))
     const response = await requestHttp(innerPort, '/', { headers })
     assert(response.status === 421, `inner HTTP edge accepted a request missing ${missing}`)
   }
