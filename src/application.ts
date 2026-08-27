@@ -35,6 +35,7 @@ import {
   writeTokenHtml,
 } from './http.js'
 import { LoginLimiter } from './limiter.js'
+import { randomOAuthValue, TaihuAccessTokenProvider, type ExternalIdentity, type ExternalIdentityProvider } from './external-identity.js'
 import { LoginTokenStore, createNodeTokenHost } from './login-token-store.js'
 import { clientLogId, errorLogFields, silentAuthLogger } from './logging.js'
 import type { AuthEventLogger } from './logging.js'
@@ -59,6 +60,8 @@ export class AuthApplication {
   private readonly tokenLimiter: LoginLimiter
   private readonly tokenStore: LoginTokenStore | undefined
   private readonly cookieNames: { readonly session: string; readonly csrf: string }
+  private readonly externalProvider: ExternalIdentityProvider | undefined
+  private readonly externalStates = new Map<string, { readonly returnTo: string; readonly expiresAt: number }>()
 
   constructor(
     private readonly config: ResolvedConfig,
@@ -69,6 +72,7 @@ export class AuthApplication {
     this.sessions = new SessionStore(config, now)
     this.csrfSigner = new CookieSigner(config.sessionSecret)
     this.cookieNames = cookieNames(config.secureCookies)
+    this.externalProvider = config.externalIdentity === undefined ? undefined : new TaihuAccessTokenProvider(config.externalIdentity)
     this.limiter = new LoginLimiter(
       config.loginWindowSeconds * 1000,
       config.loginMaxAttempts,
@@ -101,6 +105,10 @@ export class AuthApplication {
       }
       if (path === `${this.config.basePath}/login`) {
         await this.login(req, res, url)
+        return
+      }
+      if (path === `${this.config.basePath}/callback`) {
+        await this.externalCallback(req, res, url)
         return
       }
       if (path === `${this.config.basePath}/${TOKEN_BOOTSTRAP_FILE}`) {
@@ -190,6 +198,10 @@ export class AuthApplication {
 
   private async login(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const returnTo = safeReturnTarget(url.searchParams.get('returnTo'))
+    if (req.method === 'GET' && url.searchParams.get('provider') === 'ioa') {
+      this.externalLogin(res, returnTo)
+      return
+    }
     const preferences = resolveUiPreferences(req, this.readHarnessUiSettings())
     if (req.method === 'GET') {
       const authenticated = this.sessions.authenticate(req, this.now())
@@ -255,6 +267,76 @@ export class AuthApplication {
         this.cookie(this.cookieNames.csrf, '', 0),
       ],
     })
+  }
+
+  private externalLogin(res: ServerResponse, returnTo: string): void {
+    if (this.externalProvider === undefined || this.config.externalIdentity === undefined) {
+      write(res, 404, 'external identity login is not enabled', { 'cache-control': 'no-store' })
+      return
+    }
+    const now = this.now()
+    for (const [state, value] of this.externalStates) if (value.expiresAt <= now) this.externalStates.delete(state)
+    while (this.externalStates.size >= 128) {
+      const oldest = this.externalStates.keys().next().value
+      if (oldest === undefined) break
+      this.externalStates.delete(oldest)
+    }
+    const state = randomOAuthValue()
+    const nonce = randomOAuthValue()
+    this.externalStates.set(state, { returnTo, expiresAt: now + 10 * 60 * 1000 })
+    redirect(res, this.externalProvider.authorizationUrl({
+      state,
+      nonce,
+      redirectUri: this.config.externalIdentity.callbackUrl,
+    }))
+  }
+
+  private async externalCallback(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    if (this.externalProvider === undefined || this.config.externalIdentity === undefined) {
+      write(res, 404, 'not found', { 'cache-control': 'no-store' })
+      return
+    }
+    if (req.method !== 'GET') {
+      write(res, 405, 'method not allowed', { allow: 'GET', 'cache-control': 'no-store' })
+      return
+    }
+    const state = url.searchParams.get('state')
+    const code = url.searchParams.get('code')
+    const saved = state === null ? undefined : this.externalStates.get(state)
+    if (saved === undefined || saved.expiresAt <= this.now() || code === null) {
+      if (state !== null) this.externalStates.delete(state)
+      write(res, 400, 'invalid external login response', { 'cache-control': 'no-store' })
+      return
+    }
+    if (state !== null) this.externalStates.delete(state)
+    let identity: ExternalIdentity
+    try {
+      identity = await this.externalProvider.exchangeCode({ code, redirectUri: this.config.externalIdentity.callbackUrl })
+    } catch {
+      write(res, 502, 'external identity provider unavailable', { 'cache-control': 'no-store' })
+      return
+    }
+    if (!this.externalIdentityAllowed(identity)) {
+      this.logger.warn({ event: 'auth.login.failed', authMethod: 'external', reason: 'not_authorized', clientId: this.clientId(req) })
+      write(res, 403, 'external identity is not authorized', { 'cache-control': 'no-store' })
+      return
+    }
+    const created = this.sessions.create(this.now(), 'external', identity)
+    this.logger.info({ event: 'auth.login.succeeded', authMethod: 'external', clientId: this.clientId(req) })
+    redirect(res, saved.returnTo, {
+      'set-cookie': [
+        this.cookie(this.cookieNames.session, created.cookieValue, this.config.sessionTtlSeconds),
+        this.cookie(this.cookieNames.csrf, '', 0),
+      ],
+    })
+  }
+
+  private externalIdentityAllowed(identity: ExternalIdentity): boolean {
+    const policy = this.config.externalIdentity
+    if (policy === undefined) return false
+    return policy.allowedUsers.has(identity.subject)
+      || (identity.departmentId !== undefined && policy.allowedDepartmentIds.has(identity.departmentId))
+      || (identity.departmentName !== undefined && policy.allowedDepartmentPrefixes.some(prefix => identity.departmentName?.startsWith(prefix) === true))
   }
 
   private browserBootstrap(req: IncomingMessage, res: ServerResponse): void {
@@ -662,6 +744,7 @@ export class AuthApplication {
       preferences,
       message,
       this.sessions.passwordCredentials() !== undefined,
+      this.externalProvider === undefined ? undefined : `${this.config.basePath}/login?provider=ioa&returnTo=${encodeURIComponent(returnTo)}`,
     ), {
       'set-cookie': this.cookie(this.cookieNames.csrf, csrf.value, 10 * 60),
     })

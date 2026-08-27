@@ -11,6 +11,7 @@ import type { ResolvedConfig } from './config.js'
 import { CookieSigner } from './crypto.js'
 import { cookieNames, parseCookies } from './cookies.js'
 import { parsePasswordHash } from './password.js'
+import type { ExternalIdentity } from './external-identity.js'
 
 interface AuthUser {
   readonly userId: 'admin'
@@ -25,6 +26,7 @@ export interface AuthSession {
   readonly createdAt: number
   readonly expiresAt: number
   readonly lastSeenAt: number
+  readonly identity?: ExternalIdentity
 }
 
 export interface SessionAuthentication {
@@ -65,6 +67,7 @@ export class SessionStore {
   create(
     now: number,
     authenticationMethod: AuthenticationMethod = 'password',
+    identity?: ExternalIdentity,
   ): { readonly cookieValue: string; readonly session: AuthSession } {
     const signed = this.signer.issue()
     const stored: StoredSession = {
@@ -73,6 +76,7 @@ export class SessionStore {
       createdAt: now,
       lastSeenAt: now,
       expiresAt: now + this.config.sessionTtlSeconds * 1000,
+      ...(identity === undefined ? {} : { identity }),
     }
     this.mutate(() => {
       this.prune(now)
@@ -160,12 +164,12 @@ export class SessionStore {
     return 'updated'
   }
 
-  private currentUser(): AuthUser {
-    return { userId: 'admin', username: this.administrator.username ?? 'admin', roles: ['admin'] }
+  private currentUser(session: StoredSession): AuthUser {
+    return { userId: 'admin', username: session.identity?.username ?? this.administrator.username ?? 'admin', roles: ['admin'] }
   }
 
   private view(session: StoredSession): AuthSession {
-    return { ...session, user: this.currentUser() }
+    return { ...session, user: this.currentUser(session) }
   }
 
   private expired(session: StoredSession, now: number): boolean {

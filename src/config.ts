@@ -33,6 +33,7 @@ const ALLOWED_KEYS = [
   'loginTokenMaxAttempts',
   'loginTokenBlockSeconds',
   'trustedProxyAddresses',
+  'externalIdentity',
 ] as const
 
 const REMOVED_KEYS: Readonly<Record<string, string>> = {
@@ -68,6 +69,33 @@ export interface ConfigInput {
   readonly loginTokenMaxAttempts?: number
   readonly loginTokenBlockSeconds?: number
   readonly trustedProxyAddresses?: readonly string[]
+  readonly externalIdentity?: ExternalIdentityConfigInput
+}
+
+export interface ExternalIdentityConfigInput {
+  readonly enabled?: boolean
+  readonly paasId?: string
+  readonly tokenFile?: string
+  readonly baseUrl?: string
+  readonly authorizationEndpoint?: string
+  readonly accessTokenPath?: string
+  readonly callbackUrl?: string
+  readonly allowedUsers?: readonly string[]
+  readonly allowedDepartmentIds?: readonly string[]
+  readonly allowedDepartmentPrefixes?: readonly string[]
+}
+
+export interface ExternalIdentityConfig {
+  readonly enabled: boolean
+  readonly paasId: string
+  readonly token: string
+  readonly baseUrl: string
+  readonly authorizationEndpoint?: string
+  readonly accessTokenPath?: string
+  readonly callbackUrl: string
+  readonly allowedUsers: ReadonlySet<string>
+  readonly allowedDepartmentIds: ReadonlySet<string>
+  readonly allowedDepartmentPrefixes: readonly string[]
 }
 
 /** Fully validated runtime configuration. */
@@ -91,6 +119,7 @@ export interface ResolvedConfig {
   readonly loginTokenMaxAttempts: number
   readonly loginTokenBlockSeconds: number
   readonly trustedProxyAddresses: ReadonlySet<string>
+  readonly externalIdentity?: ExternalIdentityConfig
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -216,6 +245,41 @@ function plainTextMessage(input: Record<string, unknown>, key: string): string |
   return value
 }
 
+function stringList(value: unknown, key: string): readonly string[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.some(item => typeof item !== 'string' || item.length === 0 || /\p{C}/u.test(item))) {
+    throw new Error(`${key} must be an array of non-empty strings`)
+  }
+  return value as string[]
+}
+
+function externalIdentity(input: Record<string, unknown>): ExternalIdentityConfig | undefined {
+  const raw = input.externalIdentity
+  if (raw === undefined) return undefined
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('externalIdentity must be an object')
+  const value = raw as Record<string, unknown>
+  const enabled = boolean(value, 'enabled', false)
+  if (!enabled) return undefined
+  const paasId = requiredString(value, 'paasId')
+  const tokenFile = requiredAbsolutePath(value, 'tokenFile')
+  const baseUrl = optionalString(value, 'baseUrl') ?? 'https://api.woa.com'
+  const authorizationEndpoint = optionalString(value, 'authorizationEndpoint')
+  const accessTokenPath = optionalString(value, 'accessTokenPath')
+  const callbackUrl = requiredString(value, 'callbackUrl')
+  return {
+    enabled,
+    paasId,
+    token: inspectSecretFile(tokenFile, 'externalIdentity.tokenFile'),
+    baseUrl,
+    ...(authorizationEndpoint === undefined ? {} : { authorizationEndpoint }),
+    ...(accessTokenPath === undefined ? {} : { accessTokenPath }),
+    callbackUrl,
+    allowedUsers: new Set(stringList(value.allowedUsers, 'externalIdentity.allowedUsers')),
+    allowedDepartmentIds: new Set(stringList(value.allowedDepartmentIds, 'externalIdentity.allowedDepartmentIds')),
+    allowedDepartmentPrefixes: stringList(value.allowedDepartmentPrefixes, 'externalIdentity.allowedDepartmentPrefixes'),
+  }
+}
+
 function assertAllowedKeys(input: Record<string, unknown>): void {
   for (const key of Object.keys(input)) {
     const removed = REMOVED_KEYS[key]
@@ -272,6 +336,7 @@ export function resolveConfig(value: unknown): ResolvedConfig {
     1,
     Math.min(sessionTtlSeconds, idleTtlSeconds),
   )
+  const resolvedExternalIdentity = externalIdentity(input)
   return {
     basePath: AUTH_BASE_PATH,
     authStateFile,
@@ -292,6 +357,7 @@ export function resolveConfig(value: unknown): ResolvedConfig {
     loginTokenMaxAttempts: integer(input, 'loginTokenMaxAttempts', 10, 1, 100),
     loginTokenBlockSeconds: integer(input, 'loginTokenBlockSeconds', 5 * 60, 1, 24 * 60 * 60),
     trustedProxyAddresses: new Set(proxyAddressList(input)),
+    ...(resolvedExternalIdentity === undefined ? {} : { externalIdentity: resolvedExternalIdentity }),
   }
 }
 

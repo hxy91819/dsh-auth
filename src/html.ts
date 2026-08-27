@@ -16,6 +16,7 @@ interface UiCopy {
   readonly password: string
   readonly confirmPassword: string
   readonly signIn: string
+  readonly externalSignIn: string
   readonly invalidCredentials: string
   readonly csrfInvalid: string
   readonly rateLimited: string
@@ -62,6 +63,7 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     password: '密码',
     confirmPassword: '确认密码',
     signIn: '登录',
+    externalSignIn: '使用 IOA 登录',
     invalidCredentials: '用户名或密码不正确。',
     csrfInvalid: '登录页面已过期，请使用下方最新表单重新登录。',
     rateLimited: '尝试次数过多，请稍后再试。',
@@ -106,6 +108,7 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     password: 'Password',
     confirmPassword: 'Confirm password',
     signIn: 'Sign in',
+    externalSignIn: 'Sign in with IOA',
     invalidCredentials: 'The username or password is incorrect.',
     csrfInvalid: 'This login page expired. Use the refreshed form below to sign in again.',
     rateLimited: 'Too many attempts. Try again later.',
@@ -350,6 +353,7 @@ export function loginPage(
   preferences: UiPreferences,
   message?: AuthMessage,
   passwordLogin = true,
+  externalLoginUrl?: string,
 ): string {
   const copy = COPY[preferences.language]
   const notice = message === undefined ? '' : `<p class="notice" role="alert">${escapeHtml(copy[message])}</p>`
@@ -368,10 +372,12 @@ export function loginPage(
       <button type="submit">${escapeHtml(copy.signIn)}</button>
     </form>`
     : `<p class="lede">${escapeHtml(copy.cloudConsole)}</p>`
+  const external = externalLoginUrl === undefined ? '' : `<a class="button secondary" href="${escapeHtml(externalLoginUrl)}">${escapeHtml(copy.externalSignIn)}</a>`
   return document(copy.signInTitle, `<section class="content">
     <h1>${escapeHtml(copy.signInTitle)}</h1>
     ${notice}
     ${form}
+    ${external}
   </section>`, preferences)
 }
 

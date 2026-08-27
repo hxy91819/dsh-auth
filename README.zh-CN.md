@@ -182,6 +182,31 @@ sudo dsh-auth setup \
   --login-token-error-message-en 'This sign-in link is unavailable. Request a new one from your administrator.'
 ```
 
+## 外部身份提供商
+
+`dsh-auth` 提供与具体身份系统无关的授权码接口。内置的 `ioa` provider
+适配腾讯 IOA/太湖的签名 AccessToken 换取流程；Session、CSRF、state 和授权
+策略仍由通用核心负责。
+
+通过 Cordis bundle 配置启用（默认关闭）：
+
+```yaml
+externalIdentity:
+  enabled: true
+  paasId: ${TAIHU_PAAS_ID}
+  tokenFile: /run/secrets/taihu-token
+  baseUrl: https://api.woa.com
+  callbackUrl: https://lightpilot.woa.com/auth/callback
+  allowedUsers: [masonxhuang, yuehuali]
+  allowedDepartmentIds: []
+  allowedDepartmentPrefixes: []
+```
+
+用户访问 `/auth/login?provider=ioa` 发起登录。回调会校验短期 state，在服务端
+使用一次性 code 换取身份信息，应用用户/部门白名单，然后创建与密码登录相同的
+可吊销不透明 Session。太湖 Token 只从权限受限的 `tokenFile` 读取，不会出现在
+URL 或持久化认证状态中。
+
 ## 重置密码
 
 已登录管理员可以打开 **设置 → 通用 → 重置密码**，输入当前密码并设置新密码。这会更新存储的哈希，并让其他浏览器会话退出；不会轮换会话密钥。

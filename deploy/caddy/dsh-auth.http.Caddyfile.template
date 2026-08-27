@@ -19,7 +19,7 @@ http://{{SITE_HOST}}:{{HTTP_PORT}}, http://:{{HTTP_PORT}} {
 		}
 	}
 	@skip_access_log {
-		not path /auth/login /auth/token /auth/logout /auth/admin/* /auth/verify
+		not path /auth/login /auth/callback /auth/token /auth/logout /auth/admin/* /auth/verify
 	}
 	log_skip @skip_access_log
 

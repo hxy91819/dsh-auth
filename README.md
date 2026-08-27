@@ -199,6 +199,34 @@ sudo dsh-auth setup \
   --login-token-error-message-en 'This sign-in link is unavailable. Request a new one from your administrator.'
 ```
 
+## External identity providers
+
+`dsh-auth` exposes a provider-neutral authorization-code interface. The built-in
+`ioa` provider adapts Tencent IOA/Taihu's signed AccessToken exchange while the
+session, CSRF, state, and authorization policy remain provider-independent.
+
+Enable it through the Cordis bundle configuration (the provider is disabled by
+default):
+
+```yaml
+externalIdentity:
+  enabled: true
+  paasId: ${TAIHU_PAAS_ID}
+  tokenFile: /run/secrets/taihu-token
+  baseUrl: https://api.woa.com
+  callbackUrl: https://lightpilot.woa.com/auth/callback
+  allowedUsers: [masonxhuang, yuehuali]
+  allowedDepartmentIds: []
+  allowedDepartmentPrefixes: []
+```
+
+Users start the flow at `/auth/login?provider=ioa`. The callback validates a
+short-lived state value, exchanges the one-time code server-side, applies the
+configured user/department allowlist, and creates the same revocable opaque
+session used by password login. The Taihu token is read only from the
+permission-restricted `tokenFile`; it is never accepted in a URL or persisted
+authentication state.
+
 ## Reset the password
 
 Signed-in administrators can open **Settings → General → Reset password**, enter the current password, and set a new one. That updates the stored hash and signs out other browser sessions; it does not rotate the session secret.
