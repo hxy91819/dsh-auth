@@ -169,7 +169,7 @@ export class AuthApplication {
         return
       }
       if (path === `${this.config.basePath}/verify`) {
-        await this.verify(req, res)
+        this.verify(req, res)
         return
       }
       write(res, 404, 'not found')
@@ -273,7 +273,7 @@ export class AuthApplication {
   }
 
   private externalLogin(req: IncomingMessage, res: ServerResponse, returnTo: string): void {
-    if (this.externalProvider === undefined || this.config.externalIdentity === undefined) {
+    if (this.config.gatewayIdentity !== undefined || this.externalProvider === undefined || this.config.externalIdentity === undefined) {
       write(res, 404, 'external identity login is not enabled', { 'cache-control': 'no-store' })
       return
     }
@@ -348,7 +348,7 @@ export class AuthApplication {
   }
 
   private externalIdentityAllowed(identity: ExternalIdentity): boolean {
-    const policy = this.config.externalIdentity
+    const policy = this.config.externalIdentity ?? this.config.gatewayIdentity
     if (policy === undefined) return false
     return policy.allowedUsers.has(identity.subject)
       || (identity.departmentId !== undefined && policy.allowedDepartmentIds.has(identity.departmentId))
@@ -454,7 +454,7 @@ export class AuthApplication {
     })
   }
 
-  private async verify(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  private verify(req: IncomingMessage, res: ServerResponse): void {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       write(res, 405, 'method not allowed', { allow: 'GET, HEAD', 'cache-control': 'no-store' })
       return
@@ -466,7 +466,7 @@ export class AuthApplication {
     let authenticated = this.sessions.authenticate(req, this.now())
     if (authenticated === undefined && this.config.gatewayIdentity !== undefined) {
       try {
-        const identity = await resolveGatewayIdentity(req, this.config.gatewayIdentity, this.now())
+        const identity = resolveGatewayIdentity(req, this.config.gatewayIdentity, this.now())
         if (identity !== undefined && this.externalIdentityAllowed(identity)) {
           const created = this.sessions.create(this.now(), 'external', identity)
           authenticated = { session: created.session, renewalCookieValue: created.cookieValue }

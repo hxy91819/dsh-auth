@@ -78,6 +78,9 @@ interface GatewayIdentityConfigInput {
   readonly enabled?: boolean
   readonly tokenFile?: string
   readonly safeMode?: boolean
+  readonly allowedUsers?: readonly string[]
+  readonly allowedDepartmentIds?: readonly string[]
+  readonly allowedDepartmentPrefixes?: readonly string[]
 }
 
 interface ExternalIdentityConfigInput {
@@ -128,7 +131,7 @@ export interface ResolvedConfig {
   readonly loginTokenBlockSeconds: number
   readonly trustedProxyAddresses: ReadonlySet<string>
   readonly externalIdentity?: ExternalIdentityConfig
-  readonly gatewayIdentity?: { readonly token: string; readonly safeMode: boolean }
+  readonly gatewayIdentity?: { readonly token: string; readonly safeMode: boolean; readonly allowedUsers: ReadonlySet<string>; readonly allowedDepartmentIds: ReadonlySet<string>; readonly allowedDepartmentPrefixes: readonly string[] }
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -359,8 +362,21 @@ export function resolveConfig(value: unknown): ResolvedConfig {
   const gatewayEnabled = gatewayRaw?.enabled === true || process.env.DSH_AUTH_GATEWAY_ENABLED === 'true'
   const gatewayTokenFile = typeof gatewayRaw?.tokenFile === 'string' ? gatewayRaw.tokenFile : process.env.DSH_AUTH_GATEWAY_TOKEN_FILE
   const gatewaySafeMode = gatewayRaw?.safeMode !== false && process.env.DSH_AUTH_GATEWAY_SAFE_MODE !== 'false'
+  const list = (key: string): readonly string[] => {
+    const value = gatewayRaw?.[key] ?? process.env[`DSH_AUTH_GATEWAY_${key.replace(/[A-Z]/g, (m) => `_${m}`).toUpperCase()}`]
+    if (value === undefined) return []
+    if (Array.isArray(value)) return value.filter((entry): entry is string => typeof entry === 'string')
+    if (typeof value !== 'string' && typeof value !== 'number') throw new Error(`${key} must be a string list`)
+    return String(value).split(',').map((entry) => entry.trim()).filter(Boolean)
+  }
   const resolvedGatewayIdentity = gatewayEnabled
-    ? { token: inspectSecretFile(requiredAbsolutePath({ tokenFile: gatewayTokenFile }, 'tokenFile'), 'gatewayIdentity.tokenFile'), safeMode: gatewaySafeMode }
+    ? {
+        token: inspectSecretFile(requiredAbsolutePath({ tokenFile: gatewayTokenFile }, 'tokenFile'), 'gatewayIdentity.tokenFile'),
+        safeMode: gatewaySafeMode,
+        allowedUsers: new Set(list('allowedUsers')),
+        allowedDepartmentIds: new Set(list('allowedDepartmentIds')),
+        allowedDepartmentPrefixes: list('allowedDepartmentPrefixes'),
+      }
     : undefined
   return {
     basePath: AUTH_BASE_PATH,

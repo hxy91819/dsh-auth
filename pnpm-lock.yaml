@@ -7,10 +7,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      jose:
-        specifier: 6.2.9
-        version: 6.2.9
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: 4.0.1
@@ -75,6 +71,9 @@ importers:
       globals:
         specifier: 17.11.0
         version: 17.11.0
+      jose:
+        specifier: 6.2.9
+        version: 6.2.9
       jscpd:
         specifier: 5.0.16
         version: 5.0.16
@@ -104,7 +103,7 @@ importers:
         version: 8.67.0(eslint@10.9.0(jiti@2.7.0))(typescript@5.9.2)
       vitest:
         specifier: 4.1.11
-        version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.13.3)(jsdom@30.0.1)(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.9.0))
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@30.0.1)(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.9.0))
       ws:
         specifier: 8.21.3
         version: 8.21.3
@@ -10474,7 +10473,7 @@ snapshots:
       jiti: 2.7.0
       yaml: 2.9.0
 
-  vitest@4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.13.3)(jsdom@30.0.1)(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.9.0)):
+  vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@30.0.1)(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.9.0)):
     dependencies:
       '@vitest/expect': 4.1.11
       '@vitest/mocker': 4.1.11(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.9.0))
@@ -10497,7 +10496,7 @@ snapshots:
       vite: 7.3.6(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.9.0)
       why-is-node-running: 2.3.0
     optionalDependencies:
-      '@opentelemetry/api': 1.9.0
+      '@opentelemetry/api': 1.9.1
       '@types/node': 24.13.3
       jsdom: 30.0.1
     transitivePeerDependencies:
