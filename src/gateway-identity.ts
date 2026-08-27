@@ -11,7 +11,10 @@ export interface GatewayIdentityConfig {
 
 /** Resolve and verify the identity assertion injected by a trusted TOF gateway. */
 export async function resolveGatewayIdentity(req: IncomingMessage, config: GatewayIdentityConfig, now = Date.now()): Promise<ExternalIdentity | undefined> {
-  const header = (name: string): string => typeof req.headers[name] === 'string' ? req.headers[name] as string : ''
+  const header = (name: string): string => {
+    const value = req.headers[name]
+    return typeof value === 'string' ? value : ''
+  }
   const timestamp = header('timestamp')
   const signature = header('signature')
   const sequence = header('x-rio-seq')
