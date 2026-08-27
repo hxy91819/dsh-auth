@@ -320,7 +320,11 @@ export class AuthApplication {
     let identity: ExternalIdentity
     try {
       identity = await this.externalProvider.exchangeCode({ code, redirectUri: this.config.externalIdentity.callbackUrl })
-    } catch {
+    } catch (error) {
+      this.logger.warn({
+        event: 'auth.external.exchange.failed',
+        reason: error instanceof Error ? error.message : 'unknown_error',
+      })
       write(res, 502, 'external identity provider unavailable', { 'cache-control': 'no-store' })
       return
     }
