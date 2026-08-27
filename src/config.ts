@@ -265,7 +265,7 @@ function externalIdentity(input: Record<string, unknown>): ExternalIdentityConfi
     allowedDepartmentPrefixes: (process.env.DSH_AUTH_EXTERNAL_ALLOWED_DEPT_PREFIXES ?? '').split(',').map(value => value.trim()).filter(Boolean),
   } : undefined)
   if (raw === undefined) return undefined
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('externalIdentity must be an object')
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw new Error('externalIdentity must be an object')
   const value = raw as Record<string, unknown>
   const enabled = boolean(value, 'enabled', false)
   if (!enabled) return undefined
