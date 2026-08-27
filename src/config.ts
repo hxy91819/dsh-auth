@@ -34,6 +34,7 @@ const ALLOWED_KEYS = [
   'loginTokenBlockSeconds',
   'trustedProxyAddresses',
   'externalIdentity',
+  'gatewayIdentity',
 ] as const
 
 const REMOVED_KEYS: Readonly<Record<string, string>> = {
