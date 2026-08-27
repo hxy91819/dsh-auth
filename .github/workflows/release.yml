@@ -477,19 +477,19 @@ jobs:
       contents: write
     steps:
       - name: Check out the exact release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Node 24 without a package cache
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Download the published npm artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dsh-auth-release
           path: release
