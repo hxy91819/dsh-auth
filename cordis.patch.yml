@@ -27,12 +27,3 @@
         loginTokenMaxAttempts: !!js Number(process.env.DSH_AUTH_LOGIN_TOKEN_MAX_ATTEMPTS ?? 10)
         loginTokenBlockSeconds: !!js Number(process.env.DSH_AUTH_LOGIN_TOKEN_BLOCK_SECONDS ?? 300)
         trustedProxyAddresses: !!js (process.env.DSH_AUTH_TRUSTED_PROXY_ADDRESSES ?? '127.0.0.1,::1').split(',').map(value => value.trim()).filter(Boolean)
-        externalIdentity:
-          enabled: !!js JSON.parse(process.env.DSH_AUTH_EXTERNAL_ENABLED ?? 'false')
-          paasId: !!js process.env.DSH_AUTH_EXTERNAL_PAAS_ID
-          tokenFile: !!js process.env.DSH_AUTH_EXTERNAL_TOKEN_FILE
-          baseUrl: !!js process.env.DSH_AUTH_EXTERNAL_BASE_URL
-          callbackUrl: !!js process.env.DSH_AUTH_EXTERNAL_CALLBACK_URL
-          allowedUsers: !!js (process.env.DSH_AUTH_EXTERNAL_ALLOWED_USERS ?? '').split(',').map(value => value.trim()).filter(Boolean)
-          allowedDepartmentIds: !!js (process.env.DSH_AUTH_EXTERNAL_ALLOWED_DEPT_IDS ?? '').split(',').map(value => value.trim()).filter(Boolean)
-          allowedDepartmentPrefixes: !!js (process.env.DSH_AUTH_EXTERNAL_ALLOWED_DEPT_PREFIXES ?? '').split(',').map(value => value.trim()).filter(Boolean)

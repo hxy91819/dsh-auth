@@ -254,7 +254,16 @@ function stringList(value: unknown, key: string): readonly string[] {
 }
 
 function externalIdentity(input: Record<string, unknown>): ExternalIdentityConfig | undefined {
-  const raw = input.externalIdentity
+  const raw = input.externalIdentity ?? (process.env.DSH_AUTH_EXTERNAL_ENABLED === 'true' ? {
+    enabled: true,
+    paasId: process.env.DSH_AUTH_EXTERNAL_PAAS_ID,
+    tokenFile: process.env.DSH_AUTH_EXTERNAL_TOKEN_FILE,
+    baseUrl: process.env.DSH_AUTH_EXTERNAL_BASE_URL,
+    callbackUrl: process.env.DSH_AUTH_EXTERNAL_CALLBACK_URL,
+    allowedUsers: (process.env.DSH_AUTH_EXTERNAL_ALLOWED_USERS ?? '').split(',').map(value => value.trim()).filter(Boolean),
+    allowedDepartmentIds: (process.env.DSH_AUTH_EXTERNAL_ALLOWED_DEPT_IDS ?? '').split(',').map(value => value.trim()).filter(Boolean),
+    allowedDepartmentPrefixes: (process.env.DSH_AUTH_EXTERNAL_ALLOWED_DEPT_PREFIXES ?? '').split(',').map(value => value.trim()).filter(Boolean),
+  } : undefined)
   if (raw === undefined) return undefined
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('externalIdentity must be an object')
   const value = raw as Record<string, unknown>
