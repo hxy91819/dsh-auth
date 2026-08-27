@@ -153,7 +153,7 @@
     "@deepseek-ai/dsh-client-ui-sidebar": "0.1.0-rc.7",
     "@deepseek-ai/dsh-client-ui-slots": "0.1.0-rc.7",
     "@deepseek-ai/dsh-host-webserver": "0.1.0-rc.7",
-    "@deepseek-ai/dsh-settings": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-settings": "0.1.0-rc.8",
     "@eslint/js": "9.39.5",
     "@standard-schema/spec": "1.1.0",
     "@types/node": "24.13.3",
