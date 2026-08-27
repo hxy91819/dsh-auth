@@ -435,9 +435,13 @@ async function openBrowser(chromePort, targetUrl) {
   const socket = new WebSocket(target.webSocketDebuggerUrl)
   await once(socket, 'open')
   let nextId = 1
+  let lastDocumentResponseStatus
   const pending = new Map()
   socket.on('message', data => {
     const message = JSON.parse(data.toString())
+    if (message.method === 'Network.responseReceived' && message.params?.type === 'Document') {
+      lastDocumentResponseStatus = message.params.response?.status
+    }
     if (message.id === undefined) return
     const waiter = pending.get(message.id)
     if (waiter === undefined) return
@@ -463,6 +467,8 @@ async function openBrowser(chromePort, targetUrl) {
     evaluate,
     navigate: url => send('Page.navigate', { url }),
     clearCookies: () => send('Network.clearBrowserCookies'),
+    setCookie: options => send('Network.setCookie', options),
+    responseStatus: () => lastDocumentResponseStatus,
     close: () => { socket.close() },
   }
 }
@@ -552,6 +558,19 @@ async function proveOversizedAuthBody(httpsPort, innerPort) {
   const publicEdge = await request(httpsPort, '/auth/login', oversizedLoginRequest())
   assert(publicEdge.status === 413, `Caddy did not reject an oversized authentication body (status ${String(publicEdge.status)})`)
   return publicEdge.status
+}
+
+async function proveForwardedMetadataDenials(innerPort, httpsPort) {
+  const valid = {
+    'x-forwarded-host': `localhost:${String(httpsPort)}`,
+    'x-forwarded-proto': 'https',
+    'x-real-ip': '127.0.0.1',
+  }
+  for (const missing of ['x-forwarded-host', 'x-forwarded-proto', 'x-real-ip']) {
+    const headers = Object.fromEntries(Object.entries(valid).filter(([name]) => name !== missing))
+    const response = await requestHttp(innerPort, '/', { headers })
+    assert(response.status === 421, `inner HTTP edge accepted a request missing ${missing}`)
+  }
 }
 
 async function proveTokenAuthenticityDenial(httpsPort, authStateFile, innerPort) {
@@ -689,7 +708,7 @@ async function verifyDormantPreinstall(authStateFile) {
   return { dormantBoot: 'web usable without auth surface', partialConfig: `exit ${String(partialExit)}` }
 }
 
-// eslint-disable-next-line max-lines-per-function, max-statements -- 真实 E2E 按拓扑部署→令牌或密码登录→受保护资源→重启→浏览器的时间顺序编排，拆散会隐藏跨层状态关系。
+// eslint-disable-next-line max-lines-per-function, max-statements, complexity -- 真实 E2E 按拓扑部署→令牌或密码登录→受保护资源→重启→浏览器的时间顺序编排，拆散会隐藏跨层状态关系；浏览器恢复与多标签断言必须紧邻登录旅程。
 async function main() {
   const tarball = packageTarball()
   const harnessVersion = checked(dshExecutable, ['--version']).trim()
@@ -769,6 +788,7 @@ async function main() {
       },
     })
     assert(invalidForwarding.status === 421, 'inner HTTP edge accepted a non-HTTPS forwarded protocol')
+    await proveForwardedMetadataDenials(innerPort, httpsPort)
 
     const outerConfig = join(edgeRoot, 'Caddyfile.outer')
     const formattedOuter = checked(caddyExecutable, ['fmt', '-'], {
@@ -994,6 +1014,32 @@ async function main() {
     await browser.clearCookies()
     await browser.navigate(`https://localhost:${String(httpsPort)}/auth/login`)
     await waitForBrowser(browser.evaluate, 'document.readyState === "complete" && document.querySelector("form") !== null', 'browser login page')
+    const tamperedCookie = await browser.setCookie({
+      name: '__Host-dsh_auth_csrf', value: 'tampered.value', url: `https://localhost:${String(httpsPort)}/auth/login`,
+      path: '/', secure: true, httpOnly: true, sameSite: 'Lax',
+    })
+    assert(tamperedCookie.success === true, 'Chrome did not accept the tampered CSRF cookie fixture')
+    await browser.evaluate(`(() => {
+      const username = document.querySelector('input[name="username"]')
+      const password = document.querySelector('input[name="password"]')
+      const form = document.querySelector('form')
+      if (!(username instanceof HTMLInputElement) || !(password instanceof HTMLInputElement) || !(form instanceof HTMLFormElement)) return false
+      username.value = ${JSON.stringify(username)}
+      password.value = ${JSON.stringify(password)}
+      form.requestSubmit()
+      return true
+    })()`)
+    await waitForBrowser(
+      browser.evaluate,
+      'location.pathname === "/auth/login" && document.querySelector(".notice")?.textContent?.includes("expired") === true',
+      'browser stale CSRF recovery page',
+    )
+    assert(browser.responseStatus() === 403, `stale CSRF recovery returned ${String(browser.responseStatus())} instead of 403`)
+    const recoveryForm = await browser.evaluate(`(() => ({
+      password: document.querySelector('input[name="password"]')?.value ?? null,
+      csrf: document.querySelector('input[name="csrf"]')?.value ?? null,
+    }))()`)
+    assert(recoveryForm.password === '' && typeof recoveryForm.csrf === 'string' && recoveryForm.csrf.length > 0, 'stale CSRF recovery reused password or omitted a fresh form token')
     await browser.evaluate(`(() => {
       const username = document.querySelector('input[name="username"]')
       const password = document.querySelector('input[name="password"]')
@@ -1033,6 +1079,33 @@ async function main() {
     await waitForBrowser(browser.evaluate, 'location.pathname === "/auth/login"', 'browser logout redirect')
   } finally {
     browser.close()
+  }
+
+  const firstTab = await openBrowser(chromePort, 'about:blank')
+  const secondTab = await openBrowser(chromePort, 'about:blank')
+  try {
+    await firstTab.clearCookies()
+    await firstTab.navigate(`https://localhost:${String(httpsPort)}/auth/login`)
+    await waitForBrowser(firstTab.evaluate, 'document.readyState === "complete" && document.querySelector("form") !== null', 'first login tab')
+    const firstTabCsrf = await firstTab.evaluate('document.querySelector("input[name=csrf]")?.value ?? null')
+    await secondTab.navigate(`https://localhost:${String(httpsPort)}/auth/login`)
+    await waitForBrowser(secondTab.evaluate, 'document.readyState === "complete" && document.querySelector("form") !== null', 'second login tab')
+    const secondTabCsrf = await secondTab.evaluate('document.querySelector("input[name=csrf]")?.value ?? null')
+    assert(typeof firstTabCsrf === 'string' && firstTabCsrf === secondTabCsrf, 'separate login tabs did not reuse the valid CSRF token')
+    await firstTab.evaluate(`(() => {
+      const username = document.querySelector('input[name="username"]')
+      const password = document.querySelector('input[name="password"]')
+      const form = document.querySelector('form')
+      if (!(username instanceof HTMLInputElement) || !(password instanceof HTMLInputElement) || !(form instanceof HTMLFormElement)) return false
+      username.value = ${JSON.stringify(username)}
+      password.value = ${JSON.stringify(password)}
+      form.requestSubmit()
+      return true
+    })()`)
+    await waitForBrowser(firstTab.evaluate, AUTHENTICATED_SPA, 'first login tab after second tab opened')
+  } finally {
+    firstTab.close()
+    secondTab.close()
   }
 
   const logoutToken = await request(httpsPort, '/auth/csrf', { headers: { cookie: session.pair } })
@@ -1083,6 +1156,8 @@ async function main() {
     sessionPersistence: 'survived DSH restart',
     browserSettingsSignOut: 'Settings -> Sign out -> /auth/login',
     browserSettingsPasswordReset: 'Settings -> Reset password',
+    browserStaleCsrfRecovery: '403 fresh form then login',
+    browserLoginMultiTab: 'shared CSRF cookie',
     logoutRevocation: 401,
     tamperedCookie: 401,
     dshBind: '127.0.0.1',
