@@ -280,16 +280,31 @@ describe('managed upgrade authentication-state rollback', () => {
     const host = readyHost()
     await setupInstalled(host)
     const authStatePath = '/var/lib/dsh-auth/auth-state.json'
-    const authStateBefore = host.readFile(authStatePath)
+    const authStateBefore = JSON.parse(host.readFile(authStatePath)) as { sessions: unknown[] }
+    authStateBefore.sessions.push({
+      token: 'B'.repeat(43), authenticationMethod: 'password',
+      createdAt: 1, lastSeenAt: 1, expiresAt: 2,
+    })
+    host.addFile(authStatePath, `${JSON.stringify(authStateBefore)}\n`, 0o600)
     host.promoteCliPackage('0.3.0')
     const prior = host.commandHandler
+    let authStateAtQuiescence = ''
+    let oldWebStopped = false
     let targetWebStarted = false
     let caddyFailed = false
     host.commandHandler = command => {
+      if (!oldWebStopped && command.executable === '/usr/bin/systemctl'
+        && command.args[0] === 'stop' && command.args[1] === 'dsh-web.service') {
+        oldWebStopped = true
+        const revoked = JSON.parse(host.readFile(authStatePath)) as { sessions: unknown[] }
+        revoked.sessions = []
+        authStateAtQuiescence = `${JSON.stringify(revoked)}\n`
+        host.addFile(authStatePath, authStateAtQuiescence, 0o600)
+      }
       if (!targetWebStarted && command.executable === '/usr/bin/systemctl'
         && command.args[0] === 'restart' && command.args[1] === 'dsh-web.service') {
         targetWebStarted = true
-        const incompatible = JSON.parse(authStateBefore) as { sessions: unknown[] }
+        const incompatible = JSON.parse(host.readFile(authStatePath)) as { sessions: unknown[] }
         incompatible.sessions.push({
           token: 'A'.repeat(43), authenticationMethod: 'external',
           createdAt: 1, lastSeenAt: 1, expiresAt: 2,
@@ -308,8 +323,10 @@ describe('managed upgrade authentication-state rollback', () => {
     const io = new FakeCliIo(false)
     await expect(runCli([...UPGRADE_ARGS], io, host)).resolves.toBe(6)
 
+    expect(oldWebStopped).toBe(true)
     expect(targetWebStarted).toBe(true)
-    expect(host.readFile(authStatePath)).toBe(authStateBefore)
+    expect(authStateAtQuiescence).not.toBe(`${JSON.stringify(authStateBefore)}\n`)
+    expect(host.readFile(authStatePath)).toBe(authStateAtQuiescence)
     expect(host.fileExists(`${STATE_FILE}.auth-state-backup`)).toBe(false)
     expect(host.commands).toContainEqual({ executable: '/usr/bin/systemctl', args: ['stop', 'dsh-web.service'] })
     expect(stateOf(host)).toMatchObject({ status: 'installed', profilePackageVersion: PACKAGE_VERSION })

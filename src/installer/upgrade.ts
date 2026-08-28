@@ -16,7 +16,7 @@ export interface UpgradeJournal {
   readonly fromBuildIdentity: string
   readonly targetVersion: string
   readonly targetBuildIdentity: string
-  readonly phase: 'bundle' | 'caddy' | 'services'
+  readonly phase: 'bundle' | 'caddy' | 'quiescing' | 'services'
 }
 
 type UpgradableState = InstallState & { readonly upgrade?: UpgradeJournal | undefined }
@@ -98,7 +98,7 @@ function readUpgradeState(host: InstallerHost): UpgradableState | undefined {
   if (
     typeof record.fromVersion !== 'string' || typeof record.fromSpec !== 'string' || typeof record.fromBuildIdentity !== 'string'
     || typeof record.targetVersion !== 'string' || typeof record.targetBuildIdentity !== 'string'
-    || (phase !== 'bundle' && phase !== 'caddy' && phase !== 'services')
+    || (phase !== 'bundle' && phase !== 'caddy' && phase !== 'quiescing' && phase !== 'services')
   ) {
     throw new InstallerError('upgrade journal is invalid', ExitCode.conflict, [{
       code: 'INVALID_INSTALL_STATE',
@@ -268,8 +268,8 @@ function rollbackUpgrade(host: InstallerHost, state: UpgradableState): Upgradabl
     replaceManagedBinary(host, restoredCaddy, state.paths.caddyBinary)
     caddyFields = { caddyVersion: CADDY_VERSION, caddyBinarySha256: restoredCaddy.binarySha256 }
   }
-  if (journal.phase === 'services') {
-    restoreAuthState(host, state)
+  if (journal.phase === 'quiescing' || journal.phase === 'services') {
+    if (journal.phase === 'services') restoreAuthState(host, state)
     host.replaceFile(state.paths.environmentFile, renderEnvironmentFile(state.request, state.paths, journal.fromVersion), 0o640)
     restartServices(host, state)
   }
@@ -299,7 +299,6 @@ export function executeUpgrade(host: InstallerHost, context: UpgradeContext): vo
   }
   state = updateState(host, state, { status: 'installing', upgrade: journal })
   try {
-    snapshotAuthState(host, state)
     runChecked(host, profileCommand(host, state, pluginAddArgs(state, context.targetSpec)), 'UPGRADE_BUNDLE_INSTALL_FAILED', dshEnvironment(state))
     const installed = bundleIdentity(host, state)
     if (installed.identity.version !== context.target.version || installed.identity.buildIdentity !== context.target.buildIdentity) {
@@ -313,9 +312,12 @@ export function executeUpgrade(host: InstallerHost, context: UpgradeContext): vo
     state = updateState(host, state, { upgrade: { ...journal, phase: 'caddy' } })
     const caddy = resolveCaddyPackage(host)
     replaceManagedBinary(host, caddy, state.paths.caddyBinary)
-    state = updateState(host, state, { upgrade: { ...journal, phase: 'services' } })
+    state = updateState(host, state, { upgrade: { ...journal, phase: 'quiescing' } })
     host.replaceFile(state.paths.environmentFile, renderEnvironmentFile(state.request, state.paths, context.target.version), 0o640)
     runChecked(host, { executable: state.paths.caddyBinary, args: ['validate', '--config', state.paths.caddyfile] }, 'UPGRADE_CADDY_VALIDATE_FAILED')
+    runChecked(host, { executable: systemctlPath(host), args: ['stop', state.dshService] }, 'UPGRADE_DSH_QUIESCE_FAILED')
+    snapshotAuthState(host, state)
+    state = updateState(host, state, { upgrade: { ...journal, phase: 'services' } })
     restartServices(host, state)
     updateState(host, state, {
       status: 'installed',
