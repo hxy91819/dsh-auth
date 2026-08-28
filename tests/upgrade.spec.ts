@@ -71,6 +71,7 @@ describe('managed upgrade', () => {
     expect(JSON.parse(host.readFile(`${BUNDLE_ROOT}/package.json`))).toMatchObject({ version: '0.3.0' })
     expect(host.readFile('/etc/dsh-auth/dsh-auth.env')).toContain('DSH_AUTH_EXPECTED_VERSION="0.3.0"')
     expect(host.readFileBytes('/var/lib/dsh-auth/auth-state.json')).toEqual(authStateBefore)
+    expect(host.fileExists(`${STATE_FILE}.auth-state-backup`)).toBe(false)
     expect(host.readFileBytes('/etc/dsh-auth/session-secret')).toEqual(secretBefore)
     expect(host.commands.some(command => command.args.includes('add') && command.args.includes('dsh-auth@0.3.0'))).toBe(true)
     expect(host.commands).toContainEqual({ executable: '/usr/bin/systemctl', args: ['restart', 'dsh-web.service'] })
@@ -271,5 +272,47 @@ describe('managed upgrade', () => {
     const confirmed = new FakeCliIo(true, ['upgrade'])
     await expect(runCli(['upgrade', '--json'], confirmed, host)).resolves.toBe(0)
     expect(stateOf(host).profilePackageVersion).toBe('0.3.0')
+  }, 30_000)
+})
+
+describe('managed upgrade authentication-state rollback', () => {
+  it('restores the snapshot when service activation fails after the target Web starts', async () => {
+    const host = readyHost()
+    await setupInstalled(host)
+    const authStatePath = '/var/lib/dsh-auth/auth-state.json'
+    const authStateBefore = host.readFile(authStatePath)
+    host.promoteCliPackage('0.3.0')
+    const prior = host.commandHandler
+    let targetWebStarted = false
+    let caddyFailed = false
+    host.commandHandler = command => {
+      if (!targetWebStarted && command.executable === '/usr/bin/systemctl'
+        && command.args[0] === 'restart' && command.args[1] === 'dsh-web.service') {
+        targetWebStarted = true
+        const incompatible = JSON.parse(authStateBefore) as { sessions: unknown[] }
+        incompatible.sessions.push({
+          token: 'A'.repeat(43), authenticationMethod: 'external',
+          createdAt: 1, lastSeenAt: 1, expiresAt: 2,
+          identity: { subject: 'external-user', username: 'external-user' },
+        })
+        host.addFile(authStatePath, `${JSON.stringify(incompatible)}\n`, 0o600)
+      }
+      if (!caddyFailed && command.executable === '/usr/bin/systemctl'
+        && command.args[0] === 'restart' && command.args[1] === 'dsh-auth-caddy.service') {
+        caddyFailed = true
+        return { status: 1, stdout: '', stderr: 'synthetic Caddy restart failure' }
+      }
+      return prior(command)
+    }
+
+    const io = new FakeCliIo(false)
+    await expect(runCli([...UPGRADE_ARGS], io, host)).resolves.toBe(6)
+
+    expect(targetWebStarted).toBe(true)
+    expect(host.readFile(authStatePath)).toBe(authStateBefore)
+    expect(host.fileExists(`${STATE_FILE}.auth-state-backup`)).toBe(false)
+    expect(host.commands).toContainEqual({ executable: '/usr/bin/systemctl', args: ['stop', 'dsh-web.service'] })
+    expect(stateOf(host)).toMatchObject({ status: 'installed', profilePackageVersion: PACKAGE_VERSION })
+    await expect(runCli(['doctor', '--json'], new FakeCliIo(false), host)).resolves.toBe(0)
   }, 30_000)
 })

@@ -21,6 +21,10 @@ export interface UpgradeJournal {
 
 type UpgradableState = InstallState & { readonly upgrade?: UpgradeJournal | undefined }
 
+function authStateBackupPath(state: UpgradableState): string {
+  return `${state.paths.stateFile}.auth-state-backup`
+}
+
 /** Validated upgrade context shared by the plan and the executor. */
 export interface UpgradeContext {
   readonly state: UpgradableState
@@ -197,6 +201,44 @@ function restartServices(host: InstallerHost, state: UpgradableState): void {
   runChecked(host, { executable: systemctl, args: ['restart', 'dsh-auth-caddy.service'] }, 'UPGRADE_CADDY_RESTART_FAILED')
 }
 
+function snapshotAuthState(host: InstallerHost, state: UpgradableState): void {
+  const source = state.paths.authStateFile
+  const backup = authStateBackupPath(state)
+  if (!host.regularFile(source) || host.realpath(source) !== source) {
+    throw new InstallerError('managed authentication state cannot be snapshotted', ExitCode.conflict)
+  }
+  const stat = host.stat(source)
+  if (stat.uid !== state.dshUid || stat.gid !== state.dshGid || (stat.mode & 0o777) !== 0o600) {
+    throw new InstallerError('managed authentication state ownership or permissions have drifted', ExitCode.conflict)
+  }
+  if (host.fileExists(backup)) host.removeFile(backup)
+  host.writeNewFile(backup, host.readFileBytes(source), 0o600)
+  host.chown(backup, 0, 0)
+  host.chmod(backup, 0o600)
+  host.fsyncFile?.(backup)
+  host.fsyncDirectory?.(state.paths.configDirectory)
+}
+
+function restoreAuthState(host: InstallerHost, state: UpgradableState): void {
+  const backup = authStateBackupPath(state)
+  if (!host.regularFile(backup) || host.realpath(backup) !== backup) {
+    throw new InstallerError('upgrade authentication-state backup is missing', ExitCode.execution)
+  }
+  host.replaceFile(state.paths.authStateFile, host.readFile(backup), 0o600)
+  host.chown(state.paths.authStateFile, state.dshUid, state.dshGid)
+  host.chmod(state.paths.authStateFile, 0o600)
+  host.fsyncFile?.(state.paths.authStateFile)
+  host.fsyncDirectory?.(state.paths.authStateDirectory)
+}
+
+function removeAuthStateBackup(host: InstallerHost, state: UpgradableState): void {
+  const backup = authStateBackupPath(state)
+  if (host.fileExists(backup)) {
+    host.removeFile(backup)
+    host.fsyncDirectory?.(state.paths.configDirectory)
+  }
+}
+
 /** Reinstall the recorded pre-upgrade bundle and verify its build identity. */
 function restoreBundle(host: InstallerHost, state: UpgradableState, spec: string, expectedIdentity: string): CaddyPackage {
   runChecked(host, profileCommand(host, state, pluginAddArgs(state, spec)), 'UPGRADE_RESTORE_BUNDLE_FAILED', dshEnvironment(state))
@@ -217,6 +259,9 @@ function restoreBundle(host: InstallerHost, state: UpgradableState, spec: string
 function rollbackUpgrade(host: InstallerHost, state: UpgradableState): UpgradableState {
   const journal = state.upgrade
   if (journal === undefined) throw new InstallerError('rollback requires an upgrade journal', ExitCode.execution)
+  if (journal.phase === 'services') {
+    runChecked(host, { executable: systemctlPath(host), args: ['stop', state.dshService] }, 'UPGRADE_ROLLBACK_DSH_STOP_FAILED')
+  }
   const restoredCaddy = restoreBundle(host, state, journal.fromSpec, journal.fromBuildIdentity)
   let caddyFields: Partial<UpgradableState> = {}
   if (journal.phase !== 'bundle') {
@@ -224,10 +269,11 @@ function rollbackUpgrade(host: InstallerHost, state: UpgradableState): Upgradabl
     caddyFields = { caddyVersion: CADDY_VERSION, caddyBinarySha256: restoredCaddy.binarySha256 }
   }
   if (journal.phase === 'services') {
+    restoreAuthState(host, state)
     host.replaceFile(state.paths.environmentFile, renderEnvironmentFile(state.request, state.paths, journal.fromVersion), 0o640)
     restartServices(host, state)
   }
-  return updateState(host, state, {
+  const restored = updateState(host, state, {
     status: 'installed',
     upgrade: undefined,
     profilePackageVersion: journal.fromVersion,
@@ -235,6 +281,8 @@ function rollbackUpgrade(host: InstallerHost, state: UpgradableState): Upgradabl
     profilePackageBuildIdentity: journal.fromBuildIdentity,
     ...caddyFields,
   })
+  removeAuthStateBackup(host, state)
+  return restored
 }
 
 /** Execute one validated upgrade transaction with full rollback on failure. */
@@ -251,6 +299,7 @@ export function executeUpgrade(host: InstallerHost, context: UpgradeContext): vo
   }
   state = updateState(host, state, { status: 'installing', upgrade: journal })
   try {
+    snapshotAuthState(host, state)
     runChecked(host, profileCommand(host, state, pluginAddArgs(state, context.targetSpec)), 'UPGRADE_BUNDLE_INSTALL_FAILED', dshEnvironment(state))
     const installed = bundleIdentity(host, state)
     if (installed.identity.version !== context.target.version || installed.identity.buildIdentity !== context.target.buildIdentity) {
@@ -289,4 +338,5 @@ export function executeUpgrade(host: InstallerHost, context: UpgradeContext): vo
     }
     throw error
   }
+  removeAuthStateBackup(host, state)
 }

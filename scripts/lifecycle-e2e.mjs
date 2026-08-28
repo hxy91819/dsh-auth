@@ -227,6 +227,18 @@ async function login(edgePort, username, password) {
   return (response.headers.getSetCookie?.() ?? []).find(field => field.startsWith('dsh_auth_session='))?.split(';')[0]
 }
 
+async function waitForSession(edgePort, session, label) {
+  let response
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      response = await fetch(`http://127.0.0.1:${String(edgePort)}/auth/session`, { headers: { cookie: session } })
+      if (response.status === 200) return
+    } catch { /* edge or upstream still restarting */ }
+    await new Promise(resolveTimeout => setTimeout(resolveTimeout, 250))
+  }
+  throw new Error(`${label} did not restore the authenticated session (${String(response?.status ?? 'unreachable')})`)
+}
+
 function forwardedHeaders(origin) {
   const authority = new URL(origin).host
   return {
@@ -311,6 +323,66 @@ async function proveFileSpecOfflineRollback(tarballB, edgePort, session, baseVer
   return `restore ${adopted.profilePackageSpec} offline, version ${baseVersion}, session preserved`
 }
 
+/** Prove rollback restores state that a target bundle rewrites with a newer schema. */
+async function proveAuthenticationStateRollback(tarballB, unit, edgePort, session, baseVersion) {
+  const authState = '/var/lib/dsh-auth/auth-state.json'
+  const stateBefore = readFileSync(authState)
+  const trigger = join(root, 'mutate-auth-state-once')
+  const failCaddy = join(root, 'fail-caddy-once')
+  const mutateScript = join(root, 'mutate-auth-state.mjs')
+  const failScript = join(root, 'fail-caddy-once.sh')
+  const webDropIn = `/etc/systemd/system/${unit}.d/dsh-auth-lifecycle.conf`
+  const caddyDropInDirectory = '/etc/systemd/system/dsh-auth-caddy.service.d'
+  const caddyDropIn = join(caddyDropInDirectory, 'dsh-auth-lifecycle.conf')
+  mkdirSync(join('/etc/systemd/system', `${unit}.d`), { mode: 0o755, recursive: true })
+  mkdirSync(caddyDropInDirectory, { mode: 0o755, recursive: true })
+  writeFileSync(mutateScript, [
+    "import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'",
+    `const trigger = ${JSON.stringify(trigger)}`,
+    'if (existsSync(trigger)) {',
+    '  rmSync(trigger)',
+    `  const path = ${JSON.stringify(authState)}`,
+    "  const state = JSON.parse(readFileSync(path, 'utf8'))",
+    "  state.sessions.push({ token: 'A'.repeat(43), authenticationMethod: 'external', createdAt: 1, lastSeenAt: 1, expiresAt: 2, identity: { subject: 'lifecycle-external', username: 'lifecycle-external' } })",
+    "  writeFileSync(path, `${JSON.stringify(state)}\\n`, { mode: 0o600 })",
+    `  writeFileSync(${JSON.stringify(failCaddy)}, 'fail\\n', { mode: 0o600 })`,
+    '}',
+    '',
+  ].join('\n'), { mode: 0o700 })
+  writeFileSync(failScript, [
+    '#!/bin/sh',
+    `if [ -f ${JSON.stringify(failCaddy)} ]; then`,
+    `  rm -f ${JSON.stringify(failCaddy)}`,
+    '  exit 1',
+    'fi',
+    'exit 0',
+    '',
+  ].join('\n'), { mode: 0o700 })
+  writeFileSync(webDropIn, `[Service]\nExecStartPost=+${process.execPath} ${mutateScript}\n`, { mode: 0o644 })
+  writeFileSync(caddyDropIn, `[Service]\nExecStartPre=+${failScript}\n`, { mode: 0o644 })
+  checked('/usr/bin/systemctl', ['daemon-reload'])
+  writeFileSync(trigger, 'mutate\n', { mode: 0o600 })
+
+  try {
+    installGlobalCli(tarballB)
+    const failed = cli('upgrade', ['--non-interactive', '--authorize-upgrade', '--package', tarballB])
+    assert(failed.status === 6, `services-phase upgrade did not fail closed\n${failed.stdout}${failed.stderr}`)
+    assert(readFileSync(authState).equals(stateBefore), 'rollback did not restore the pre-upgrade authentication state')
+    assert(!existsSync('/etc/dsh-auth/install-state.json.auth-state-backup'), 'rollback retained the authentication-state snapshot')
+    assert(readState().profilePackageVersion === baseVersion, 'services-phase rollback did not restore the recorded version')
+  } finally {
+    rmSync(webDropIn, { force: true })
+    rmSync(caddyDropIn, { force: true })
+    rmSync(trigger, { force: true })
+    rmSync(failCaddy, { force: true })
+    checked('/usr/bin/systemctl', ['daemon-reload'])
+  }
+
+  assert(cli('doctor', []).status === 0, 'doctor rejected the installation after authentication-state rollback')
+  await waitForSession(edgePort, session, 'authentication-state rollback')
+  return `target schema write discarded, version ${baseVersion}, session preserved`
+}
+
 async function verifyProxiedSystemLifecycle(tarball) {
   cleanupUnit()
   const home = join(root, 'dsh-proxied-home')
@@ -363,7 +435,6 @@ async function verifyProxiedSystemLifecycle(tarball) {
   return 'system issue at two dynamic HTTPS origins, both redeemed, setup state unchanged'
 }
 
-// eslint-disable-next-line max-statements -- 真实 systemd 生命周期按预装→接管→失败回滚→升级→漂移恢复的时间顺序编排。
 async function main() {
   mkdirSync(join(root, 'artifacts'), { recursive: true })
   const manifestPath = join(checkout, 'package.json')
@@ -439,6 +510,9 @@ async function main() {
   // 2b. A broken --package tarball must roll back the recorded file: spec offline.
   summary.fileSpecRollback = await proveFileSpecOfflineRollback(tarballB, edgePort, session, baseVersion)
 
+  // 2c. A target-schema write must be discarded if service activation rolls back.
+  summary.authenticationStateRollback = await proveAuthenticationStateRollback(tarballB, unit, edgePort, session, baseVersion)
+
   // 3. Managed upgrade to the newer CLI build; sessions survive the restart.
   installGlobalCli(tarballB)
   const upgraded = cli('upgrade', ['--non-interactive', '--authorize-upgrade', '--package', tarballB])
@@ -449,15 +523,7 @@ async function main() {
   assert(environment.includes(`DSH_AUTH_EXPECTED_VERSION="${upgradeVersion}"`), 'environment marker was not rewritten')
   const bundleManifest = JSON.parse(readFileSync(join(home, 'profiles', 'web', 'node_modules', 'dsh-auth', 'package.json'), 'utf8'))
   assert(bundleManifest.version === upgradeVersion, 'profile bundle was not upgraded')
-  let sessionView
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    try {
-      sessionView = await fetch(`http://127.0.0.1:${String(edgePort)}/auth/session`, { headers: { cookie: session } })
-      if (sessionView.status !== 502) break
-    } catch { /* upstream still restarting */ }
-    await new Promise(resolveTimeout => setTimeout(resolveTimeout, 250))
-  }
-  assert(sessionView?.status === 200, 'existing session did not survive the managed upgrade restart')
+  await waitForSession(edgePort, session, 'managed upgrade')
   assert(cli('doctor', []).status === 0, 'doctor rejected the upgraded installation')
   summary.upgrade = `bundle+Caddy+record+services at ${upgradeVersion} (base ${baseVersion}), session preserved`
 
