@@ -229,6 +229,17 @@ externalIdentity:
 可吊销不透明 Session。太湖 Token 只从权限受限的 `tokenFile` 读取，不会出现在
 URL 或持久化认证状态中。
 
+### 已验证身份 Header
+
+已认证的 `GET`/`HEAD /auth/verify` 仍返回 `204` 及旧版
+`X-Dsh-Auth-User-Id: admin`、用户名和边缘角色 Header。IOA Session 还会返回
+经过 URI 编码和校验的 `X-Dsh-Auth-Subject`、`X-Dsh-Auth-Username`、
+`X-Dsh-Auth-Display-Name`，以及可选的 `X-Dsh-Auth-Picture`。`Subject` 是稳定的
+外部账号键；`X-Dsh-Auth-Roles` 只表示 dsh-auth 边缘角色，消费方不得将其直接当作
+应用角色。受管 Caddy 会在 `forward_auth` 前删除客户端同名 Header，只把验证结果复制
+给上游。资料字段限制为 512 个 UTF-8 字节并拒绝控制字符，头像地址必须是无凭据、无片段
+的 HTTPS URL。
+
 ## 重置密码
 
 已登录管理员可以打开 **设置 → 通用 → 重置密码**，输入当前密码并设置新密码。这会更新存储的哈希，并让其他浏览器会话退出；不会轮换会话密钥。

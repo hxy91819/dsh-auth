@@ -248,6 +248,19 @@ session used by password login. The Taihu token is read only from the
 permission-restricted `tokenFile`; it is never accepted in a URL or persisted
 authentication state.
 
+### Verified identity headers
+
+An authenticated `GET` or `HEAD` request to `/auth/verify` still returns `204`
+and the legacy `X-Dsh-Auth-User-Id: admin`, username, and edge-role headers.
+For an external (IOA) session it also returns URL-encoded, validated profile
+headers: `X-Dsh-Auth-Subject`, `X-Dsh-Auth-Username`,
+`X-Dsh-Auth-Display-Name`, and optional `X-Dsh-Auth-Picture`. `Subject` is the
+stable external account key; `X-Dsh-Auth-Roles` describes only the dsh-auth
+edge and must not be used as an application role. The managed Caddy removes
+client-supplied values before `forward_auth` and copies only verifier output to
+the upstream. Profile fields are bounded to 512 UTF-8 bytes and reject control
+characters; picture URLs must be HTTPS without credentials or fragments.
+
 ## Reset the password
 
 Signed-in administrators can open **Settings → General → Reset password**, enter the current password, and set a new one. That updates the stored hash and signs out other browser sessions; it does not rotate the session secret.

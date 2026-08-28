@@ -78,7 +78,10 @@ https://{{PUBLIC_HOST}}:{{HTTPS_PORT}}, https://:{{HTTPS_PORT}} {
 		}
 
 		request_header -X-Dsh-Auth-User-Id
+		request_header -X-Dsh-Auth-Subject
 		request_header -X-Dsh-Auth-Username
+		request_header -X-Dsh-Auth-Display-Name
+		request_header -X-Dsh-Auth-Picture
 		request_header -X-Dsh-Auth-Roles
 		request_header -X-Dsh-Auth-Renewal
 		request_header -X-Forwarded-For
@@ -107,7 +110,7 @@ https://{{PUBLIC_HOST}}:{{HTTPS_PORT}}, https://:{{HTTPS_PORT}} {
 			header_up X-Original-URI {header.X-Dsh-Auth-Original-URI}
 			header_up X-Original-Method {header.X-Dsh-Auth-Original-Method}
 			header_up X-Original-Upgrade {header.X-Dsh-Auth-Original-Upgrade}
-			copy_headers X-Dsh-Auth-User-Id X-Dsh-Auth-Username X-Dsh-Auth-Roles Set-Cookie>X-Dsh-Auth-Renewal
+			copy_headers X-Dsh-Auth-User-Id X-Dsh-Auth-Subject X-Dsh-Auth-Username X-Dsh-Auth-Display-Name X-Dsh-Auth-Picture X-Dsh-Auth-Roles Set-Cookie>X-Dsh-Auth-Renewal
 		}
 
 		@renewed expression `{http.request.header.X-Dsh-Auth-Renewal} != ""`

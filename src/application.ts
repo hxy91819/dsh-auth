@@ -35,7 +35,7 @@ import {
   writeTokenHtml,
 } from './http.js'
 import { LoginLimiter } from './limiter.js'
-import { randomOAuthValue, TaihuAccessTokenProvider, type ExternalIdentity, type ExternalIdentityProvider } from './external-identity.js'
+import { externalIdentityHeaders, randomOAuthValue, TaihuAccessTokenProvider, type ExternalIdentity, type ExternalIdentityProvider } from './external-identity.js'
 import { resolveGatewayIdentity } from './gateway-identity.js'
 import { LoginTokenStore, createNodeTokenHost } from './login-token-store.js'
 import { clientLogId, errorLogFields, silentAuthLogger } from './logging.js'
@@ -489,12 +489,23 @@ export class AuthApplication {
       res.end()
       return
     }
+    const identity = authenticated.session.identity
+    let identityHeaders: Record<string, string> = {}
+    if (identity !== undefined) {
+      try {
+        identityHeaders = externalIdentityHeaders(identity)
+      } catch {
+        write(res, 502, 'external identity is invalid', { 'cache-control': 'no-store' })
+        return
+      }
+    }
     res.writeHead(204, {
       'cache-control': 'no-store, max-age=0',
       'vary': 'Cookie',
       'x-dsh-auth-user-id': authenticated.session.user.userId,
       'x-dsh-auth-username': encodeURIComponent(authenticated.session.user.username),
       'x-dsh-auth-roles': authenticated.session.user.roles.join(','),
+      ...identityHeaders,
       ...this.renewalHeaders(authenticated),
     })
     res.end()

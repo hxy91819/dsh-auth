@@ -12,6 +12,8 @@ export { Config }
 export type { ConfigInput, ResolvedConfig } from './config.js'
 export { hashPassword, parsePasswordHash, verifyPassword } from './password.js'
 export {
+  encodeExternalIdentityHeader,
+  externalIdentityHeaders,
   oauthValueFingerprint,
   randomOAuthValue,
   TaihuAccessTokenProvider,

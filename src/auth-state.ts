@@ -79,12 +79,12 @@ function timestamp(value: unknown, label: string): number {
 
 function persistedIdentity(value: unknown): ExternalIdentity {
   const saved = object(value, 'persisted session identity')
-  const allowed = ['subject', 'username', 'displayName', 'email', 'departmentId', 'departmentName', 'groups']
+  const allowed = ['subject', 'username', 'displayName', 'picture', 'email', 'departmentId', 'departmentName', 'groups']
   if (Object.keys(saved).some(key => !allowed.includes(key))) throw new Error('persisted session identity contains unknown fields')
   const text = (key: string): string | undefined => {
     const item = saved[key]
     if (item === undefined) return undefined
-    if (typeof item !== 'string' || item.length === 0 || item.length > 512 || /\p{C}/u.test(item)) {
+    if (typeof item !== 'string' || item.length === 0 || Buffer.byteLength(item, 'utf8') > 512 || /\p{C}/u.test(item)) {
       throw new Error(`persisted session identity ${key} is invalid`)
     }
     return item
@@ -97,6 +97,14 @@ function persistedIdentity(value: unknown): ExternalIdentity {
   }
   const username = text('username')
   const displayName = text('displayName')
+  const picture = text('picture')
+  if (picture !== undefined) {
+    let url: URL
+    try { url = new URL(picture) } catch { throw new Error('persisted session identity picture is invalid') }
+    if (url.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.hash !== '') {
+      throw new Error('persisted session identity picture must be an HTTPS URL')
+    }
+  }
   const email = text('email')
   const departmentId = text('departmentId')
   const departmentName = text('departmentName')
@@ -104,6 +112,7 @@ function persistedIdentity(value: unknown): ExternalIdentity {
     subject,
     ...(username === undefined ? {} : { username }),
     ...(displayName === undefined ? {} : { displayName }),
+    ...(picture === undefined ? {} : { picture }),
     ...(email === undefined ? {} : { email }),
     ...(departmentId === undefined ? {} : { departmentId }),
     ...(departmentName === undefined ? {} : { departmentName }),

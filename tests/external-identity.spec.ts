@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { TaihuAccessTokenProvider } from '../src/external-identity.js'
-import { startTestServer, testConfig, testCredentials } from './helpers.js'
+import { externalIdentityHeaders, TaihuAccessTokenProvider } from '../src/external-identity.js'
+import { proxyHeaders, startTestServer, testConfig, testCredentials } from './helpers.js'
 import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,6 +8,21 @@ import { join } from 'node:path'
 afterEach(() => vi.unstubAllGlobals())
 
 describe('TaihuAccessTokenProvider', () => {
+  it('bounds encoded identity headers and requires an HTTPS picture', () => {
+    expect(externalIdentityHeaders({
+      subject: 'alice',
+      displayName: '黄先生',
+      picture: 'https://avatars.example.com/alice.png',
+    })).toMatchObject({
+      'x-dsh-auth-subject': 'alice',
+      'x-dsh-auth-display-name': encodeURIComponent('黄先生'),
+    })
+    expect(() => externalIdentityHeaders({ subject: 'alice', picture: 'http://avatars.example.com/a.png' }))
+      .toThrow('HTTPS URL')
+    expect(() => externalIdentityHeaders({ subject: 'a'.repeat(513) })).toThrow('auth header')
+    expect(() => externalIdentityHeaders({ subject: 'alice\nforged' })).toThrow('auth header')
+  })
+
   it('builds a passport authorization URL without exposing the API token', () => {
     const provider = new TaihuAccessTokenProvider({
       paasId: 'paas-demo',
@@ -80,7 +95,11 @@ describe('TaihuAccessTokenProvider', () => {
     const httpFetch = globalThis.fetch
     vi.stubGlobal('fetch', vi.fn<typeof fetch>(() => Promise.resolve(new Response(JSON.stringify({
       Ret: 0,
-      Data: { LoginName: 'masonxhuang@tencent.com', ChineseName: 'Mason' },
+      Data: {
+        LoginName: 'masonxhuang@tencent.com',
+        ChineseName: 'Mason',
+        Picture: 'https://avatars.example.com/masonxhuang.png',
+      },
     }), { status: 200 }))))
     const server = await startTestServer(config)
     try {
@@ -93,6 +112,17 @@ describe('TaihuAccessTokenProvider', () => {
       })
       expect(callback.status).toBe(303)
       expect(callback.headers.get('set-cookie')).toContain('dsh_auth_session=')
+      const sessionCookie = callback.headers.getSetCookie().find(value => value.startsWith('dsh_auth_session='))?.split(';', 1)[0]
+      expect(sessionCookie).toBeTruthy()
+      if (sessionCookie === undefined) throw new Error('missing dsh-auth session cookie')
+      const verified = await httpFetch(`${server.baseUrl}/auth/verify`, {
+        headers: { ...proxyHeaders(), cookie: sessionCookie },
+      })
+      expect(verified.status).toBe(204)
+      expect(verified.headers.get('x-dsh-auth-subject')).toBe('masonxhuang')
+      expect(verified.headers.get('x-dsh-auth-username')).toBe('masonxhuang')
+      expect(verified.headers.get('x-dsh-auth-display-name')).toBe('Mason')
+      expect(decodeURIComponent(verified.headers.get('x-dsh-auth-picture') ?? '')).toBe('https://avatars.example.com/masonxhuang.png')
     } finally {
       await new Promise<void>((resolve, reject) => server.server.close(error => error === undefined ? resolve() : reject(error)))
     }
