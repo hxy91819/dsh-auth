@@ -113,7 +113,7 @@ function hasSupportedUpgradeJournal(candidate: Record<string, unknown>): boolean
     && typeof record.fromBuildIdentity === 'string'
     && typeof record.targetVersion === 'string'
     && typeof record.targetBuildIdentity === 'string'
-    && (record.phase === 'bundle' || record.phase === 'caddy' || record.phase === 'services')
+    && (record.phase === 'bundle' || record.phase === 'caddy' || record.phase === 'quiescing' || record.phase === 'services')
 }
 
 function hasSupportedIdentity(candidate: Record<string, unknown>): boolean {

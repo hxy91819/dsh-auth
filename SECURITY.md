@@ -38,6 +38,10 @@ Loopback is a network exposure control, not a local-user security boundary. Any 
 
 Only explicitly configured proxy IP addresses are trusted to supply `X-Forwarded-*` and client-address headers. Adding a public, shared, or attacker-reachable address to `DSH_AUTH_TRUSTED_PROXY_ADDRESSES` allows that peer to influence Origin checks and login rate-limit identity.
 
+When gateway identity is enabled, the outer identity gateway may supply `timestamp`, `signature`, `X-Rio-Seq`, `StaffId`, `StaffName`, `X-Ext-Data`, and `X-Tai-Identity` only to the managed Caddy. Caddy passes them to its internal authentication subrequest, then removes them before the authenticated request reaches Harness. Harness and same-origin plugins receive only the validated `X-Dsh-Auth-*` identity headers; treating the original gateway assertion as application input would duplicate the trust boundary and expose reusable identity material.
+
+Managed upgrades keep a transient root-owned `0600` authentication-state snapshot beside the root-owned installation record. Successful upgrades remove it. A services-phase rollback stops the target DSH before restoring the snapshot, preventing a newer bundle from rewriting the state while the recorded bundle is restored; interrupted rollback keeps the journal and snapshot for the next recovery attempt.
+
 ### Application and host
 
 The DSH process, Cordis loader, installed plugins, Caddy worker and configuration, Node.js runtime, service account, and host root account are trusted computing base. Compromise of any of them can bypass authentication, capture passwords or sessions, alter proxied responses, or access Harness data directly.

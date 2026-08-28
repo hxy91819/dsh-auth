@@ -366,13 +366,23 @@ async function verifyBehindTlsProxy(caddy, root, ports) {
       throw new Error('proxy mode did not use a relative interactive redirect')
     }
     const echoed = JSON.parse((await requestHttp(ports.behind, '/auth/echo', forwarded)).body)
-    const protectedEcho = JSON.parse((await requestHttp(ports.behind, '/echo', { ...forwarded, cookie: 'session=valid' })).body)
+    const gatewayHeaders = {
+      timestamp: 'gateway-timestamp', signature: 'gateway-signature', 'x-rio-seq': 'gateway-sequence',
+      staffid: 'gateway-staff-id', staffname: 'gateway-staff-name', 'x-ext-data': 'gateway-extension',
+      'x-tai-identity': 'gateway-encrypted-identity',
+    }
+    const protectedEcho = JSON.parse((await requestHttp(ports.behind, '/echo', {
+      ...forwarded, ...gatewayHeaders, cookie: 'session=valid',
+    })).body)
     for (const seen of [echoed, protectedEcho]) {
       if (seen['x-forwarded-host'] !== forwarded['x-forwarded-host']
         || seen['x-forwarded-proto'] !== forwarded['x-forwarded-proto']
         || seen['x-real-ip'] !== forwarded['x-real-ip']) {
         throw new Error('proxy mode did not preserve the trusted public origin and client address')
       }
+    }
+    for (const name of Object.keys(gatewayHeaders)) {
+      if (protectedEcho[name] !== undefined) throw new Error(`proxy mode exposed gateway identity header ${name} to Harness`)
     }
   } finally {
     await terminate(edge)

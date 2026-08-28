@@ -2,7 +2,7 @@
  * Exercise the packed bundle through a real DSH, TLS edge, and headless
  * browser. The test owns every generated profile, secret, process, and port.
  */
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { createServer } from 'node:net'
 import { accessSync, chmodSync, constants, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -13,6 +13,7 @@ import http from 'node:http'
 import https from 'node:https'
 import http2 from 'node:http2'
 import WebSocket from 'ws'
+import { CompactEncrypt } from 'jose'
 import { renderCaddyfile } from './caddy-config.mjs'
 import { prepareCaddyRelease } from './caddy-release.mjs'
 import { renderCaddyfile as renderInstallerCaddyfile } from '../lib/installer/caddy.js'
@@ -25,8 +26,8 @@ const HELP = `Usage:
 Description:
   Pack the current checkout when PATH.tgz is omitted, install that artifact
   into a disposable DSH profile, and verify the real Caddy TLS edge, v2
-  authentication state, password and login-token journeys, protected routes,
-  session persistence, and browser sign-out behavior.
+  authentication state, password, login-token, and signed gateway journeys,
+  protected routes, session persistence, and browser sign-out behavior.
 
 Arguments:
   PATH.tgz  Optional local package artifact. It must resolve to a .tgz file.
@@ -546,6 +547,21 @@ function oversizedLoginRequest(extraHeaders = {}) {
   }
 }
 
+async function gatewayIdentityHeaders(token, username, sequence) {
+  const timestamp = String(Math.floor(Date.now() / 1000))
+  const expiration = new Date(Date.now() + 5 * 60 * 1000).toISOString()
+  const identity = await new CompactEncrypt(new TextEncoder().encode(JSON.stringify({
+    LoginName: `${username}@example.invalid`,
+    ChineseName: 'Gateway Integration',
+    Expiration: expiration,
+  }))).setProtectedHeader({ alg: 'dir', enc: 'A256GCM' }).encrypt(new TextEncoder().encode(token))
+  const signature = createHash('sha256')
+    .update(`${timestamp}${token}${sequence},,,${timestamp}`, 'utf8')
+    .digest('hex')
+    .toUpperCase()
+  return { timestamp, signature, 'x-rio-seq': sequence, 'x-tai-identity': identity }
+}
+
 async function proveOversizedAuthBody(httpsPort, innerPort) {
   if (innerPort !== undefined) {
     const inner = await requestHttp(innerPort, '/auth/login', oversizedLoginRequest({
@@ -721,6 +737,10 @@ async function main() {
   const sessionSecret = randomBytes(48).toString('base64url')
   const layout = writeAuthLayout(authState, passwordHash, sessionSecret, bootstrap === 'password')
   const username = bootstrap === 'password' ? 'integration-account' : 'operator-admin'
+  const gatewayUsername = 'gateway-integration'
+  const gatewayToken = randomBytes(24).toString('base64url')
+  const gatewayTokenFile = join(secrets, 'gateway-token')
+  writeFileSync(gatewayTokenFile, `${gatewayToken}\n`, { mode: 0o600 })
 
   checked(dshExecutable, [
     'plugin', '--profile', 'web', 'add', '--offline', '--config.auto-install-peers=false', tarball,
@@ -745,6 +765,10 @@ async function main() {
     DSH_AUTH_TRUSTED_PROXY_ADDRESSES: '127.0.0.1,::1',
     DSH_AUTH_SECURE_COOKIES: 'true',
     DSH_AUTH_SESSION_RENEWAL_SECONDS: '1',
+    DSH_AUTH_GATEWAY_ENABLED: 'true',
+    DSH_AUTH_GATEWAY_TOKEN_FILE: gatewayTokenFile,
+    DSH_AUTH_GATEWAY_SAFE_MODE: 'true',
+    DSH_AUTH_GATEWAY_ALLOWED_USERS: gatewayUsername,
   }
   dshProcess = child(dshExecutable, ['web', '--port', String(dshPort)], { cwd: launchCwd, env: dshEnvironment })
   await waitUntil(async () => {
@@ -897,6 +921,15 @@ async function main() {
     topology === 'behind-tls-proxy' ? innerPort : undefined,
   )
 
+  const forgedGateway = await request(httpsPort, '/api/host.describe', {
+    headers: {
+      timestamp: String(Math.floor(Date.now() / 1000)),
+      signature: 'FORGED',
+      'x-rio-seq': 'forged-gateway-sequence',
+    },
+  })
+  assert(forgedGateway.status === 401 && forgedGateway.headers['set-cookie'] === undefined, 'forged gateway identity created a session')
+
   if (bootstrap === 'login-token') {
     await completeTokenOnboarding(
       httpsPort,
@@ -907,6 +940,19 @@ async function main() {
       topology === 'behind-tls-proxy' ? innerPort : undefined,
     )
   }
+  const gatewayHeaders = await gatewayIdentityHeaders(gatewayToken, gatewayUsername, 'valid-gateway-sequence')
+  const gatewaySpa = await request(httpsPort, '/', { headers: gatewayHeaders })
+  assert(gatewaySpa.status === 200, `valid gateway identity did not reach the SPA (${String(gatewaySpa.status)})`)
+  const gatewaySession = cookiePair(gatewaySpa.headers['set-cookie'], '__Host-dsh_auth_session')
+  for (const attribute of ['HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/']) {
+    assert(gatewaySession.field.includes(attribute), `gateway session cookie omitted ${attribute}`)
+  }
+  const gatewaySessionView = await request(httpsPort, '/auth/session', { headers: { cookie: gatewaySession.pair } })
+  const gatewaySessionJson = JSON.parse(gatewaySessionView.body.toString('utf8'))
+  assert(
+    gatewaySessionView.status === 200 && gatewaySessionJson.user?.username === gatewayUsername,
+    'gateway session did not expose the verified external username',
+  )
 
   const login = await request(httpsPort, '/auth/login?returnTo=%2Fworkspace', {
     headers: topology === 'behind-tls-proxy'
@@ -1008,6 +1054,12 @@ async function main() {
   )
   const afterRestartSpa = await request(httpsPort, '/', { headers: { cookie: session.pair } })
   assert(afterRestartSpa.status === 200, 'persisted session did not reach the protected SPA after a DSH restart')
+  const afterRestartGateway = await request(httpsPort, '/auth/session', { headers: { cookie: gatewaySession.pair } })
+  const afterRestartGatewayJson = JSON.parse(afterRestartGateway.body.toString('utf8'))
+  assert(
+    afterRestartGateway.status === 200 && afterRestartGatewayJson.user?.username === gatewayUsername,
+    'persisted gateway identity did not survive a DSH restart',
+  )
 
   const browser = await openBrowser(chromePort, 'about:blank')
   try {
@@ -1154,6 +1206,8 @@ async function main() {
     authenticatedWebSocket: 101,
     sessionRenewal: 'Set-Cookie via forward_auth',
     sessionPersistence: 'survived DSH restart',
+    gatewayIdentity: 'signed JWE session reached SPA and survived restart',
+    forgedGatewayIdentity: 401,
     browserSettingsSignOut: 'Settings -> Sign out -> /auth/login',
     browserSettingsPasswordReset: 'Settings -> Reset password',
     browserStaleCsrfRecovery: '403 fresh form then login',
