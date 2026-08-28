@@ -29,7 +29,7 @@ sudo npm install -g dsh-auth@0.2.3
 
 交互式安装器会询问精确的 DSH 服务、管理员初始化方式、HTTPS 主机名和 TLS 模式；展示一份不含密钥的计划；只有在你输入精确确认词后才会改动系统。它会把钉死的包安装进所选 DSH profile，复制同包内经过校验和验证的 Caddy 二进制，写入权限受限的认证状态，并启用独立的 `dsh-auth-caddy.service`。它从不存储明文密码，安装时也从不下载 Caddy。
 
-常规部署需要 Linux x64 或 ARM64、systemd、Node.js 24.7 或更新版本，以及 DSH Web 0.1.0-rc.7。自动 TLS 是 HTTPS 默认值。手动 TLS 需要已有的证书和私钥。
+常规部署需要 Linux x64 或 ARM64、systemd、Node.js 24.7 或更新版本，以及 DSH Web 0.1.0-rc.7。自动 TLS 是 HTTPS 默认值。手动 TLS 需要已有的证书和私钥。`--server-name` 同时接受 DNS 名称和公网字面量 IP 地址。
 
 ```text
 $ sudo dsh-auth setup
@@ -112,6 +112,7 @@ sudo dsh-auth setup \
 | `--non-interactive` | 在 TTY 上 | | 关闭提示。 |
 | `--json` | 否 | | 输出一份 JSON 文档。不会关闭提示。 |
 | `--mode` | 否 | `https` | `https` 或 `http`。 |
+| `--behind-tls-proxy` | 否 | 关闭 | 让受管 HTTP 鉴权边缘只监听回环地址，要求可信的 HTTPS 转发头，并签发 Secure Cookie。 |
 | `--admin-bootstrap` | 非提示模式时 | | `password` 或 `login-token`。 |
 | `--admin-username` | 密码安装时 | | 初始管理员登录名。 |
 | `--login-token` | 非提示模式时 | | `enabled` 或 `disabled`。令牌初始化必须为 `enabled`。 |
@@ -133,6 +134,27 @@ sudo dsh-auth setup \
 | `--http-port` | 否 | `80`（HTTP 为 `8080`） | HTTP 或 HTTPS 重定向端口。 |
 | `--https-port` | 否 | `443` | HTTPS 监听端口。 |
 | `--output-dir` | 否 | | 离线或容器渲染目录。跳过 systemd。 |
+
+### 为公网 IP 申请免费证书
+
+当 `--server-name` 是可从公网路由的 IPv4 或 IPv6 地址，且选择 `--tls automatic` 时，受管 Caddy 会使用 Let’s Encrypt 的 `shortlived` profile 申请免费的 IP 地址证书，并自动续期。Let’s Encrypt 要求这类证书有效期约六天，因此主机必须保留 Caddy 的持久化状态，并能访问 ACME 服务。HTTP challenge 端口必须能从公网访问（通常是 TCP 80）；证书认证的是 IP 而不是端口，所以签发后 HTTPS 可以监听其他端口。
+
+当前公网地址 `9.135.102.192` 使用标准 HTTPS 端口时，可以这样安装：
+
+```sh
+sudo dsh-auth setup \
+  --non-interactive \
+  --dsh-service dsh-web.service \
+  --admin-bootstrap login-token \
+  --login-token enabled \
+  --mode https \
+  --tls automatic \
+  --server-name 9.135.102.192 \
+  --http-port 80 \
+  --https-port 443
+```
+
+如果 ACME 校验无法访问这台机器，安装器不会把它伪装成受信任证书：请恢复 challenge 端口的公网访问、改用 DNS 名称，或用 `--tls manual` 提供已有证书。`tls internal` 仍然只是显式的本地/评估回退，不是浏览器默认信任的公网证书。
 
 已删除且无别名：`--nginx`、`--authorize-nginx-install`、`--user-id`、`--username`、`--roles` 和 `--dsh-bin`。
 
@@ -182,6 +204,42 @@ sudo dsh-auth setup \
   --login-token-error-message-en 'This sign-in link is unavailable. Request a new one from your administrator.'
 ```
 
+## 外部身份提供商
+
+`dsh-auth` 提供与具体身份系统无关的授权码接口。内置的 `ioa` provider
+适配腾讯 IOA/太湖的签名 AccessToken 换取流程；Session、CSRF、state 和授权
+策略仍由通用核心负责。
+
+通过 Cordis bundle 配置启用（默认关闭）：
+
+```yaml
+externalIdentity:
+  enabled: true
+  paasId: ${TAIHU_PAAS_ID}
+  tokenFile: /run/secrets/taihu-token
+  baseUrl: https://api.woa.com
+  callbackUrl: https://lightpilot.woa.com/auth/callback
+  allowedUsers: [masonxhuang, yuehuali]
+  allowedDepartmentIds: []
+  allowedDepartmentPrefixes: []
+```
+
+用户访问 `/auth/login/ioa` 发起登录。回调会校验短期 state，在服务端
+使用一次性 code 换取身份信息，应用用户/部门白名单，然后创建与密码登录相同的
+可吊销不透明 Session。太湖 Token 只从权限受限的 `tokenFile` 读取，不会出现在
+URL 或持久化认证状态中。
+
+### 已验证身份 Header
+
+已认证的 `GET`/`HEAD /auth/verify` 仍返回 `204` 及旧版
+`X-Dsh-Auth-User-Id: admin`、用户名和边缘角色 Header。IOA Session 还会返回
+经过 URI 编码和校验的 `X-Dsh-Auth-Subject`、`X-Dsh-Auth-Username`、
+`X-Dsh-Auth-Display-Name`，以及可选的 `X-Dsh-Auth-Picture`。`Subject` 是稳定的
+外部账号键；`X-Dsh-Auth-Roles` 只表示 dsh-auth 边缘角色，消费方不得将其直接当作
+应用角色。受管 Caddy 会在 `forward_auth` 前删除客户端同名 Header，只把验证结果复制
+给上游。资料字段限制为 512 个 UTF-8 字节并拒绝控制字符，头像地址必须是无凭据、无片段
+的 HTTPS URL。
+
 ## 重置密码
 
 已登录管理员可以打开 **设置 → 通用 → 重置密码**，输入当前密码并设置新密码。这会更新存储的哈希，并让其他浏览器会话退出；不会轮换会话密钥。
@@ -219,8 +277,27 @@ sudo dsh-auth setup \
   --listen-address 10.0.0.20 \
   --http-port 8080
 ```
-
 不要在不受信任的网络上使用此模式。HTTPS 是生产默认值。
+
+## 由外层反向代理终止 TLS
+
+运维人员可以让同一主机或同一网络命名空间内的 ingress、负载均衡器或反向代理继续管理证书和公网 TLS，同时保留 dsh-auth 受管 Caddy，作为唯一能够访问 DSH 的鉴权边缘：
+
+```sh
+sudo dsh-auth setup \
+  --admin-bootstrap login-token \
+  --login-token enabled \
+  --mode http \
+  --listen-address 127.0.0.1 \
+  --http-port 8080 \
+  --behind-tls-proxy
+```
+
+此模式只接受回环监听。外层代理必须从回环地址连接，并覆盖而不是追加 `X-Forwarded-Host`、`X-Forwarded-Proto` 和 `X-Real-IP`；转发协议必须是 `https`。转发信息缺失时请求会被拒绝。虽然内层链路是 HTTP，dsh-auth 仍会保留用于精确 Origin 校验的公网 authority、使用相对登录跳转，并签发 `Secure`、`__Host-` Cookie。
+
+外层代理及其证书、公网地址和端口仍由运维人员负责。setup 不探测、重载或修改它们，变化的公网 origin 也不属于 setup 指纹。签发一次性登录链接时，应把当前公网 HTTPS origin 传给 `issue-login-token --public-origin`。不要暴露内层监听地址、把路径前缀当作认证秘密，或让外层代理保留客户端伪造的转发头。
+
+在这种拓扑里，TLS 终止和鉴权执行是两条不同的所有权边界。外层代理不需要理解 Harness 路由或 dsh-auth 会话语义，也绝不能把任何路径直接转发给 Harness。dsh-auth 刻意保留受管 Caddy，避免运维人员在现有网关中自行复刻页面、API、下载、SSE 和 WebSocket 的完整 `forward_auth` 覆盖。使用运维人员管理的 Caddy、Nginx、ingress 或负载均衡器直接承担鉴权边缘，不属于当前支持的部署模式。
 
 ## 诊断、卸载与 v1 重装
 
@@ -239,6 +316,10 @@ sudo dsh-auth uninstall
 ```
 
 schema v1 所有权记录、旧 Nginx 参数和旧插件身份字段会被拒绝，并给出重装诊断。没有自动迁移。卸载并重新 setup 后，旧会话会失效。
+
+## 体验环境部署
+
+手动触发的[体验环境部署工作流](.github/workflows/experience-deploy.yml)会通过已固定主机密钥的 SSH，把所选开发 ref 部署到一个受保护的 GitHub Environment。它生成只在体验服务器使用的 `-experience.<run-id>.<attempt>` 预发布 tarball，首次执行非交互 `setup`，之后使用事务性 `upgrade`。它不会发布 npm，也不会创建 GitHub Release。请按 [`docs/experience-deploy.md`](docs/experience-deploy.md) 配置 Environment Variables 和 Secrets；SSH 账户应专用并能以 `sudo -n` 执行安装操作，同时保留所有权记录引用的服务器端 tarball，以便离线回滚。
 
 ## 退出码
 
@@ -291,7 +372,7 @@ dsh-auth setup \
 - Argon2id 哈希和随机会话密钥分别存放在权限受限的文件中。持久不透明会话使用 `0600` 的认证状态文档。
 - 登录、退出、令牌兑换和首次管理员设置会在受信代理解析后强制 CSRF 以及精确的 Origin/Referer 检查。认证响应为 `no-store`。
 - 第 2 版每个受管安装只支持一个管理员身份（`admin`）。密码初始化和令牌初始化是明确选项。注册、自助账户恢复、MFA、数据库、多账户策略和多租户不在本版本范围内。
-- Caddy 是唯一的公开监听器。标准反向代理无法立即吊销已经打开的 WebSocket。需要立即终止流的部署必须使用连接感知边缘。
+- dsh-auth 受管 Caddy 是唯一允许访问 Harness 的鉴权边缘。通常它也是公网监听器；使用 `--behind-tls-proxy` 时，运维人员的代理对公网监听，但只能访问受管鉴权边缘。标准反向代理无法立即吊销已经打开的 WebSocket。需要立即终止流的部署必须使用连接感知边缘。
 
 安全报告请遵循 [`SECURITY.md`](SECURITY.md)。
 

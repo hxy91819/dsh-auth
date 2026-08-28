@@ -11,6 +11,14 @@ import { createAuthEventLogger } from './logging.js'
 export { Config }
 export type { ConfigInput, ResolvedConfig } from './config.js'
 export { hashPassword, parsePasswordHash, verifyPassword } from './password.js'
+export {
+  encodeExternalIdentityHeader,
+  externalIdentityHeaders,
+  oauthValueFingerprint,
+  randomOAuthValue,
+  TaihuAccessTokenProvider,
+} from './external-identity.js'
+export type { ExternalIdentity, ExternalIdentityProvider } from './external-identity.js'
 
 /** Stable Cordis plugin name. */
 export const name = 'dsh-auth'

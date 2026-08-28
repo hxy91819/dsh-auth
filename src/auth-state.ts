@@ -14,6 +14,7 @@ import {
 import { dirname } from 'node:path'
 import { createHmac, randomBytes } from 'node:crypto'
 import { parsePasswordHash } from './password.js'
+import type { ExternalIdentity } from './external-identity.js'
 
 /** HMAC identifier that binds persisted sessions to the current session secret. */
 export function authStateSecretId(sessionSecret: Buffer): string {
@@ -24,7 +25,7 @@ const AUTH_STATE_VERSION = 2
 const MAX_AUTH_STATE_BYTES = 1024 * 1024
 const SESSION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u
 
-export type AuthenticationMethod = 'password' | 'login-token'
+export type AuthenticationMethod = 'password' | 'login-token' | 'external'
 
 export interface AdministratorState {
   readonly id: 'admin'
@@ -39,6 +40,7 @@ export interface StoredSession {
   readonly createdAt: number
   lastSeenAt: number
   expiresAt: number
+  readonly identity?: ExternalIdentity
 }
 
 export interface AuthStateDocument {
@@ -75,6 +77,49 @@ function timestamp(value: unknown, label: string): number {
   return value as number
 }
 
+function persistedIdentity(value: unknown): ExternalIdentity {
+  const saved = object(value, 'persisted session identity')
+  const allowed = ['subject', 'username', 'displayName', 'picture', 'email', 'departmentId', 'departmentName', 'groups']
+  if (Object.keys(saved).some(key => !allowed.includes(key))) throw new Error('persisted session identity contains unknown fields')
+  const text = (key: string): string | undefined => {
+    const item = saved[key]
+    if (item === undefined) return undefined
+    if (typeof item !== 'string' || item.length === 0 || Buffer.byteLength(item, 'utf8') > 512 || /\p{C}/u.test(item)) {
+      throw new Error(`persisted session identity ${key} is invalid`)
+    }
+    return item
+  }
+  const subject = text('subject')
+  if (subject === undefined) throw new Error('persisted session identity subject is required')
+  const groups = saved.groups
+  if (groups !== undefined && (!Array.isArray(groups) || groups.some(item => typeof item !== 'string' || item.length === 0 || item.length > 256))) {
+    throw new Error('persisted session identity groups are invalid')
+  }
+  const username = text('username')
+  const displayName = text('displayName')
+  const picture = text('picture')
+  if (picture !== undefined) {
+    let url: URL
+    try { url = new URL(picture) } catch { throw new Error('persisted session identity picture is invalid') }
+    if (url.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.hash !== '') {
+      throw new Error('persisted session identity picture must be an HTTPS URL')
+    }
+  }
+  const email = text('email')
+  const departmentId = text('departmentId')
+  const departmentName = text('departmentName')
+  return {
+    subject,
+    ...(username === undefined ? {} : { username }),
+    ...(displayName === undefined ? {} : { displayName }),
+    ...(picture === undefined ? {} : { picture }),
+    ...(email === undefined ? {} : { email }),
+    ...(departmentId === undefined ? {} : { departmentId }),
+    ...(departmentName === undefined ? {} : { departmentName }),
+    ...(groups === undefined ? {} : { groups: groups as string[] }),
+  }
+}
+
 function administrator(value: unknown): AdministratorState {
   const saved = object(value, 'administrator')
   exactKeys(saved, ['id', 'username', 'passwordHash', 'configuredAt'], 'administrator')
@@ -96,15 +141,15 @@ function administrator(value: unknown): AdministratorState {
 
 function storedSession(value: unknown): StoredSession {
   const saved = object(value, 'persisted session')
-  exactKeys(
-    saved,
-    ['token', 'authenticationMethod', 'createdAt', 'lastSeenAt', 'expiresAt'],
-    'persisted session',
-  )
+  const baseKeys = ['token', 'authenticationMethod', 'createdAt', 'lastSeenAt', 'expiresAt']
+  const actualKeys = Object.keys(saved).sort()
+  const validKeys = actualKeys.join(',') === baseKeys.slice().sort().join(',')
+    || actualKeys.join(',') === [...baseKeys, 'identity'].sort().join(',')
+  if (!validKeys) throw new Error('persisted session contains unknown or missing fields')
   if (typeof saved.token !== 'string' || !SESSION_TOKEN_PATTERN.test(saved.token)) {
     throw new Error('persisted session token is invalid')
   }
-  if (saved.authenticationMethod !== 'password' && saved.authenticationMethod !== 'login-token') {
+  if (saved.authenticationMethod !== 'password' && saved.authenticationMethod !== 'login-token' && saved.authenticationMethod !== 'external') {
     throw new Error('persisted session authenticationMethod is invalid')
   }
   const session: StoredSession = {
@@ -113,6 +158,7 @@ function storedSession(value: unknown): StoredSession {
     createdAt: timestamp(saved.createdAt, 'persisted session createdAt'),
     lastSeenAt: timestamp(saved.lastSeenAt, 'persisted session lastSeenAt'),
     expiresAt: timestamp(saved.expiresAt, 'persisted session expiresAt'),
+    ...(saved.identity === undefined ? {} : { identity: persistedIdentity(saved.identity) }),
   }
   if (session.createdAt > session.lastSeenAt || session.lastSeenAt > session.expiresAt) {
     throw new Error('persisted session timestamps are inconsistent')

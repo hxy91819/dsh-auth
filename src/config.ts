@@ -33,6 +33,8 @@ const ALLOWED_KEYS = [
   'loginTokenMaxAttempts',
   'loginTokenBlockSeconds',
   'trustedProxyAddresses',
+  'externalIdentity',
+  'gatewayIdentity',
 ] as const
 
 const REMOVED_KEYS: Readonly<Record<string, string>> = {
@@ -68,6 +70,43 @@ export interface ConfigInput {
   readonly loginTokenMaxAttempts?: number
   readonly loginTokenBlockSeconds?: number
   readonly trustedProxyAddresses?: readonly string[]
+  readonly externalIdentity?: ExternalIdentityConfigInput
+  readonly gatewayIdentity?: GatewayIdentityConfigInput
+}
+
+interface GatewayIdentityConfigInput {
+  readonly enabled?: boolean
+  readonly tokenFile?: string
+  readonly safeMode?: boolean
+  readonly allowedUsers?: readonly string[]
+  readonly allowedDepartmentIds?: readonly string[]
+  readonly allowedDepartmentPrefixes?: readonly string[]
+}
+
+interface ExternalIdentityConfigInput {
+  readonly enabled?: boolean
+  readonly paasId?: string
+  readonly tokenFile?: string
+  readonly baseUrl?: string
+  readonly authorizationEndpoint?: string
+  readonly accessTokenPath?: string
+  readonly callbackUrl?: string
+  readonly allowedUsers?: readonly string[]
+  readonly allowedDepartmentIds?: readonly string[]
+  readonly allowedDepartmentPrefixes?: readonly string[]
+}
+
+interface ExternalIdentityConfig {
+  readonly enabled: boolean
+  readonly paasId: string
+  readonly token: string
+  readonly baseUrl: string
+  readonly authorizationEndpoint?: string
+  readonly accessTokenPath?: string
+  readonly callbackUrl: string
+  readonly allowedUsers: ReadonlySet<string>
+  readonly allowedDepartmentIds: ReadonlySet<string>
+  readonly allowedDepartmentPrefixes: readonly string[]
 }
 
 /** Fully validated runtime configuration. */
@@ -91,6 +130,8 @@ export interface ResolvedConfig {
   readonly loginTokenMaxAttempts: number
   readonly loginTokenBlockSeconds: number
   readonly trustedProxyAddresses: ReadonlySet<string>
+  readonly externalIdentity?: ExternalIdentityConfig
+  readonly gatewayIdentity?: { readonly token: string; readonly safeMode: boolean; readonly allowedUsers: ReadonlySet<string>; readonly allowedDepartmentIds: ReadonlySet<string>; readonly allowedDepartmentPrefixes: readonly string[] }
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -216,6 +257,50 @@ function plainTextMessage(input: Record<string, unknown>, key: string): string |
   return value
 }
 
+function stringList(value: unknown, key: string): readonly string[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.some(item => typeof item !== 'string' || item.length === 0 || /\p{C}/u.test(item))) {
+    throw new Error(`${key} must be an array of non-empty strings`)
+  }
+  return value as string[]
+}
+
+function externalIdentity(input: Record<string, unknown>): ExternalIdentityConfig | undefined {
+  const raw = input.externalIdentity ?? (process.env.DSH_AUTH_EXTERNAL_ENABLED === 'true' ? {
+    enabled: true,
+    paasId: process.env.DSH_AUTH_EXTERNAL_PAAS_ID,
+    tokenFile: process.env.DSH_AUTH_EXTERNAL_TOKEN_FILE,
+    baseUrl: process.env.DSH_AUTH_EXTERNAL_BASE_URL,
+    callbackUrl: process.env.DSH_AUTH_EXTERNAL_CALLBACK_URL,
+    allowedUsers: (process.env.DSH_AUTH_EXTERNAL_ALLOWED_USERS ?? '').split(',').map(value => value.trim()).filter(Boolean),
+    allowedDepartmentIds: (process.env.DSH_AUTH_EXTERNAL_ALLOWED_DEPT_IDS ?? '').split(',').map(value => value.trim()).filter(Boolean),
+    allowedDepartmentPrefixes: (process.env.DSH_AUTH_EXTERNAL_ALLOWED_DEPT_PREFIXES ?? '').split(',').map(value => value.trim()).filter(Boolean),
+  } : undefined)
+  if (raw === undefined) return undefined
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw new Error('externalIdentity must be an object')
+  const value = raw as Record<string, unknown>
+  const enabled = boolean(value, 'enabled', false)
+  if (!enabled) return undefined
+  const paasId = requiredString(value, 'paasId')
+  const tokenFile = requiredAbsolutePath(value, 'tokenFile')
+  const baseUrl = optionalString(value, 'baseUrl') ?? 'https://api.woa.com'
+  const authorizationEndpoint = optionalString(value, 'authorizationEndpoint')
+  const accessTokenPath = optionalString(value, 'accessTokenPath')
+  const callbackUrl = requiredString(value, 'callbackUrl')
+  return {
+    enabled,
+    paasId,
+    token: inspectSecretFile(tokenFile, 'externalIdentity.tokenFile'),
+    baseUrl,
+    ...(authorizationEndpoint === undefined ? {} : { authorizationEndpoint }),
+    ...(accessTokenPath === undefined ? {} : { accessTokenPath }),
+    callbackUrl,
+    allowedUsers: new Set(stringList(value.allowedUsers, 'externalIdentity.allowedUsers')),
+    allowedDepartmentIds: new Set(stringList(value.allowedDepartmentIds, 'externalIdentity.allowedDepartmentIds')),
+    allowedDepartmentPrefixes: stringList(value.allowedDepartmentPrefixes, 'externalIdentity.allowedDepartmentPrefixes'),
+  }
+}
+
 function assertAllowedKeys(input: Record<string, unknown>): void {
   for (const key of Object.keys(input)) {
     const removed = REMOVED_KEYS[key]
@@ -272,6 +357,27 @@ export function resolveConfig(value: unknown): ResolvedConfig {
     1,
     Math.min(sessionTtlSeconds, idleTtlSeconds),
   )
+  const resolvedExternalIdentity = externalIdentity(input)
+  const gatewayRaw = input.gatewayIdentity as Record<string, unknown> | undefined
+  const gatewayEnabled = gatewayRaw?.enabled === true || process.env.DSH_AUTH_GATEWAY_ENABLED === 'true'
+  const gatewayTokenFile = typeof gatewayRaw?.tokenFile === 'string' ? gatewayRaw.tokenFile : process.env.DSH_AUTH_GATEWAY_TOKEN_FILE
+  const gatewaySafeMode = gatewayRaw?.safeMode !== false && process.env.DSH_AUTH_GATEWAY_SAFE_MODE !== 'false'
+  const list = (key: string): readonly string[] => {
+    const value = gatewayRaw?.[key] ?? process.env[`DSH_AUTH_GATEWAY_${key.replace(/[A-Z]/g, (m) => `_${m}`).toUpperCase()}`]
+    if (value === undefined) return []
+    if (Array.isArray(value)) return value.filter((entry): entry is string => typeof entry === 'string')
+    if (typeof value !== 'string' && typeof value !== 'number') throw new Error(`${key} must be a string list`)
+    return String(value).split(',').map((entry) => entry.trim()).filter(Boolean)
+  }
+  const resolvedGatewayIdentity = gatewayEnabled
+    ? {
+        token: inspectSecretFile(requiredAbsolutePath({ tokenFile: gatewayTokenFile }, 'tokenFile'), 'gatewayIdentity.tokenFile'),
+        safeMode: gatewaySafeMode,
+        allowedUsers: new Set(list('allowedUsers')),
+        allowedDepartmentIds: new Set(list('allowedDepartmentIds')),
+        allowedDepartmentPrefixes: list('allowedDepartmentPrefixes'),
+      }
+    : undefined
   return {
     basePath: AUTH_BASE_PATH,
     authStateFile,
@@ -292,6 +398,8 @@ export function resolveConfig(value: unknown): ResolvedConfig {
     loginTokenMaxAttempts: integer(input, 'loginTokenMaxAttempts', 10, 1, 100),
     loginTokenBlockSeconds: integer(input, 'loginTokenBlockSeconds', 5 * 60, 1, 24 * 60 * 60),
     trustedProxyAddresses: new Set(proxyAddressList(input)),
+    ...(resolvedExternalIdentity === undefined ? {} : { externalIdentity: resolvedExternalIdentity }),
+    ...(resolvedGatewayIdentity === undefined ? {} : { gatewayIdentity: resolvedGatewayIdentity }),
   }
 }
 

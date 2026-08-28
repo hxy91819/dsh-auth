@@ -35,7 +35,7 @@ When setup finds a pre-installed bundle whose package name, version, and build c
 
 The interactive installer asks for the exact DSH service, administrator initialization method, HTTPS hostname, and TLS mode; shows a secret-free plan; and changes the system only after you type the exact confirmation. It installs the pinned bundle into the selected DSH profile, copies a checksum-verified Caddy binary bundled in the same package, writes permission-restricted authentication state, and enables an independent `dsh-auth-caddy.service`. It never stores a plaintext password and never downloads Caddy at setup time.
 
-Normal deployment requires Linux x64 or ARM64, systemd, Node.js 24.7 or newer, and DSH Web 0.1.0-rc.7. Automatic TLS is the HTTPS default. Manual TLS requires an existing certificate and key.
+Normal deployment requires Linux x64 or ARM64, systemd, Node.js 24.7 or newer, and DSH Web 0.1.0-rc.7. Automatic TLS is the HTTPS default. Manual TLS requires an existing certificate and key. `--server-name` accepts either a DNS name or a public literal IP address.
 
 ```text
 $ sudo dsh-auth setup
@@ -141,6 +141,27 @@ sudo dsh-auth setup \
 | `--https-port` | no | `443` | HTTPS listen port. |
 | `--output-dir` | no | | Offline or container render directory. Skips systemd. |
 
+### Free certificates for a public IP
+
+When `--server-name` is a publicly routable IPv4 or IPv6 address and `--tls automatic` is selected, the managed Caddy requests a free Let’s Encrypt IP address certificate with the `shortlived` profile and renews it automatically. Let’s Encrypt requires these certificates to be valid for about six days, so the host must keep Caddy’s persistent state and outbound ACME access available. The HTTP challenge port must be reachable from the Internet (normally TCP 80); the certificate authenticates the IP, not a port, so the HTTPS listener may use another port after issuance.
+
+For the public address `9.135.102.192` on the normal HTTPS port:
+
+```sh
+sudo dsh-auth setup \
+  --non-interactive \
+  --dsh-service dsh-web.service \
+  --admin-bootstrap login-token \
+  --login-token enabled \
+  --mode https \
+  --tls automatic \
+  --server-name 9.135.102.192 \
+  --http-port 80 \
+  --https-port 443
+```
+
+If ACME validation cannot reach the machine, setup does not turn that into a trusted certificate: use a DNS name, restore public access to the challenge port, or provide an existing certificate with `--tls manual`. `tls internal` remains an explicit local/evaluation fallback and is not a publicly trusted certificate.
+
 Removed without aliases: `--nginx`, `--authorize-nginx-install`, `--user-id`, `--username`, `--roles`, and `--dsh-bin`.
 
 Other commands accept a smaller frozen flag set:
@@ -198,6 +219,47 @@ sudo dsh-auth setup \
   --login-token-error-message-zh '登录链接不可用，请向管理员重新申请。' \
   --login-token-error-message-en 'This sign-in link is unavailable. Request a new one from your administrator.'
 ```
+
+## External identity providers
+
+`dsh-auth` exposes a provider-neutral authorization-code interface. The built-in
+`ioa` provider adapts Tencent IOA/Taihu's signed AccessToken exchange while the
+session, CSRF, state, and authorization policy remain provider-independent.
+
+Enable it through the Cordis bundle configuration (the provider is disabled by
+default):
+
+```yaml
+externalIdentity:
+  enabled: true
+  paasId: ${TAIHU_PAAS_ID}
+  tokenFile: /run/secrets/taihu-token
+  baseUrl: https://api.woa.com
+  callbackUrl: https://lightpilot.woa.com/auth/callback
+  allowedUsers: [masonxhuang, yuehuali]
+  allowedDepartmentIds: []
+  allowedDepartmentPrefixes: []
+```
+
+Users start the flow at `/auth/login/ioa`. The callback validates a
+short-lived state value, exchanges the one-time code server-side, applies the
+configured user/department allowlist, and creates the same revocable opaque
+session used by password login. The Taihu token is read only from the
+permission-restricted `tokenFile`; it is never accepted in a URL or persisted
+authentication state.
+
+### Verified identity headers
+
+An authenticated `GET` or `HEAD` request to `/auth/verify` still returns `204`
+and the legacy `X-Dsh-Auth-User-Id: admin`, username, and edge-role headers.
+For an external (IOA) session it also returns URL-encoded, validated profile
+headers: `X-Dsh-Auth-Subject`, `X-Dsh-Auth-Username`,
+`X-Dsh-Auth-Display-Name`, and optional `X-Dsh-Auth-Picture`. `Subject` is the
+stable external account key; `X-Dsh-Auth-Roles` describes only the dsh-auth
+edge and must not be used as an application role. The managed Caddy removes
+client-supplied values before `forward_auth` and copies only verifier output to
+the upstream. Profile fields are bounded to 512 UTF-8 bytes and reject control
+characters; picture URLs must be HTTPS without credentials or fragments.
 
 ## Reset the password
 
@@ -257,6 +319,8 @@ This mode accepts only a loopback listener. The outer proxy must connect to that
 
 The outer proxy, its certificates, public address, and port remain operator-owned. Setup does not discover, reload, or modify them, and their changing public origin is not part of the setup fingerprint. Do not expose the inner listener, use a path prefix as an authentication secret, or let the outer proxy append client-supplied forwarding headers.
 
+TLS termination and authentication enforcement remain separate ownership boundaries in this topology. The outer proxy does not need to know Harness routes or dsh-auth session semantics, and it must never proxy any path directly to Harness. dsh-auth deliberately retains its managed Caddy so operators do not have to reproduce complete `forward_auth` coverage for pages, APIs, downloads, SSE, and WebSockets in an existing gateway. Using an operator-managed Caddy, Nginx, ingress, or load balancer as the authentication edge is not a supported deployment mode.
+
 ## Doctor, uninstall, and v1 reinstall
 
 `doctor` checks the ownership record, file permissions, the exact DSH service, root-executable safety, Caddy version and checksum, `caddy validate`, and service state:
@@ -309,6 +373,10 @@ sudo dsh-auth upgrade                                  # only then upgrade
 
 If the old artifact is no longer available or restores to a different build, doctor keeps failing: pin the recorded version from your trusted source, or uninstall and set up again.
 
+## Experience environment deployment
+
+The manual [Deploy experience environment workflow](.github/workflows/experience-deploy.yml) deploys a selected development ref to one protected GitHub Environment over a pinned SSH host key. It creates a private `-experience.<run-id>.<attempt>` prerelease tarball, performs the first non-interactive `setup`, and uses the transactional `upgrade` path on later runs. It never publishes npm or creates a GitHub Release. Configure the environment variables and secrets described in [`docs/experience-deploy.md`](docs/experience-deploy.md); keep the SSH account dedicated, require `sudo -n`, and retain the server-side artifact referenced by the ownership record for offline rollback.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -360,7 +428,7 @@ The output directory contains `dsh-auth.env`, file-backed credentials, authentic
 - Argon2id hashes and random session secrets live in separate permission-restricted files. Persistent opaque sessions use a `0600` authentication-state document.
 - Login, logout, token redemption, and first-time administrator setup enforce CSRF plus exact Origin/Referer checks after trusted-proxy resolution. Authentication responses are `no-store`.
 - Version 2 supports one administrator identity (`admin`) per managed installation. Password and token initialization are an explicit choice. Registration, self-service account recovery, MFA, databases, multi-account policy, and multi-tenancy are outside this release.
-- Caddy is the only public listener. A standard reverse proxy cannot immediately revoke an already-open WebSocket. Deployments requiring immediate stream termination need a connection-aware edge.
+- The managed dsh-auth Caddy is the only authentication edge allowed to reach Harness. It is normally the public listener; with `--behind-tls-proxy`, an operator-owned proxy is public but may reach only the managed edge. A standard reverse proxy cannot immediately revoke an already-open WebSocket. Deployments requiring immediate stream termination need a connection-aware edge.
 
 Security reports follow [`SECURITY.md`](SECURITY.md).
 

@@ -140,4 +140,32 @@ describe('configuration', () => {
       expect(() => resolveConfig(enabled)).toThrow(/must be owned by the service/u)
     }
   }, 30_000)
+
+  it('resolves an explicitly enabled external identity policy from a secret file', async () => {
+    const credentials = await testCredentials()
+    const root = mkdtempSync(join(tmpdir(), 'dsh-auth-config-external-'))
+    roots.push(root)
+    const tokenFile = join(root, 'taihu-token')
+    const authStateFile = join(root, 'auth-state.json')
+    const sessionSecretFile = join(root, 'session-secret')
+    writeFileSync(tokenFile, 'taihu-secret\n', { mode: 0o600 })
+    writeFileSync(sessionSecretFile, `${credentials.secret}\n`, { mode: 0o600 })
+    writeFileSync(authStateFile, '{}\n', { mode: 0o600 })
+    const config = resolveConfig({
+      authStateFile,
+      sessionSecretFile,
+      externalIdentity: {
+        enabled: true,
+        paasId: 'paas-demo',
+        tokenFile,
+        callbackUrl: 'https://lightpilot.woa.com/auth/callback',
+        allowedUsers: ['masonxhuang'],
+        allowedDepartmentIds: ['123'],
+        allowedDepartmentPrefixes: ['TEG/'],
+      },
+    })
+    expect(config.externalIdentity?.paasId).toBe('paas-demo')
+    expect(config.externalIdentity?.allowedUsers.has('masonxhuang')).toBe(true)
+    expect(config.externalIdentity?.allowedDepartmentPrefixes).toEqual(['TEG/'])
+  }, 30_000)
 })

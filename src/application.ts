@@ -35,6 +35,8 @@ import {
   writeTokenHtml,
 } from './http.js'
 import { LoginLimiter } from './limiter.js'
+import { externalIdentityHeaders, randomOAuthValue, TaihuAccessTokenProvider, type ExternalIdentity, type ExternalIdentityProvider } from './external-identity.js'
+import { resolveGatewayIdentity } from './gateway-identity.js'
 import { LoginTokenStore, createNodeTokenHost } from './login-token-store.js'
 import { clientLogId, errorLogFields, silentAuthLogger } from './logging.js'
 import type { AuthEventLogger } from './logging.js'
@@ -55,10 +57,13 @@ import { TOKEN_BOOTSTRAP_FILE, tokenBootstrapSource } from './token-bootstrap.js
 export class AuthApplication {
   private readonly sessions: SessionStore
   private readonly csrfSigner: CookieSigner
+  private readonly externalStateSigner: CookieSigner
   private readonly limiter: LoginLimiter
   private readonly tokenLimiter: LoginLimiter
   private readonly tokenStore: LoginTokenStore | undefined
   private readonly cookieNames: { readonly session: string; readonly csrf: string }
+  private readonly externalProvider: ExternalIdentityProvider | undefined
+  private readonly externalStates = new Map<string, { readonly returnTo: string; readonly expiresAt: number }>()
 
   constructor(
     private readonly config: ResolvedConfig,
@@ -68,7 +73,9 @@ export class AuthApplication {
   ) {
     this.sessions = new SessionStore(config, now)
     this.csrfSigner = new CookieSigner(config.sessionSecret)
+    this.externalStateSigner = new CookieSigner(config.sessionSecret)
     this.cookieNames = cookieNames(config.secureCookies)
+    this.externalProvider = config.externalIdentity === undefined ? undefined : new TaihuAccessTokenProvider(config.externalIdentity)
     this.limiter = new LoginLimiter(
       config.loginWindowSeconds * 1000,
       config.loginMaxAttempts,
@@ -101,6 +108,14 @@ export class AuthApplication {
       }
       if (path === `${this.config.basePath}/login`) {
         await this.login(req, res, url)
+        return
+      }
+      if (path === `${this.config.basePath}/login/ioa`) {
+        this.externalLogin(req, res, safeReturnTarget(url.searchParams.get('returnTo')))
+        return
+      }
+      if (path === `${this.config.basePath}/callback`) {
+        await this.externalCallback(req, res, url)
         return
       }
       if (path === `${this.config.basePath}/${TOKEN_BOOTSTRAP_FILE}`) {
@@ -257,6 +272,88 @@ export class AuthApplication {
     })
   }
 
+  private externalLogin(req: IncomingMessage, res: ServerResponse, returnTo: string): void {
+    if (this.config.gatewayIdentity !== undefined || this.externalProvider === undefined || this.config.externalIdentity === undefined) {
+      write(res, 404, 'external identity login is not enabled', { 'cache-control': 'no-store' })
+      return
+    }
+    const now = this.now()
+    const retryAfter = this.limiter.consume(`external:${this.clientId(req)}`, now)
+    if (retryAfter !== undefined) {
+      write(res, 429, 'too many external login attempts', { 'cache-control': 'no-store', 'retry-after': String(retryAfter) })
+      return
+    }
+    for (const [state, value] of this.externalStates) if (value.expiresAt <= now) this.externalStates.delete(state)
+    if (this.externalStates.size >= 128) {
+      write(res, 429, 'too many external login attempts', { 'cache-control': 'no-store', 'retry-after': '60' })
+      return
+    }
+    const stateCookie = this.externalStateSigner.issue()
+    const state = stateCookie.token
+    const nonce = randomOAuthValue()
+    this.externalStates.set(state, { returnTo, expiresAt: now + 10 * 60 * 1000 })
+    redirect(res, this.externalProvider.authorizationUrl({
+      state,
+      nonce,
+      redirectUri: this.config.externalIdentity.callbackUrl,
+    }), { 'set-cookie': this.cookie(this.externalStateCookieName(), stateCookie.value, 10 * 60) })
+  }
+
+  private async externalCallback(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    if (this.externalProvider === undefined || this.config.externalIdentity === undefined) {
+      write(res, 404, 'not found', { 'cache-control': 'no-store' })
+      return
+    }
+    if (req.method !== 'GET') {
+      write(res, 405, 'method not allowed', { allow: 'GET', 'cache-control': 'no-store' })
+      return
+    }
+    const state = url.searchParams.get('state')
+    const code = url.searchParams.get('code')
+    const stateCookie = parseCookies(req.headers.cookie).get(this.externalStateCookieName())
+    const saved = state === null ? undefined : this.externalStates.get(state)
+    if (state === null || this.externalStateSigner.verify(stateCookie) !== state || saved === undefined || saved.expiresAt <= this.now() || code === null) {
+      if (state !== null) this.externalStates.delete(state)
+      write(res, 400, 'invalid external login response', { 'cache-control': 'no-store' })
+      return
+    }
+    this.externalStates.delete(state)
+    let identity: ExternalIdentity
+    try {
+      identity = await this.externalProvider.exchangeCode({ code, redirectUri: this.config.externalIdentity.callbackUrl })
+    } catch (error) {
+      this.logger.warn({
+        event: 'auth.external.exchange.failed',
+        reason: error instanceof Error ? error.message : 'unknown_error',
+        ...(error instanceof Error && error.cause instanceof Error ? { cause: error.cause.message } : {}),
+        ...(error instanceof Error && typeof error.cause === 'object' && error.cause !== null && 'code' in error.cause ? { causeCode: String(error.cause.code) } : {}),
+      })
+      write(res, 502, 'external identity provider unavailable', { 'cache-control': 'no-store' })
+      return
+    }
+    if (!this.externalIdentityAllowed(identity, this.config.externalIdentity)) {
+      this.logger.warn({ event: 'auth.login.failed', authMethod: 'external', reason: 'not_authorized', clientId: this.clientId(req) })
+      write(res, 403, 'external identity is not authorized', { 'cache-control': 'no-store' })
+      return
+    }
+    const created = this.sessions.create(this.now(), 'external', identity)
+    this.logger.info({ event: 'auth.login.succeeded', authMethod: 'external', clientId: this.clientId(req) })
+    redirect(res, saved.returnTo, {
+      'set-cookie': [
+        this.cookie(this.cookieNames.session, created.cookieValue, this.config.sessionTtlSeconds),
+        this.cookie(this.cookieNames.csrf, '', 0),
+        this.cookie(this.externalStateCookieName(), '', 0),
+      ],
+    })
+  }
+
+  private externalIdentityAllowed(identity: ExternalIdentity, policy: typeof this.config.externalIdentity | typeof this.config.gatewayIdentity): boolean {
+    if (policy === undefined) return false
+    return policy.allowedUsers.has(identity.subject)
+      || (identity.departmentId !== undefined && policy.allowedDepartmentIds.has(identity.departmentId))
+      || (identity.departmentName !== undefined && policy.allowedDepartmentPrefixes.some(prefix => identity.departmentName?.startsWith(prefix) === true))
+  }
+
   private browserBootstrap(req: IncomingMessage, res: ServerResponse): void {
     if (this.config.secureCookies) {
       write(res, 404, 'not found')
@@ -365,7 +462,20 @@ export class AuthApplication {
       write(res, 403, 'cross-origin request denied', { 'cache-control': 'no-store' })
       return
     }
-    const authenticated = this.sessions.authenticate(req, this.now())
+    let authenticated = this.sessions.authenticate(req, this.now())
+    if (authenticated === undefined && this.config.gatewayIdentity !== undefined) {
+      try {
+        const identity = resolveGatewayIdentity(req, this.config.gatewayIdentity, this.now())
+        if (identity !== undefined && this.externalIdentityAllowed(identity, this.config.gatewayIdentity)) {
+          const created = this.sessions.create(this.now(), 'external', identity)
+          authenticated = { session: created.session, renewalCookieValue: created.cookieValue }
+          res.setHeader('set-cookie', this.renewalCookies(authenticated))
+          this.logger.info({ event: 'auth.gateway.succeeded', clientId: this.clientId(req) })
+        }
+      } catch (error) {
+        this.logger.warn({ event: 'auth.gateway.failed', reason: error instanceof Error ? error.message : 'invalid_identity' })
+      }
+    }
     if (authenticated === undefined) {
       const original = safeReturnTarget(headerValue(req, 'x-original-uri'))
       const login = `${this.config.basePath}/login?returnTo=${encodeURIComponent(original)}`
@@ -378,12 +488,23 @@ export class AuthApplication {
       res.end()
       return
     }
+    const identity = authenticated.session.identity
+    let identityHeaders: Record<string, string> = {}
+    if (identity !== undefined) {
+      try {
+        identityHeaders = externalIdentityHeaders(identity)
+      } catch {
+        write(res, 502, 'external identity is invalid', { 'cache-control': 'no-store' })
+        return
+      }
+    }
     res.writeHead(204, {
       'cache-control': 'no-store, max-age=0',
       'vary': 'Cookie',
       'x-dsh-auth-user-id': authenticated.session.user.userId,
       'x-dsh-auth-username': encodeURIComponent(authenticated.session.user.username),
       'x-dsh-auth-roles': authenticated.session.user.roles.join(','),
+      ...identityHeaders,
       ...this.renewalHeaders(authenticated),
     })
     res.end()
@@ -662,6 +783,9 @@ export class AuthApplication {
       preferences,
       message,
       this.sessions.passwordCredentials() !== undefined,
+      this.externalProvider === undefined || this.config.gatewayIdentity !== undefined
+        ? undefined
+        : `${this.config.basePath}/login/ioa?returnTo=${encodeURIComponent(returnTo)}`,
     ), {
       'set-cookie': this.cookie(this.cookieNames.csrf, csrf.value, 10 * 60),
     })
@@ -703,5 +827,9 @@ export class AuthApplication {
 
   private cookie(name: string, value: string, maxAgeSeconds: number): string {
     return authCookie(name, value, maxAgeSeconds, this.config.secureCookies)
+  }
+
+  private externalStateCookieName(): string {
+    return this.config.secureCookies ? '__Host-dsh_auth_external_state' : 'dsh_auth_external_state'
   }
 }

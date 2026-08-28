@@ -188,7 +188,10 @@ function mockUpstream() {
       }
       response.writeHead(204, {
         'x-dsh-auth-user-id': 'verified-admin',
+        'x-dsh-auth-subject': 'verified-subject',
         'x-dsh-auth-username': 'verified-name',
+        'x-dsh-auth-display-name': 'Verified Name',
+        'x-dsh-auth-picture': 'https%3A%2F%2Favatars.example.com%2Fverified.png',
         'x-dsh-auth-roles': 'admin',
         'set-cookie': 'renewed=yes; Secure; HttpOnly; Path=/',
       })
@@ -289,7 +292,10 @@ async function verifyProtocol(caddy, root, ports, certificate, key) {
       headers: {
         cookie: 'session=valid',
         'x-dsh-auth-user-id': 'forged',
+        'x-dsh-auth-subject': 'forged',
         'x-dsh-auth-username': 'forged',
+        'x-dsh-auth-display-name': 'forged',
+        'x-dsh-auth-picture': 'forged',
         'x-dsh-auth-roles': 'owner',
         'x-forwarded-host': 'attacker.invalid',
         'x-forwarded-proto': 'http',
@@ -297,7 +303,9 @@ async function verifyProtocol(caddy, root, ports, certificate, key) {
       },
     })
     const seen = JSON.parse(accepted.body)
-    if (seen['x-dsh-auth-user-id'] !== 'verified-admin' || seen['x-dsh-auth-username'] !== 'verified-name'
+    if (seen['x-dsh-auth-user-id'] !== 'verified-admin' || seen['x-dsh-auth-subject'] !== 'verified-subject'
+      || seen['x-dsh-auth-username'] !== 'verified-name' || seen['x-dsh-auth-display-name'] !== 'Verified Name'
+      || seen['x-dsh-auth-picture'] !== 'https%3A%2F%2Favatars.example.com%2Fverified.png'
       || seen['x-dsh-auth-roles'] !== 'admin') throw new Error('verified identity did not replace forged headers')
     if (seen['x-forwarded-host'] === 'attacker.invalid' || seen['x-forwarded-proto'] === 'http'
       || seen['x-real-ip'] === '203.0.113.9') throw new Error('forged forwarding headers reached the upstream')

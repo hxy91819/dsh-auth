@@ -14,9 +14,9 @@ Include the affected version, impact, minimal reproduction, deployment mode, and
 
 ## Security objective
 
-`dsh-auth` adds a single-account authentication gate in front of the DeepSeek Harness Web application without modifying Harness. Its objective is to prevent unauthenticated remote clients from reaching the Harness browser application, API, downloads, SSE endpoints, or WebSocket handshakes through the public listener.
+`dsh-auth` adds an authentication gate in front of the DeepSeek Harness Web application without modifying Harness. Password and one-time-token installations remain single-administrator deployments; when an external identity provider is enabled, the gate can create per-user sessions and apply an explicit allowlist. Its objective is to prevent unauthenticated remote clients from reaching the Harness browser application, API, downloads, SSE endpoints, or WebSocket handshakes through the public listener.
 
-This package provides authentication, not tenant isolation or fine-grained authorization. The configured user ID and roles are identity metadata; they do not create an independent Harness RBAC system. A successful login receives the authority already available to the configured Harness deployment, which may include reading workspaces, changing settings and credentials, starting agents, and executing tools.
+This package provides authentication and an optional coarse allowlist, not tenant isolation or fine-grained Harness RBAC. A successful login receives the authority already available to the configured Harness deployment, which may include reading workspaces, changing settings and credentials, starting agents, and executing tools.
 
 ## Trust boundaries
 
@@ -115,7 +115,7 @@ Installer safety does not protect against a malicious package artifact, compromi
 - Mutually untrusted local users or workloads that can reach the Harness loopback port.
 - A compromised DSH service account, root account, Caddy process/configuration, Cordis plugin, Harness package, or same-origin browser application.
 - Immediate revocation of already-open WebSockets.
-- Multi-account policy, registration, account recovery, MFA, SSO, per-user authorization, tenant isolation, and audit-grade identity attribution.
+- User registration, account recovery, MFA, tenant isolation, and audit-grade identity attribution remain out of scope. External identity providers and per-session allowlists are supported, but deployments must provide their own provider account lifecycle and authorization policy.
 - Multiple concurrent DSH processes sharing the JSON authentication-state document.
 - Protection of data after an authenticated user or agent intentionally exports it, writes it to an unsafe location, or sends it through a configured tool or model provider.
 - Availability against host exhaustion, a sufficiently distributed denial-of-service attack, or failure of external TLS, DNS, package-registry, and operating-system infrastructure.
