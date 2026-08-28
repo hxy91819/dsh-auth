@@ -15,9 +15,9 @@ function signature(timestamp: string, sequence: string): string {
   return createHash('sha256').update(`${timestamp}${token}${sequence},,,${timestamp}`, 'utf8').digest('hex').toUpperCase()
 }
 
-async function identityHeader(expiration = '2026-08-27T13:00:00.000Z'): Promise<string> {
+async function identityHeader(loginName = 'masonxhuang@tencent.com', expiration = '2026-08-27T13:00:00.000Z'): Promise<string> {
   return new CompactEncrypt(new TextEncoder().encode(JSON.stringify({
-    LoginName: 'masonxhuang@tencent.com',
+    LoginName: loginName,
     ChineseName: 'Mason',
     Expiration: expiration,
   }))).setProtectedHeader({ alg: 'dir', enc: 'A256GCM' }).encrypt(new TextEncoder().encode(token))
@@ -38,7 +38,7 @@ async function gatewayServer() {
       callbackUrl: 'http://127.0.0.1/auth/callback',
       allowedUsers: ['masonxhuang'],
     },
-    gatewayIdentity: { enabled: true, tokenFile, safeMode: true },
+    gatewayIdentity: { enabled: true, tokenFile, safeMode: true, allowedUsers: ['masonxhuang'] },
   })
   const server = await startTestServer(config, () => now)
   return { server, tokenFile }
@@ -97,11 +97,66 @@ describe('TOF gateway identity behavior', () => {
           timestamp,
           signature: signature(timestamp, sequence),
           'x-rio-seq': sequence,
-          'x-tai-identity': await identityHeader('2026-08-27T11:55:00.000Z'),
+          'x-tai-identity': await identityHeader('masonxhuang@tencent.com', '2026-08-27T11:55:00.000Z'),
         },
       })
       expect(response.status).toBe(401)
       expect(response.headers.get('set-cookie')).toBeNull()
+    } finally {
+      server.server.close()
+    }
+  })
+
+  it('requires the encrypted assertion in safe mode instead of trusting staffname', async () => {
+    const { server } = await gatewayServer()
+    try {
+      const timestamp = String(Math.floor(now / 1000))
+      const sequence = 'sequence-safe-mode-fallback'
+      const response = await fetch(`${server.baseUrl}/auth/verify`, {
+        headers: {
+          timestamp,
+          signature: signature(timestamp, sequence),
+          'x-rio-seq': sequence,
+          staffname: 'masonxhuang',
+        },
+      })
+      expect(response.status).toBe(401)
+      expect(response.headers.get('set-cookie')).toBeNull()
+    } finally {
+      server.server.close()
+    }
+  })
+
+  it('applies the gateway allowlist when OAuth and gateway policies differ', async () => {
+    const credentials = await testCredentials()
+    const root = mkdtempSync(join(tmpdir(), 'dsh-auth-gateway-policy-http-'))
+    const tokenFile = join(root, 'gateway-token')
+    writeFileSync(tokenFile, `${token}\n`, { mode: 0o600 })
+    chmodSync(tokenFile, 0o600)
+    const config = testConfig(credentials, {
+      secureCookies: false,
+      externalIdentity: {
+        enabled: true,
+        paasId: 'oauth-test',
+        tokenFile,
+        callbackUrl: 'http://127.0.0.1/auth/callback',
+        allowedUsers: ['masonxhuang'],
+      },
+      gatewayIdentity: { enabled: true, tokenFile, safeMode: true, allowedUsers: ['yuehuali'] },
+    })
+    const server = await startTestServer(config, () => now)
+    try {
+      const timestamp = String(Math.floor(now / 1000))
+      const sequence = 'sequence-gateway-policy'
+      const response = await fetch(`${server.baseUrl}/auth/verify`, {
+        headers: {
+          timestamp,
+          signature: signature(timestamp, sequence),
+          'x-rio-seq': sequence,
+          'x-tai-identity': await identityHeader('yuehuali@tencent.com'),
+        },
+      })
+      expect(response.status).toBe(204)
     } finally {
       server.server.close()
     }

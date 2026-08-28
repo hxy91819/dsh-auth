@@ -70,6 +70,7 @@ export function resolveGatewayIdentity(req: IncomingMessage, config: GatewayIden
   if (provided.length !== wanted.length || !timingSafeEqual(provided, wanted)) throw new Error('gateway identity signature invalid')
   cache.set(replayKey, now)
   const encrypted = header('x-tai-identity')
+  if (config.safeMode && encrypted === '') throw new Error('gateway identity missing')
   if (encrypted !== '') {
     const value = decryptIdentity(encrypted, config.token, now)
     const subject = typeof value.LoginName === 'string' ? value.LoginName.split('@', 1)[0] : undefined

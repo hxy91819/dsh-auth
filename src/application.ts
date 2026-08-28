@@ -331,7 +331,7 @@ export class AuthApplication {
       write(res, 502, 'external identity provider unavailable', { 'cache-control': 'no-store' })
       return
     }
-    if (!this.externalIdentityAllowed(identity)) {
+    if (!this.externalIdentityAllowed(identity, this.config.externalIdentity)) {
       this.logger.warn({ event: 'auth.login.failed', authMethod: 'external', reason: 'not_authorized', clientId: this.clientId(req) })
       write(res, 403, 'external identity is not authorized', { 'cache-control': 'no-store' })
       return
@@ -347,8 +347,7 @@ export class AuthApplication {
     })
   }
 
-  private externalIdentityAllowed(identity: ExternalIdentity): boolean {
-    const policy = this.config.externalIdentity ?? this.config.gatewayIdentity
+  private externalIdentityAllowed(identity: ExternalIdentity, policy: typeof this.config.externalIdentity | typeof this.config.gatewayIdentity): boolean {
     if (policy === undefined) return false
     return policy.allowedUsers.has(identity.subject)
       || (identity.departmentId !== undefined && policy.allowedDepartmentIds.has(identity.departmentId))
@@ -467,7 +466,7 @@ export class AuthApplication {
     if (authenticated === undefined && this.config.gatewayIdentity !== undefined) {
       try {
         const identity = resolveGatewayIdentity(req, this.config.gatewayIdentity, this.now())
-        if (identity !== undefined && this.externalIdentityAllowed(identity)) {
+        if (identity !== undefined && this.externalIdentityAllowed(identity, this.config.gatewayIdentity)) {
           const created = this.sessions.create(this.now(), 'external', identity)
           authenticated = { session: created.session, renewalCookieValue: created.cookieValue }
           res.setHeader('set-cookie', this.renewalCookies(authenticated))

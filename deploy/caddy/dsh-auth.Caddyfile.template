@@ -119,6 +119,13 @@ https://{{PUBLIC_HOST}}:{{HTTPS_PORT}}, https://:{{HTTPS_PORT}} {
 		request_header -X-Dsh-Auth-Original-Method
 		request_header -X-Dsh-Auth-Original-URI
 		request_header -X-Dsh-Auth-Original-Upgrade
+		request_header -timestamp
+		request_header -signature
+		request_header -x-rio-seq
+		request_header -staffid
+		request_header -staffname
+		request_header -x-ext-data
+		request_header -x-tai-identity
 
 		reverse_proxy {{UPSTREAM}} {
 			flush_interval -1
