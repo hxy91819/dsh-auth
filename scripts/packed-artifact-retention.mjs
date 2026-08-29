@@ -1,8 +1,8 @@
 import { pathToFileURL } from 'node:url'
 
-/** @typedef {{ id: number, name: string, created_at: string, workflow_run?: { id?: number } }} Artifact */
+/** @typedef {{ id: number, name: string, created_at: string, expired?: boolean, workflow_run?: { id?: number } }} Artifact */
 /** @typedef {{ status: string, head_repository?: { id: number } | null, head_branch?: string | null }} WorkflowRun */
-/** @typedef {{ key: string, kept: number, stale: number[] }} RetentionDecision */
+/** @typedef {{ key: string, kept: number | null, stale: number[] }} RetentionDecision */
 
 const artifactName = 'packed-tarball'
 
@@ -29,10 +29,13 @@ export function selectPackedArtifactRetention(artifacts, runs) {
 
   return [...completedByBranch].map(([key, branchArtifacts]) => {
     branchArtifacts.sort((left, right) =>
-      right.created_at.localeCompare(left.created_at) || right.id - left.id,
+      Number(Boolean(left.expired)) - Number(Boolean(right.expired))
+      || right.created_at.localeCompare(left.created_at)
+      || right.id - left.id,
     )
     const [kept, ...stale] = branchArtifacts
     if (!kept) throw new Error(`retention group ${key} has no artifact`)
+    if (kept.expired) return { key, kept: null, stale: branchArtifacts.map(artifact => artifact.id) }
     return { key, kept: kept.id, stale: stale.map(artifact => artifact.id) }
   })
 }
@@ -103,7 +106,8 @@ async function main() {
 
   const decisions = selectPackedArtifactRetention(artifacts, runs)
   for (const decision of decisions) {
-    process.stdout.write(`Keeping ${decision.key} artifact ${decision.kept}; deleting ${decision.stale.length} older artifact(s)\n`)
+    const kept = decision.kept === null ? 'no expired artifact' : `artifact ${decision.kept}`
+    process.stdout.write(`Keeping ${decision.key} ${kept}; deleting ${decision.stale.length} stale artifact(s)\n`)
     for (const artifactId of decision.stale) {
       await githubRequest(token, `/repos/${owner}/${repo}/actions/artifacts/${artifactId}`, { method: 'DELETE' })
     }
