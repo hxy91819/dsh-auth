@@ -1,0 +1,27 @@
+name: Packed artifact retention
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: packed-artifact-retention
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Keep only the latest completed packed artifact per branch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/packed-artifact-retention.mjs
