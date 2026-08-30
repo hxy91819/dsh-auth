@@ -85,7 +85,13 @@ jobs:
             branch_ref="refs/heads/$requested_ref"
             tag_ref="refs/tags/$requested_ref"
             branch_sha="$(git ls-remote origin "$branch_ref" | awk 'NR == 1 { print $1 }')"
+            # Annotated tags advertise a peeled ^{} ref; lightweight tags only
+            # advertise the tag ref itself. Resolve both forms before fetching
+            # the exact object for the ancestry check below.
             tag_sha="$(git ls-remote origin "$tag_ref^{}" | awk 'NR == 1 { print $1 }')"
+            if [[ -z "$tag_sha" ]]; then
+              tag_sha="$(git ls-remote origin "$tag_ref" | awk 'NR == 1 { print $1 }')"
+            fi
             if [[ -n "$branch_sha" && -n "$tag_sha" ]]; then
               echo '::error::ref is ambiguous between a branch and a tag.' >&2
               exit 1
