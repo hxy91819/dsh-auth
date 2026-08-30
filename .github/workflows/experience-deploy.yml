@@ -57,7 +57,9 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-          persist-credentials: false
+          # Ref resolution below also supports private forks, so retain the
+          # checkout action's scoped token until the authenticated fetches end.
+          persist-credentials: true
 
       - name: Resolve a reviewed source commit
         id: source
@@ -112,6 +114,10 @@ jobs:
             exit 1
           }
           printf 'sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Remove checkout token before packaging
+        if: ${{ always() }}
+        run: git config --local --unset-all http.https://github.com/.extraheader || true
 
       - name: Check out the reviewed source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
