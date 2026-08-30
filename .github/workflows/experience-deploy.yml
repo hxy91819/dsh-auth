@@ -256,7 +256,16 @@ jobs:
         run: |
           set -euo pipefail
           ssh_opts=( -i "$SSH_KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SSH_KNOWN_HOSTS_FILE" -o BatchMode=yes -p "$SSH_PORT" )
-          state="$(ssh "${ssh_opts[@]}" "$SSH_TARGET" 'sudo -n true && if sudo -n test -f /etc/dsh-auth/install-state.json; then printf managed; else printf new; fi')"
+          state="$(ssh "${ssh_opts[@]}" "$SSH_TARGET" '
+            set -e
+            if [ "$(id -u)" -eq 0 ]; then
+              root_cmd() { "$@"; }
+            else
+              sudo -n true
+              root_cmd() { sudo -n "$@"; }
+            fi
+            if root_cmd test -f /etc/dsh-auth/install-state.json; then printf managed; else printf new; fi
+          ')"
           [[ "$state" == managed || "$state" == new ]]
           echo "state=$state" >> "$GITHUB_OUTPUT"
 
@@ -279,7 +288,7 @@ jobs:
           ssh_opts=( -i "$SSH_KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SSH_KNOWN_HOSTS_FILE" -o BatchMode=yes -p "$SSH_PORT" )
           : "${ADMIN_PASSWORD:?Configure DSH_EXPERIENCE_ADMIN_PASSWORD in the dsh-experience environment for the first install.}"
           remote_password="/tmp/dsh-auth-experience-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.password"
-          printf '%s' "$ADMIN_PASSWORD" | ssh "${ssh_opts[@]}" "$SSH_TARGET" "sudo -n sh -c 'umask 077; cat > $remote_password'"
+          printf '%s' "$ADMIN_PASSWORD" | ssh "${ssh_opts[@]}" "$SSH_TARGET" "if [ \"\$(id -u)\" -eq 0 ]; then umask 077; cat > '$remote_password'; else sudo -n sh -c 'umask 077; cat > \"$remote_password\"'; fi"
           printf 'DSH_EXPERIENCE_REMOTE_PASSWORD=%q\n' "$remote_password" >> "$GITHUB_ENV"
 
       - name: Install or upgrade the experience environment
@@ -336,23 +345,28 @@ jobs:
           [[ "$node_bin" =~ ^/[A-Za-z0-9_./+-]+$ && -x "$node_bin" ]] || { echo 'node is not available to the SSH account'; exit 3; }
           [[ "$npm_bin" =~ ^/[A-Za-z0-9_./+-]+$ && -f "$npm_bin" ]] || { echo 'npm is not available to the SSH account'; exit 3; }
           runtime_path="$(dirname "$node_bin"):/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
-          sudo -n true
+          if [[ "$(id -u)" -eq 0 ]]; then
+            root_cmd() { "$@"; }
+          else
+            root_cmd() { sudo -n "$@"; }
+          fi
+          root_cmd true
           # The DSH service account must traverse this non-secret artifact tree.
-          sudo -n install -d -m 755 /var/lib/dsh-auth-experience "$artifact_dir"
+          root_cmd install -d -m 755 /var/lib/dsh-auth-experience "$artifact_dir"
           # dsh plugin runs as the DSH service account; the package contains no
           # credentials, so the artifact must be readable by that account.
-          sudo -n install -o root -g root -m 644 "$tarball" "$artifact"
+          root_cmd install -o root -g root -m 644 "$tarball" "$artifact"
           cleanup() {
-            sudo -n rm -f "$tarball"
-            if [[ -n "$password_file" ]]; then sudo -n rm -f "$password_file"; fi
+            root_cmd rm -f "$tarball"
+            if [[ -n "$password_file" ]]; then root_cmd rm -f "$password_file"; fi
           }
           trap cleanup EXIT
-          sudo -n env PATH="$runtime_path" "$node_bin" "$npm_bin" install --global "$artifact" --ignore-scripts --no-audit --no-fund
+          root_cmd env PATH="$runtime_path" "$node_bin" "$npm_bin" install --global "$artifact" --ignore-scripts --no-audit --no-fund
           dsh_auth_bin="$(command -v dsh-auth || true)"
           if [[ -z "$dsh_auth_bin" ]]; then dsh_auth_bin="$(dirname "$npm_bin")/dsh-auth"; fi
           [[ "$dsh_auth_bin" =~ ^/[A-Za-z0-9_./+-]+$ && -f "$dsh_auth_bin" ]] || { echo 'dsh-auth is not available after npm install'; exit 3; }
           if [[ "$state" == managed ]]; then
-            sudo -n env PATH="$runtime_path" "$node_bin" "$dsh_auth_bin" upgrade --non-interactive --authorize-upgrade --package "$artifact" --json
+            root_cmd env PATH="$runtime_path" "$node_bin" "$dsh_auth_bin" upgrade --non-interactive --authorize-upgrade --package "$artifact" --json
             exit 0
           fi
           setup_args=(setup --non-interactive --json --package "$artifact" --dsh-service "$service"
@@ -369,7 +383,7 @@ jobs:
           elif [[ "$authorize" == true ]]; then
             setup_args+=(--authorize-insecure-address)
           fi
-          sudo -n env PATH="$runtime_path" "$node_bin" "$dsh_auth_bin" "${setup_args[@]}"
+          root_cmd env PATH="$runtime_path" "$node_bin" "$dsh_auth_bin" "${setup_args[@]}"
           REMOTE_SCRIPT
 
       - name: Remove only this run's temporary remote files
@@ -381,5 +395,5 @@ jobs:
           fi
           ssh_opts=( -i "$SSH_KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SSH_KNOWN_HOSTS_FILE" -o BatchMode=yes -p "$SSH_PORT" )
           ssh "${ssh_opts[@]}" "$SSH_TARGET" \
-            "sudo -n rm -f '${DSH_EXPERIENCE_REMOTE_TARBALL:-/nonexistent}' '${DSH_EXPERIENCE_REMOTE_PASSWORD:-/nonexistent}'" \
+            "if [ \"\$(id -u)\" -eq 0 ]; then rm -f '${DSH_EXPERIENCE_REMOTE_TARBALL:-/nonexistent}' '${DSH_EXPERIENCE_REMOTE_PASSWORD:-/nonexistent}'; else sudo -n rm -f '${DSH_EXPERIENCE_REMOTE_TARBALL:-/nonexistent}' '${DSH_EXPERIENCE_REMOTE_PASSWORD:-/nonexistent}'; fi" \
             >/dev/null 2>&1 || true
