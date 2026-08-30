@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { declaredFlagNames } from '../src/installer/cli-parser.js'
 import { runCli } from '../src/cli.js'
 import { NodeInstallerHost } from '../src/installer/host.js'
+import { publicOrigin } from '../src/installer/validation.js'
 import { FakeCliIo, FakeInstallerHost } from './installer-helpers.js'
 
 const PASSWORD = 'sufficient-test-password'
@@ -275,6 +276,34 @@ describe('installer CLI', () => {
 
     const duplicate = new FakeCliIo(false)
     expect(await runCli(['plan', '--json', '--json'], duplicate, host)).toBe(2)
+  })
+
+  it('accepts a public IP for automatic TLS and rejects private IP certificate requests', async () => {
+    const ipHost = outputHost()
+    const ipIo = new FakeCliIo(false)
+    const ipArgs = [
+      'setup', '--non-interactive', '--json', '--output-dir', '/export/ip', '--mode', 'https',
+      '--server-name', '9.135.102.192', '--admin-bootstrap', 'login-token', '--login-token', 'enabled',
+      '--tls', 'automatic', '--http-port', '80', '--https-port', '443',
+    ]
+    expect(await runCli(ipArgs, ipIo, ipHost)).toBe(0)
+    expect(ipHost.readFile('/export/ip/Caddyfile')).toContain('profile shortlived')
+
+    const privateIo = new FakeCliIo(false)
+    expect(await runCli([
+      'plan', '--non-interactive', '--json', '--output-dir', '/export/private-ip', '--mode', 'https',
+      '--server-name', '10.0.0.20', '--admin-bootstrap', 'login-token', '--login-token', 'enabled',
+      '--tls', 'automatic',
+    ], privateIo, outputHost())).toBe(2)
+    expect(`${privateIo.outputs.join('')}${privateIo.errors.join('')}`).toContain('publicly routable')
+  })
+
+  it('brackets IPv6 HTTPS origins in the persisted public origin', () => {
+    expect(publicOrigin({
+      mode: 'https', serverName: '2001:db8::10', httpsPort: 443,
+      profile: 'web', packageSource: 'dsh-auth@0.2.3', adminBootstrap: 'login-token', loginTokenEnabled: true,
+      upstream: '127.0.0.1:3080', listenAddress: '0.0.0.0', httpPort: 80,
+    })).toBe('https://[2001:db8::10]')
   })
 
   it('renders secure loopback HTTP only for an explicit TLS proxy deployment', async () => {

@@ -165,6 +165,16 @@ function validateConfigs(caddy, root, ports, certificate, key) {
     const adapted = JSON.parse(checked(caddy, ['adapt', '--config', path, '--adapter', 'caddyfile']))
     if (adapted.admin?.disabled !== true) throw new Error('Caddy Admin API is not disabled')
   }
+  const ipAutomatic = renderCaddyfile({
+    publicHost: '198.51.100.10', listenAddress: '127.0.0.1', upstream: `127.0.0.1:${String(ports.upstream)}`,
+    httpPort: ports.http, httpsPort: ports.https, tls: { mode: 'automatic' }, accessLogFile: join(root, 'access-ip.log'),
+  })
+  if (!ipAutomatic.includes('profile shortlived')) throw new Error('automatic public-IP config did not select the shortlived ACME profile')
+  const ipFormatted = checked(caddy, ['fmt', '-'], { input: ipAutomatic })
+  if (ipFormatted !== ipAutomatic) throw new Error('rendered automatic public-IP Caddy config is not formatted')
+  const ipPath = join(root, 'Caddyfile.ip-automatic')
+  writeFileSync(ipPath, ipAutomatic)
+  checked(caddy, ['validate', '--config', ipPath, '--adapter', 'caddyfile'], { env: environment })
   const proxied = renderInstallerCaddyfile({
     mode: 'http', behindTlsProxy: true, profile: 'web', packageSource: 'dsh-auth@0.2.0',
     adminBootstrap: 'login-token', loginTokenEnabled: true,

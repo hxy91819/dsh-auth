@@ -1,0 +1,399 @@
+name: Deploy experience environment
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Reviewed Git ref whose tip is already merged into main
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dsh-experience-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: dsh-experience
+    env:
+      SSH_HOST: ${{ vars.DSH_EXPERIENCE_SSH_HOST }}
+      SSH_USER: ${{ vars.DSH_EXPERIENCE_SSH_USER }}
+      SSH_PORT: ${{ vars.DSH_EXPERIENCE_SSH_PORT }}
+      DSH_SERVICE: ${{ vars.DSH_EXPERIENCE_DSH_SERVICE }}
+      DSH_HOME: ${{ vars.DSH_EXPERIENCE_DSH_HOME }}
+      DSH_EXECUTABLE: ${{ vars.DSH_EXPERIENCE_DSH_EXECUTABLE }}
+      PROFILE: ${{ vars.DSH_EXPERIENCE_PROFILE }}
+      MODE: ${{ vars.DSH_EXPERIENCE_MODE }}
+      BEHIND_TLS_PROXY: ${{ vars.DSH_EXPERIENCE_BEHIND_TLS_PROXY }}
+      SERVER_NAME: ${{ vars.DSH_EXPERIENCE_SERVER_NAME }}
+      TLS: ${{ vars.DSH_EXPERIENCE_TLS }}
+      CERTIFICATE: ${{ vars.DSH_EXPERIENCE_CERTIFICATE }}
+      CERTIFICATE_KEY: ${{ vars.DSH_EXPERIENCE_CERTIFICATE_KEY }}
+      LISTEN_ADDRESS: ${{ vars.DSH_EXPERIENCE_LISTEN_ADDRESS }}
+      AUTHORIZE_INSECURE_ADDRESS: ${{ vars.DSH_EXPERIENCE_AUTHORIZE_INSECURE_ADDRESS }}
+      HTTP_PORT: ${{ vars.DSH_EXPERIENCE_HTTP_PORT }}
+      HTTPS_PORT: ${{ vars.DSH_EXPERIENCE_HTTPS_PORT }}
+      UPSTREAM: ${{ vars.DSH_EXPERIENCE_UPSTREAM }}
+      ADMIN_USERNAME: ${{ vars.DSH_EXPERIENCE_ADMIN_USERNAME }}
+    steps:
+      - name: Verify the workflow runs from trusted main
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]] || {
+            echo '::error::Dispatch this deployment from the main workflow ref.' >&2
+            exit 1
+          }
+
+      - name: Check out trusted main
+        # Pin third-party actions to immutable commits; keep the release tag in the comment for upgrades.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          fetch-depth: 0
+          # Ref resolution below also supports private forks, so retain the
+          # checkout action's scoped token until the authenticated fetches end.
+          persist-credentials: true
+
+      - name: Resolve a reviewed source commit
+        id: source
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          requested_ref="$REQUESTED_REF"
+          source_sha=''
+          if [[ "$requested_ref" =~ ^[0-9A-Fa-f]{40}$ ]]; then
+            source_sha="$(printf '%s' "$requested_ref" | tr '[:upper:]' '[:lower:]')"
+            git cat-file -e "${source_sha}^{commit}" || {
+              echo '::error::Requested commit is not present in the trusted main history.' >&2
+              exit 1
+            }
+          else
+            [[ "$requested_ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$ ]] || {
+              echo '::error::ref contains unsupported characters.' >&2
+              exit 1
+            }
+            [[ "$requested_ref" != *..* && "$requested_ref" != */ && "$requested_ref" != *//* ]] || {
+              echo '::error::ref contains an unsafe path component.' >&2
+              exit 1
+            }
+            branch_ref="refs/heads/$requested_ref"
+            tag_ref="refs/tags/$requested_ref"
+            branch_sha="$(git ls-remote origin "$branch_ref" | awk 'NR == 1 { print $1 }')"
+            # Annotated tags advertise a peeled ^{} ref; lightweight tags only
+            # advertise the tag ref itself. Resolve both forms before fetching
+            # the exact object for the ancestry check below.
+            tag_sha="$(git ls-remote origin "$tag_ref^{}" | awk 'NR == 1 { print $1 }')"
+            if [[ -z "$tag_sha" ]]; then
+              tag_sha="$(git ls-remote origin "$tag_ref" | awk 'NR == 1 { print $1 }')"
+            fi
+            if [[ -n "$branch_sha" && -n "$tag_sha" ]]; then
+              echo '::error::ref is ambiguous between a branch and a tag.' >&2
+              exit 1
+            fi
+            if [[ -n "$branch_sha" ]]; then
+              git fetch --no-tags origin "$branch_ref:refs/experience/source"
+            elif [[ -n "$tag_sha" ]]; then
+              git fetch --no-tags origin "$tag_ref:refs/experience/source"
+            else
+              echo '::error::ref was not found in the repository.' >&2
+              exit 1
+            fi
+            source_sha="$(git rev-parse 'refs/experience/source^{commit}')"
+          fi
+          git fetch --no-tags origin 'refs/heads/main:refs/remotes/origin/main'
+          git merge-base --is-ancestor "$source_sha" origin/main || {
+            echo '::error::Only commits already reviewed and merged into main may be deployed.' >&2
+            exit 1
+          }
+          printf 'sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Remove checkout token before packaging
+        if: ${{ always() }}
+        run: git config --local --unset-all http.https://github.com/.extraheader || true
+
+      - name: Check out the reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 10.14.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24.15.0
+          cache: pnpm
+
+      - name: Install dependencies and pack an experience-only build
+        id: pack
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+
+          # The installer rejects same-version upgrades. This prerelease is never
+          # published and gives every dispatch a monotonic upgrade identity.
+          current_version="$(node -p "require('./package.json').version")"
+          if [[ ! "$current_version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-.*)?$ ]]; then
+            echo '::error::package.json version is not a three-part release version.' >&2
+            exit 1
+          fi
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
+          patch="${BASH_REMATCH[3]}"
+          experience_version="${major}.${minor}.$((patch + 1))-experience.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          npm version --no-git-tag-version --allow-same-version "$experience_version" >/dev/null
+          pnpm pack --pack-destination packed >/dev/null
+          tarball="$(find packed -maxdepth 1 -type f -name 'dsh-auth-*.tgz' -print)"
+          test "$(printf '%s\n' "$tarball" | wc -l)" -eq 1
+          node scripts/pack-smoke.mjs "$tarball"
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+          echo "version=$experience_version" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare pinned SSH identity
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DSH_EXPERIENCE_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DSH_EXPERIENCE_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          : "${SSH_PRIVATE_KEY:?Configure DSH_EXPERIENCE_SSH_PRIVATE_KEY in the dsh-experience environment.}"
+          : "${SSH_KNOWN_HOSTS:?Configure DSH_EXPERIENCE_SSH_KNOWN_HOSTS in the dsh-experience environment.}"
+          : "${SSH_HOST:?Configure DSH_EXPERIENCE_SSH_HOST as an environment variable.}"
+          : "${SSH_USER:?Configure DSH_EXPERIENCE_SSH_USER as an environment variable.}"
+          ssh_port="${SSH_PORT:-22}"
+          [[ "$ssh_port" =~ ^[0-9]+$ ]] && (( ssh_port >= 1 && ssh_port <= 65535 ))
+          [[ "$SSH_HOST" =~ ^[A-Za-z0-9.-]+$ ]] || { echo '::error::SSH host contains unsafe characters.' >&2; exit 1; }
+          [[ "$SSH_USER" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] || { echo '::error::SSH user contains unsafe characters.' >&2; exit 1; }
+          export SSH_PORT="$ssh_port"
+          install -d -m 700 "$RUNNER_TEMP/dsh-auth-ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$RUNNER_TEMP/dsh-auth-ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/dsh-auth-ssh/known_hosts"
+          chmod 600 "$RUNNER_TEMP/dsh-auth-ssh/id_ed25519" "$RUNNER_TEMP/dsh-auth-ssh/known_hosts"
+          {
+            printf 'SSH_PORT=%q\n' "$SSH_PORT"
+            printf 'SSH_TARGET=%q\n' "$SSH_USER@$SSH_HOST"
+            printf 'SSH_KEY_FILE=%q\n' "$RUNNER_TEMP/dsh-auth-ssh/id_ed25519"
+            printf 'SSH_KNOWN_HOSTS_FILE=%q\n' "$RUNNER_TEMP/dsh-auth-ssh/known_hosts"
+          } >> "$GITHUB_ENV"
+
+      - name: Validate deployment settings
+        run: |
+          set -euo pipefail
+          mode="${MODE:-https}"
+          behind="${BEHIND_TLS_PROXY:-false}"
+          profile="${PROFILE:-web}"
+          service="${DSH_SERVICE:-dsh-web.service}"
+          upstream="${UPSTREAM:-127.0.0.1:3080}"
+          listen="${LISTEN_ADDRESS:-0.0.0.0}"
+          http_port="${HTTP_PORT:-80}"
+          https_port="${HTTPS_PORT:-443}"
+          tls="${TLS:-automatic}"
+          authorize="${AUTHORIZE_INSECURE_ADDRESS:-false}"
+          admin_username="${ADMIN_USERNAME:-operator}"
+          server_name="${SERVER_NAME:-}"
+          certificate="${CERTIFICATE:-}"
+          certificate_key="${CERTIFICATE_KEY:-}"
+          dsh_home="${DSH_HOME:-}"
+          dsh_executable="${DSH_EXECUTABLE:-}"
+          [[ "$mode" == https || "$mode" == http ]] || { echo '::error::MODE must be https or http.' >&2; exit 1; }
+          [[ "$behind" == true || "$behind" == false ]] || { echo '::error::BEHIND_TLS_PROXY must be true or false.' >&2; exit 1; }
+          [[ "$authorize" == true || "$authorize" == false ]] || { echo '::error::AUTHORIZE_INSECURE_ADDRESS must be true or false.' >&2; exit 1; }
+          [[ "$profile" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || { echo '::error::PROFILE is invalid.' >&2; exit 1; }
+          [[ "$service" =~ ^[A-Za-z0-9][A-Za-z0-9_.@-]{0,126}\.service$ ]] || { echo '::error::DSH_SERVICE is invalid.' >&2; exit 1; }
+          [[ "$upstream" =~ ^(127\.0\.0\.1|\[::1\]):[0-9]+$ ]] || { echo '::error::UPSTREAM must be a loopback host:port.' >&2; exit 1; }
+          if [[ -n "$dsh_home" ]] && [[ ! "$dsh_home" =~ ^/[A-Za-z0-9_./+-]+$ ]]; then
+            echo '::error::DSH_HOME contains characters unsafe for the remote command.' >&2
+            exit 1
+          fi
+          if [[ -n "$dsh_executable" ]] && [[ ! "$dsh_executable" =~ ^/[A-Za-z0-9_./+-]+$ ]]; then
+            echo '::error::DSH_EXECUTABLE contains characters unsafe for the remote command.' >&2
+            exit 1
+          fi
+          if [[ "$listen" =~ ^(127\.0\.0\.1|::1|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|[fF][cCdD]) ]]; then
+            :
+          elif [[ "$mode" == http && "$authorize" == true ]]; then
+            # The installer re-validates the literal address; this only gates the workflow inputs.
+            [[ "$listen" =~ ^[0-9A-Za-z.:\%\[\]]+$ ]] || { echo '::error::LISTEN_ADDRESS contains unsafe characters.' >&2; exit 1; }
+          elif [[ "$mode" == https ]]; then
+            :
+          else
+            echo '::error::Plain HTTP must use a private listen address; set DSH_EXPERIENCE_AUTHORIZE_INSECURE_ADDRESS=true to acknowledge another intranet address.' >&2
+            exit 1
+          fi
+          [[ "$http_port" =~ ^[0-9]+$ ]] && (( http_port >= 1 && http_port <= 65535 ))
+          [[ "$https_port" =~ ^[0-9]+$ ]] && (( https_port >= 1 && https_port <= 65535 ))
+          [[ "$admin_username" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || { echo '::error::ADMIN_USERNAME is invalid.' >&2; exit 1; }
+          if [[ "$mode" == https ]]; then
+            [[ "$server_name" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ || "$server_name" =~ ^[0-9A-Fa-f:.]+$ ]] || { echo '::error::DSH_EXPERIENCE_SERVER_NAME must be a DNS name or literal IP for HTTPS.' >&2; exit 1; }
+            [[ "$tls" == automatic || "$tls" == manual ]] || { echo '::error::TLS must be automatic or manual.' >&2; exit 1; }
+            if [[ "$tls" == manual ]]; then
+              [[ "$certificate" =~ ^/[A-Za-z0-9_./+-]+$ ]] || { echo '::error::DSH_EXPERIENCE_CERTIFICATE is required for manual TLS.' >&2; exit 1; }
+              [[ "$certificate_key" =~ ^/[A-Za-z0-9_./+-]+$ ]] || { echo '::error::DSH_EXPERIENCE_CERTIFICATE_KEY is required for manual TLS.' >&2; exit 1; }
+            fi
+          else
+            [[ "$behind" == true || "$authorize" == true || "$listen" =~ ^(127\.0\.0\.1|::1|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|[fF][cCdD]) ]] || {
+              echo '::error::Plain HTTP must use a private listen address; set DSH_EXPERIENCE_AUTHORIZE_INSECURE_ADDRESS=true to acknowledge another intranet address, or use behind-tls-proxy for a public deployment.' >&2
+              exit 1
+            }
+            if [[ "$behind" == true && ! "$listen" =~ ^(127\.0\.0\.1|::1)$ ]]; then
+              echo '::error::BEHIND_TLS_PROXY requires a loopback listen address.' >&2
+              exit 1
+            fi
+          fi
+
+      - name: Detect whether the host needs initial setup
+        id: state
+        run: |
+          set -euo pipefail
+          ssh_opts=( -i "$SSH_KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SSH_KNOWN_HOSTS_FILE" -o BatchMode=yes -p "$SSH_PORT" )
+          state="$(ssh "${ssh_opts[@]}" "$SSH_TARGET" '
+            set -e
+            if [ "$(id -u)" -eq 0 ]; then
+              root_cmd() { "$@"; }
+            else
+              sudo -n true
+              root_cmd() { sudo -n "$@"; }
+            fi
+            if root_cmd test -f /etc/dsh-auth/install-state.json; then printf managed; else printf new; fi
+          ')"
+          [[ "$state" == managed || "$state" == new ]]
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the packed experience artifact
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          ssh_opts=( -i "$SSH_KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SSH_KNOWN_HOSTS_FILE" -o BatchMode=yes -p "$SSH_PORT" )
+          remote="/tmp/dsh-auth-experience-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tgz"
+          scp "${ssh_opts[@]}" "$TARBALL" "$SSH_TARGET:$remote"
+          printf 'DSH_EXPERIENCE_REMOTE_TARBALL=%q\n' "$remote" >> "$GITHUB_ENV"
+
+      - name: Transfer the first-install password only when setup is required
+        if: ${{ steps.state.outputs.state == 'new' }}
+        env:
+          ADMIN_PASSWORD: ${{ secrets.DSH_EXPERIENCE_ADMIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          ssh_opts=( -i "$SSH_KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SSH_KNOWN_HOSTS_FILE" -o BatchMode=yes -p "$SSH_PORT" )
+          : "${ADMIN_PASSWORD:?Configure DSH_EXPERIENCE_ADMIN_PASSWORD in the dsh-experience environment for the first install.}"
+          remote_password="/tmp/dsh-auth-experience-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.password"
+          printf '%s' "$ADMIN_PASSWORD" | ssh "${ssh_opts[@]}" "$SSH_TARGET" "if [ \"\$(id -u)\" -eq 0 ]; then umask 077; cat > '$remote_password'; else sudo -n sh -c 'umask 077; cat > \"$remote_password\"'; fi"
+          printf 'DSH_EXPERIENCE_REMOTE_PASSWORD=%q\n' "$remote_password" >> "$GITHUB_ENV"
+
+      - name: Install or upgrade the experience environment
+        env:
+          DEPLOY_STATE: ${{ steps.state.outputs.state }}
+          PACKED_VERSION: ${{ steps.pack.outputs.version }}
+        run: |
+          set -euo pipefail
+          ssh_opts=( -i "$SSH_KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SSH_KNOWN_HOSTS_FILE" -o BatchMode=yes -p "$SSH_PORT" )
+          mode="${MODE:-https}"
+          behind="${BEHIND_TLS_PROXY:-false}"
+          profile="${PROFILE:-web}"
+          service="${DSH_SERVICE:-dsh-web.service}"
+          upstream="${UPSTREAM:-127.0.0.1:3080}"
+          listen="${LISTEN_ADDRESS:-0.0.0.0}"
+          http_port="${HTTP_PORT:-80}"
+          https_port="${HTTPS_PORT:-443}"
+          tls="${TLS:-automatic}"
+          admin_username="${ADMIN_USERNAME:-operator}"
+          dsh_home="${DSH_HOME:-}"
+          dsh_executable="${DSH_EXECUTABLE:-}"
+          authorize="${AUTHORIZE_INSECURE_ADDRESS:-false}"
+          server_name="${SERVER_NAME:-}"
+          certificate="${CERTIFICATE:-}"
+          certificate_key="${CERTIFICATE_KEY:-}"
+          ssh "${ssh_opts[@]}" "$SSH_TARGET" bash -s -- \
+            "$DSH_EXPERIENCE_REMOTE_TARBALL" "${DSH_EXPERIENCE_REMOTE_PASSWORD:-}" "$DEPLOY_STATE" \
+            "$mode" "$behind" "$profile" "$service" "$upstream" "$listen" "$http_port" "$https_port" \
+            "$tls" "$server_name" "$certificate" "$certificate_key" "$admin_username" "$dsh_home" "$dsh_executable" "$authorize" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          tarball="$1"
+          password_file="$2"
+          state="$3"
+          mode="$4"
+          behind="$5"
+          profile="$6"
+          service="$7"
+          upstream="$8"
+          listen="$9"
+          http_port="${10}"
+          https_port="${11}"
+          tls="${12}"
+          server_name="${13}"
+          certificate="${14}"
+          certificate_key="${15}"
+          admin_username="${16}"
+          dsh_home="${17}"
+          dsh_executable="${18}"
+          authorize="${19}"
+          artifact_dir=/var/lib/dsh-auth-experience/artifacts
+          artifact="$artifact_dir/$(basename "$tarball")"
+          node_bin="$(command -v node || true)"
+          npm_bin="$(command -v npm || true)"
+          [[ "$node_bin" =~ ^/[A-Za-z0-9_./+-]+$ && -x "$node_bin" ]] || { echo 'node is not available to the SSH account'; exit 3; }
+          [[ "$npm_bin" =~ ^/[A-Za-z0-9_./+-]+$ && -f "$npm_bin" ]] || { echo 'npm is not available to the SSH account'; exit 3; }
+          runtime_path="$(dirname "$node_bin"):/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
+          if [[ "$(id -u)" -eq 0 ]]; then
+            root_cmd() { "$@"; }
+          else
+            root_cmd() { sudo -n "$@"; }
+          fi
+          root_cmd true
+          # The DSH service account must traverse this non-secret artifact tree.
+          root_cmd install -d -m 755 /var/lib/dsh-auth-experience "$artifact_dir"
+          # dsh plugin runs as the DSH service account; the package contains no
+          # credentials, so the artifact must be readable by that account.
+          root_cmd install -o root -g root -m 644 "$tarball" "$artifact"
+          cleanup() {
+            root_cmd rm -f "$tarball"
+            if [[ -n "$password_file" ]]; then root_cmd rm -f "$password_file"; fi
+          }
+          trap cleanup EXIT
+          root_cmd env PATH="$runtime_path" "$node_bin" "$npm_bin" install --global "$artifact" --ignore-scripts --no-audit --no-fund
+          dsh_auth_bin="$(command -v dsh-auth || true)"
+          if [[ -z "$dsh_auth_bin" ]]; then dsh_auth_bin="$(dirname "$npm_bin")/dsh-auth"; fi
+          [[ "$dsh_auth_bin" =~ ^/[A-Za-z0-9_./+-]+$ && -f "$dsh_auth_bin" ]] || { echo 'dsh-auth is not available after npm install'; exit 3; }
+          if [[ "$state" == managed ]]; then
+            root_cmd env PATH="$runtime_path" "$node_bin" "$dsh_auth_bin" upgrade --non-interactive --authorize-upgrade --package "$artifact" --json
+            exit 0
+          fi
+          setup_args=(setup --non-interactive --json --package "$artifact" --dsh-service "$service"
+            --profile "$profile" --admin-bootstrap password --admin-username "$admin_username"
+            --login-token enabled --password-file "$password_file" --mode "$mode"
+            --upstream "$upstream" --listen-address "$listen" --http-port "$http_port" --https-port "$https_port")
+          if [[ -n "$dsh_home" ]]; then setup_args+=(--dsh-home "$dsh_home"); fi
+          if [[ -n "$dsh_executable" ]]; then setup_args+=(--dsh-executable "$dsh_executable"); fi
+          if [[ "$mode" == https ]]; then
+            setup_args+=(--tls "$tls" --server-name "$server_name")
+            if [[ "$tls" == manual ]]; then setup_args+=(--certificate "$certificate" --certificate-key "$certificate_key"); fi
+          elif [[ "$behind" == true ]]; then
+            setup_args+=(--behind-tls-proxy)
+          elif [[ "$authorize" == true ]]; then
+            setup_args+=(--authorize-insecure-address)
+          fi
+          root_cmd env PATH="$runtime_path" "$node_bin" "$dsh_auth_bin" "${setup_args[@]}"
+          REMOTE_SCRIPT
+
+      - name: Remove only this run's temporary remote files
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -z "${SSH_KEY_FILE:-}" || -z "${SSH_KNOWN_HOSTS_FILE:-}" || -z "${SSH_TARGET:-}" || -z "${SSH_PORT:-}" ]]; then
+            exit 0
+          fi
+          ssh_opts=( -i "$SSH_KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SSH_KNOWN_HOSTS_FILE" -o BatchMode=yes -p "$SSH_PORT" )
+          ssh "${ssh_opts[@]}" "$SSH_TARGET" \
+            "if [ \"\$(id -u)\" -eq 0 ]; then rm -f '${DSH_EXPERIENCE_REMOTE_TARBALL:-/nonexistent}' '${DSH_EXPERIENCE_REMOTE_PASSWORD:-/nonexistent}'; else sudo -n rm -f '${DSH_EXPERIENCE_REMOTE_TARBALL:-/nonexistent}' '${DSH_EXPERIENCE_REMOTE_PASSWORD:-/nonexistent}'; fi" \
+            >/dev/null 2>&1 || true

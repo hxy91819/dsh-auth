@@ -60,6 +60,19 @@ describe('Caddy installer contract', () => {
     expect(rendered).not.toContain('tls internal')
   })
 
+  it('uses the Let\'s Encrypt shortlived profile for a public IP automatic certificate', () => {
+    const rendered = renderCaddyfile({ ...request('https'), serverName: '9.135.102.192' }, true)
+    expect(rendered).toContain('https://9.135.102.192:443')
+    expect(rendered).toContain('issuer acme https://acme-v02.api.letsencrypt.org/directory')
+    expect(rendered).toContain('profile shortlived')
+    expect(rendered).not.toContain('tls internal')
+  })
+
+  it('brackets an IPv6 server name in Caddy site addresses', () => {
+    const rendered = renderCaddyfile({ ...request('https'), serverName: '2001:db8::10' }, true)
+    expect(rendered).toContain('https://[2001:db8::10]:443')
+  })
+
   it('renders trusted-network HTTP without TLS claims', () => {
     const rendered = renderCaddyfile(request('http'), true)
     expect(rendered).toContain('admin off')
@@ -104,6 +117,9 @@ describe('Caddy installer contract', () => {
     expect(automatic).toContain('validate --config /run/dsh-auth-caddy/Caddyfile')
     expect(automatic).toContain('BindReadOnlyPaths=/etc/dsh-auth/Caddyfile:/run/dsh-auth-caddy/Caddyfile')
     expect(automatic).toContain('RuntimeDirectory=dsh-auth-caddy')
+    expect(automatic).toContain('Environment=HOME=/var/lib/dsh-auth-caddy')
+    expect(automatic).toContain('Environment=XDG_CONFIG_HOME=/var/lib/dsh-auth-caddy')
+    expect(automatic).toContain('Environment=XDG_DATA_HOME=/var/lib/dsh-auth-caddy')
     expect(automatic).not.toContain('LoadCredential=')
 
     const manual = renderCaddyUnit(request('https', 'manual'), paths())

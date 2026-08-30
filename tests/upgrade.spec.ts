@@ -70,6 +70,7 @@ describe('managed upgrade', () => {
     expect(state.upgrade).toBeUndefined()
     expect(JSON.parse(host.readFile(`${BUNDLE_ROOT}/package.json`))).toMatchObject({ version: '0.3.0' })
     expect(host.readFile('/etc/dsh-auth/dsh-auth.env')).toContain('DSH_AUTH_EXPECTED_VERSION="0.3.0"')
+    expect(host.stat('/etc/dsh-auth/dsh-auth.env')).toMatchObject({ uid: 0, gid: 0, mode: 0o640 })
     expect(host.readFileBytes('/var/lib/dsh-auth/auth-state.json')).toEqual(authStateBefore)
     expect(host.fileExists(`${STATE_FILE}.auth-state-backup`)).toBe(false)
     expect(host.readFileBytes('/etc/dsh-auth/session-secret')).toEqual(secretBefore)

@@ -3,14 +3,14 @@
 	auto_https disable_redirects
 }
 
-http://{{PUBLIC_HOST}}:{{HTTP_PORT}}, http://:{{HTTP_PORT}} {
+http://{{PUBLIC_SITE_HOST}}:{{HTTP_PORT}}, http://:{{HTTP_PORT}} {
 	bind {{LISTEN_ADDRESS}}
-	@invalid_host not host {{PUBLIC_HOST}}
+	@invalid_host not host {{PUBLIC_SITE_HOST}}
 	respond @invalid_host 421
 	redir https://{{PUBLIC_AUTHORITY}}{uri} 308
 }
 
-https://{{PUBLIC_HOST}}:{{HTTPS_PORT}}, https://:{{HTTPS_PORT}} {
+https://{{PUBLIC_SITE_HOST}}:{{HTTPS_PORT}}, https://:{{HTTPS_PORT}} {
 	bind {{LISTEN_ADDRESS}}
 	{{TLS_DIRECTIVE}}
 	log {
@@ -40,7 +40,7 @@ https://{{PUBLIC_HOST}}:{{HTTPS_PORT}}, https://:{{HTTPS_PORT}} {
 	}
 
 	route {
-		@invalid_host not host {{PUBLIC_HOST}}
+		@invalid_host not host {{PUBLIC_SITE_HOST}}
 		respond @invalid_host 421
 
 		@public_verify path /auth/verify
