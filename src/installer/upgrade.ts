@@ -195,6 +195,14 @@ function replaceManagedBinary(host: InstallerHost, source: CaddyPackage, managed
   host.renameFile(staged, managedPath)
 }
 
+function replaceEnvironment(host: InstallerHost, state: UpgradableState, version: string): void {
+  host.replaceFile(state.paths.environmentFile, renderEnvironmentFile(state.request, state.paths, version), 0o640)
+  // replaceFile uses a fresh root-owned inode; restore the service-group owner
+  // required for the DSH unit to read its EnvironmentFile and for doctor to stay healthy.
+  host.chown(state.paths.environmentFile, 0, state.dshGid)
+  host.chmod(state.paths.environmentFile, 0o640)
+}
+
 function restartServices(host: InstallerHost, state: UpgradableState): void {
   const systemctl = systemctlPath(host)
   runChecked(host, { executable: systemctl, args: ['restart', state.dshService] }, 'UPGRADE_DSH_RESTART_FAILED')
@@ -270,7 +278,7 @@ function rollbackUpgrade(host: InstallerHost, state: UpgradableState): Upgradabl
   }
   if (journal.phase === 'quiescing' || journal.phase === 'services') {
     if (journal.phase === 'services') restoreAuthState(host, state)
-    host.replaceFile(state.paths.environmentFile, renderEnvironmentFile(state.request, state.paths, journal.fromVersion), 0o640)
+    replaceEnvironment(host, state, journal.fromVersion)
     restartServices(host, state)
   }
   const restored = updateState(host, state, {
@@ -313,13 +321,13 @@ export function executeUpgrade(host: InstallerHost, context: UpgradeContext): vo
     const caddy = resolveCaddyPackage(host)
     replaceManagedBinary(host, caddy, state.paths.caddyBinary)
     state = updateState(host, state, { upgrade: { ...journal, phase: 'quiescing' } })
-    host.replaceFile(state.paths.environmentFile, renderEnvironmentFile(state.request, state.paths, context.target.version), 0o640)
+    replaceEnvironment(host, state, context.target.version)
     runChecked(host, { executable: state.paths.caddyBinary, args: ['validate', '--config', state.paths.caddyfile] }, 'UPGRADE_CADDY_VALIDATE_FAILED')
     runChecked(host, { executable: systemctlPath(host), args: ['stop', state.dshService] }, 'UPGRADE_DSH_QUIESCE_FAILED')
     snapshotAuthState(host, state)
     state = updateState(host, state, { upgrade: { ...journal, phase: 'services' } })
     restartServices(host, state)
-    updateState(host, state, {
+    state = updateState(host, state, {
       status: 'installed',
       upgrade: undefined,
       profilePackageVersion: context.target.version,

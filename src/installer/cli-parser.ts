@@ -35,7 +35,7 @@ const FLAG_DECLARATIONS: readonly FlagDeclaration[] = [
   { name: '--listen-address', kind: 'value', valueHint: 'IP', help: 'Caddy bind address (default: 0.0.0.0 for HTTPS)' },
   { name: '--http-port', kind: 'value', valueHint: 'PORT', help: 'optional HTTP/redirect port (default: 80, or 8080 for HTTP)' },
   { name: '--https-port', kind: 'value', valueHint: 'PORT', help: 'optional HTTPS port (default: 443)' },
-  { name: '--server-name', kind: 'value', valueHint: 'HOST', help: 'required with --mode https' },
+  { name: '--server-name', kind: 'value', valueHint: 'HOST|IP', help: 'required with --mode https; public IP enables Let\'s Encrypt short-lived IP certificates' },
   { name: '--tls', kind: 'value', valueHint: 'automatic|manual', help: 'HTTPS certificate source (default: automatic)' },
   { name: '--certificate', kind: 'value', valueHint: '/absolute/path', help: 'required with --tls manual' },
   { name: '--certificate-key', kind: 'value', valueHint: '/absolute/path', help: 'required with --tls manual' },

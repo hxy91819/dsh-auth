@@ -67,6 +67,12 @@ function isLoopbackAddress(value: string): boolean {
   return value === '127.0.0.1' || value === '::1'
 }
 
+function validateServerName(value: string): string {
+  if (isIP(value) !== 0) return value.toLowerCase()
+  if (!SAFE_SERVER_NAME.test(value)) usage('server name must be a DNS hostname or literal IP address')
+  return value.toLowerCase()
+}
+
 function validateCredentialPath(value: string, label: string): string {
   validateAbsolutePath(value, label)
   if (!/^[A-Za-z0-9_./+-]+$/u.test(value)) usage(`${label} contains characters unsafe for Caddy configuration`)
@@ -144,10 +150,12 @@ function validateTransport(input: SetupRequest): void {
     }
     return
   }
-  if (input.serverName === undefined || !SAFE_SERVER_NAME.test(input.serverName)) {
-    usage('HTTPS mode requires a valid --server-name')
-  }
+  if (input.serverName === undefined) usage('HTTPS mode requires a valid --server-name')
+  const serverName = validateServerName(input.serverName)
   const tls = input.tls ?? 'automatic'
+  if (tls === 'automatic' && isIP(serverName) !== 0 && isPrivateAddress(serverName)) {
+    usage('--tls automatic requires a publicly routable IP address when --server-name is an IP')
+  }
   if (tls === 'automatic' && (input.certificate !== undefined || input.certificateKey !== undefined)) {
     usage('--tls automatic does not accept --certificate or --certificate-key')
   }
@@ -163,8 +171,9 @@ function validateTransport(input: SetupRequest): void {
 /** Public origin recorded for later token issuance. */
 export function publicOrigin(request: SetupRequest): string {
   if (request.mode === 'https') {
-    const host = request.serverName
-    if (host === undefined) usage('HTTPS mode requires a valid --server-name')
+    const serverName = request.serverName
+    if (serverName === undefined) usage('HTTPS mode requires a valid --server-name')
+    const host = isIP(serverName) === 6 ? `[${serverName}]` : serverName
     return request.httpsPort === 443 ? `https://${host}` : `https://${host}:${String(request.httpsPort)}`
   }
   const host = request.listenAddress.includes(':') ? `[${request.listenAddress}]` : request.listenAddress

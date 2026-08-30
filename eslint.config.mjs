@@ -20,7 +20,7 @@ function healthRules(severity, limits) {
 
 export default tseslint.config(
   {
-    ignores: ['lib/**', 'coverage/**', '.tmp/**'],
+    ignores: ['lib/**', 'coverage/**', '.tmp/**', '.worktrees/**'],
   },
   eslint.configs.recommended,
   ...tseslint.configs.strictTypeChecked,

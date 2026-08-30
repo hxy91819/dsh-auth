@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
+import { isIP } from 'node:net'
 import { isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { InstallerError } from './errors.js'
@@ -39,10 +40,15 @@ function caddyPath(value: string, label: string): string {
 }
 
 function hostname(value: string): string {
+  if (isIP(value) !== 0) return value.toLowerCase()
   if (!/^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/u.test(value)) {
-    throw new InstallerError('publicHost must be a DNS hostname', ExitCode.usage)
+    throw new InstallerError('publicHost must be a DNS hostname or literal IP address', ExitCode.usage)
   }
   return value.toLowerCase()
+}
+
+function siteHost(value: string): string {
+  return isIP(value) === 6 ? `[${value}]` : value
 }
 
 function tlsDirective(request: SetupRequest, system: boolean): string {
@@ -51,6 +57,10 @@ function tlsDirective(request: SetupRequest, system: boolean): string {
       return `tls ${caddyPath(`/run/credentials/${CADDY_SERVICE_NAME}/${CREDENTIAL_CERT}`, 'certificate')} ${caddyPath(`/run/credentials/${CADDY_SERVICE_NAME}/${CREDENTIAL_KEY}`, 'key')}`
     }
     return `tls ${caddyPath(request.certificate, 'certificate')} ${caddyPath(request.certificateKey, 'key')}`
+  }
+  if (request.tls === 'automatic' && request.serverName !== undefined && isIP(request.serverName) !== 0) {
+    // Let's Encrypt public IP certificates require the shortlived profile; without this explicit issuer Caddy falls back to its local CA.
+    return 'tls {\n\t\tissuer acme https://acme-v02.api.letsencrypt.org/directory {\n\t\t\tprofile shortlived\n\t\t}\n\t}'
   }
   return ''
 }
@@ -94,9 +104,10 @@ export function renderCaddyfile(request: SetupRequest, system: boolean, caddySta
     ]))
   }
   const publicHost = hostname(request.serverName ?? '')
-  const authority = `${publicHost}:${String(request.httpsPort)}`
+  const authority = `${siteHost(publicHost)}:${String(request.httpsPort)}`
   return fillTemplate(templateFile('dsh-auth.Caddyfile.template'), new Map([
     ['{{PUBLIC_HOST}}', publicHost],
+    ['{{PUBLIC_SITE_HOST}}', siteHost(publicHost)],
     ['{{HTTP_PORT}}', String(request.httpPort)],
     ['{{HTTPS_PORT}}', String(request.httpsPort)],
     ['{{LISTEN_ADDRESS}}', request.listenAddress],
@@ -130,6 +141,9 @@ CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 StateDirectory=dsh-auth-caddy
 RuntimeDirectory=dsh-auth-caddy
+Environment=HOME=/var/lib/dsh-auth-caddy
+Environment=XDG_CONFIG_HOME=/var/lib/dsh-auth-caddy
+Environment=XDG_DATA_HOME=/var/lib/dsh-auth-caddy
 BindReadOnlyPaths=${paths.caddyfile}:/run/dsh-auth-caddy/Caddyfile
 ${credentials}ExecStartPre=${paths.caddyBinary} validate --config /run/dsh-auth-caddy/Caddyfile
 ExecStart=${paths.caddyBinary} run --config /run/dsh-auth-caddy/Caddyfile --adapter caddyfile
