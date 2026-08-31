@@ -1,6 +1,7 @@
 ---
 name: behavior-e2e-validation
 description: Design and run real end-to-end regression tests for dsh-auth behavior that users observe through the Caddy edge, DSH Web, or a browser. Use for authentication policy, login/logout, CSRF, password reset, session persistence, edge routing, packaging, installer, and lifecycle changes; do not use as a substitute for focused owner tests.
+disable-model-invocation: true
 ---
 
 # Behavior E2E Validation

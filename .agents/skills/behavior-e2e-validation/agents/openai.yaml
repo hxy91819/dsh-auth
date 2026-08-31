@@ -2,3 +2,6 @@ interface:
   display_name: "Behavior E2E Validation"
   short_description: "Lock dsh-auth behavior at the public boundary"
   default_prompt: "Use $behavior-e2e-validation to design and run real dsh-auth E2E coverage for user-observable behavior changes."
+
+policy:
+  allow_implicit_invocation: false
