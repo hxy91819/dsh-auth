@@ -10,6 +10,13 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;')
 }
 
+/**
+ * Single product-name token. Every visible product reference derives from it so
+ * a deployment that rebrands the pages replaces one spelling, not a mix of
+ * "DeepSeek Harness" and a short "Harness".
+ */
+const BRAND = 'DeepSeek Harness'
+
 interface UiCopy {
   readonly signInTitle: string
   readonly username: string
@@ -27,7 +34,7 @@ interface UiCopy {
   readonly accountUnconfigured: string
   readonly userId: string
   readonly roles: string
-  readonly returnToHarness: string
+  readonly returnToApp: string
   readonly signOut: string
   readonly resetPassword: string
   readonly resetPasswordTitle: string
@@ -58,7 +65,7 @@ interface UiCopy {
 
 const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
   zh: {
-    signInTitle: '登录 DeepSeek Harness',
+    signInTitle: `登录 ${BRAND}`,
     username: '用户名',
     password: '密码',
     confirmPassword: '确认密码',
@@ -69,12 +76,12 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     rateLimited: '尝试次数过多，请稍后再试。',
     cloudConsole: '请从云控制台登录。',
     accountTitle: '账户',
-    accountLede: '当前浏览器已登录 DeepSeek Harness。',
+    accountLede: `当前浏览器已登录 ${BRAND}。`,
     accountConfigured: '管理员凭据已配置。',
     accountUnconfigured: '管理员凭据尚未配置。本次登录不会再次自动提醒。',
     userId: '用户 ID',
     roles: '角色',
-    returnToHarness: '返回 Harness',
+    returnToApp: `返回 ${BRAND}`,
     signOut: '退出登录',
     resetPassword: '重设密码',
     resetPasswordTitle: '重设密码',
@@ -91,7 +98,7 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     tokenFailure: '登录链接无效、已过期或已被使用。请回到云控制台重新获取链接。',
     tokenDenied: '登录请求的安全校验失败。请从云控制台重新打开最新链接；若仍失败，请检查公网访问地址或联系管理员。',
     setupTitle: '设置管理员账户',
-    setupLede: '为此实例设置管理员用户名和密码，或选择稍后进入 Harness。',
+    setupLede: `为此实例设置管理员用户名和密码，或稍后进入 ${BRAND}。`,
     setupSave: '保存',
     setupLater: '稍后',
     setupCompleteTitle: '管理员已设置',
@@ -103,7 +110,7 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     passwordMismatch: '两次输入的密码不一致。',
   },
   en: {
-    signInTitle: 'Sign in to DeepSeek Harness',
+    signInTitle: `Sign in to ${BRAND}`,
     username: 'Username',
     password: 'Password',
     confirmPassword: 'Confirm password',
@@ -114,12 +121,12 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     rateLimited: 'Too many attempts. Try again later.',
     cloudConsole: 'Sign in from the cloud console.',
     accountTitle: 'Account',
-    accountLede: 'This browser is signed in to DeepSeek Harness.',
+    accountLede: `This browser is signed in to ${BRAND}.`,
     accountConfigured: 'Administrator credentials are configured.',
     accountUnconfigured: 'Administrator credentials are not configured. This session will not remind you again.',
     userId: 'User ID',
     roles: 'Roles',
-    returnToHarness: 'Return to Harness',
+    returnToApp: `Return to ${BRAND}`,
     signOut: 'Sign out',
     resetPassword: 'Reset password',
     resetPasswordTitle: 'Reset password',
@@ -136,7 +143,7 @@ const COPY: Readonly<Record<UiLanguage, UiCopy>> = {
     tokenFailure: 'The sign-in link is invalid, expired, or already used. Request a new link from your cloud console.',
     tokenDenied: 'The sign-in request failed a security check. Reopen the latest link from your cloud console. If it still fails, check the public access address or contact an administrator.',
     setupTitle: 'Set up the administrator account',
-    setupLede: 'Set an administrator username and password for this instance, or continue to Harness later.',
+    setupLede: `Set an administrator username and password for this instance, or continue to ${BRAND} later.`,
     setupSave: 'Save',
     setupLater: 'Later',
     setupCompleteTitle: 'Administrator already set up',
@@ -333,12 +340,12 @@ function document(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark light">
-  <title>${escapeHtml(title)} · DeepSeek Harness</title>
+  <title>${escapeHtml(title)} · ${BRAND}</title>
   <style>${STYLE}</style>
 ${extraHead}</head>
 <body data-theme="${preferences.theme}">
   <main class="panel" data-screen-label="Authentication">
-    <header class="panel-header"><div class="brand">DeepSeek Harness</div></header>
+    <header class="panel-header"><div class="brand">${BRAND}</div></header>
     ${content}
   </main>
 </body>
@@ -402,7 +409,7 @@ export function accountPage(
       <div class="detail"><dt>${escapeHtml(copy.roles)}</dt><dd>${escapeHtml(roles)}</dd></div>
     </dl></div>
     ${configured ? `<a class="button secondary" href="${escapeHtml(basePath)}/admin/password">${escapeHtml(copy.resetPassword)}</a>` : ''}
-    <a class="button secondary" href="/">${escapeHtml(copy.returnToHarness)}</a>
+    <a class="button secondary" href="/">${escapeHtml(copy.returnToApp)}</a>
     <form method="post" action="${escapeHtml(basePath)}/logout">
       <input type="hidden" name="csrf" value="${escapeHtml(csrfToken)}">
       <button type="submit">${escapeHtml(copy.signOut)}</button>
@@ -502,7 +509,7 @@ export function adminSetupCompletePage(preferences: UiPreferences, returnTo = '/
   return document(copy.setupCompleteTitle, `<section class="content">
     <h1>${escapeHtml(copy.setupCompleteTitle)}</h1>
     <p class="lede">${escapeHtml(copy.setupCompleteLede)}</p>
-    <a class="button" href="${escapeHtml(returnTo)}">${escapeHtml(copy.returnToHarness)}</a>
+    <a class="button" href="${escapeHtml(returnTo)}">${escapeHtml(copy.returnToApp)}</a>
   </section>`, preferences)
 }
 
@@ -537,7 +544,7 @@ export function passwordChangePage(
       </div>
       <button type="submit">${escapeHtml(copy.resetPasswordSave)}</button>
     </form>
-    <a class="button secondary" href="${escapeHtml(returnTo)}">${escapeHtml(copy.returnToHarness)}</a>
+    <a class="button secondary" href="${escapeHtml(returnTo)}">${escapeHtml(copy.returnToApp)}</a>
   </section>`, preferences)
 }
 
@@ -547,7 +554,7 @@ export function passwordChangeCompletePage(preferences: UiPreferences, returnTo 
   return document(copy.passwordUpdatedTitle, `<section class="content">
     <h1>${escapeHtml(copy.passwordUpdatedTitle)}</h1>
     <p class="lede">${escapeHtml(copy.passwordUpdatedLede)}</p>
-    <a class="button" href="${escapeHtml(returnTo)}">${escapeHtml(copy.returnToHarness)}</a>
+    <a class="button" href="${escapeHtml(returnTo)}">${escapeHtml(copy.returnToApp)}</a>
   </section>`, preferences)
 }
 
