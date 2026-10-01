@@ -155,7 +155,7 @@
     "@deepseek-ai/dsh-host-webserver": "0.1.0-rc.8",
     "@deepseek-ai/dsh-invariants": "0.1.0-rc.8",
     "@deepseek-ai/dsh-settings": "0.1.0-rc.8",
-    "@eslint/js": "9.39.5",
+    "@eslint/js": "10.0.1",
     "@standard-schema/spec": "1.1.0",
     "@types/node": "24.13.3",
     "@types/react": "18.3.24",
