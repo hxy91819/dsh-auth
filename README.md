@@ -365,7 +365,7 @@ sudo dsh-auth upgrade
 
 The profile bundle, bundled Caddy binary, environment marker, ownership record, and both services move together; administrator credentials, the session secret, and existing sessions survive. Any failing step rolls everything back to the recorded build. Same-version reinstalls and downgrades are refused, and `--package /path/dsh-auth-VERSION.tgz` pins an offline source. Interactive upgrade requires typing `upgrade`; automation requires `--non-interactive --authorize-upgrade`.
 
-Updating the profile bundle through plain `dsh plugin` (instead of `dsh-auth upgrade`) creates version drift. The Web service then fails closed on restart instead of running an unverified build behind the authentication edge. `doctor` reports the drift with a fixed recovery order:
+Updating the profile bundle through plain `dsh plugin` (instead of `dsh-auth upgrade`) creates version drift. On restart, the mismatched authentication plugin refuses activation: existing dsh-auth sessions, login, and application admission through the managed edge fail closed. DSH may keep its Web process running under native authentication. `doctor` reports the drift with a fixed recovery order:
 
 ```sh
 dsh plugin --profile web add <recorded-package-spec>   # restore the recorded build

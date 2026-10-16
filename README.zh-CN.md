@@ -321,6 +321,8 @@ sudo dsh-auth uninstall
 
 schema v1 所有权记录、旧 Nginx 参数和旧插件身份字段会被拒绝，并给出重装诊断。没有自动迁移。卸载并重新 setup 后，旧会话会失效。
 
+通过普通 `dsh plugin` 更新 profile 包（而非 `dsh-auth upgrade`）会造成版本漂移。重启后，不匹配的认证插件拒绝激活，旧 dsh-auth 会话、登录和受管边缘的应用入口均被拒绝；DSH 可能保留 Web 进程并使用原生认证。先按 `doctor` 提示恢复记录的包，确认健康后再执行 `dsh-auth upgrade`。
+
 ## 体验环境部署
 
 手动触发的[体验环境部署工作流](.github/workflows/experience-deploy.yml)会通过已固定主机密钥的 SSH，把所选开发 ref 部署到一个受保护的 GitHub Environment。它生成只在体验服务器使用的 `-experience.<run-id>.<attempt>` 预发布 tarball，首次执行非交互 `setup`，之后使用事务性 `upgrade`。它不会发布 npm，也不会创建 GitHub Release。请按 [`docs/experience-deploy.md`](docs/experience-deploy.md) 配置 Environment Variables 和 Secrets；SSH 账户应专用并能以 `sudo -n` 执行安装操作，同时保留所有权记录引用的服务器端 tarball，以便离线回滚。
