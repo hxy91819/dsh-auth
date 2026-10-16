@@ -17,6 +17,7 @@ const ALLOWED_KEYS = [
   'authStateFile',
   'sessionSecretFile',
   'expectedVersion',
+  'nativeAuthBridge',
   'loginTokenEnabled',
   'loginTokenDirectory',
   'loginTokenFailureMessageZh',
@@ -54,6 +55,7 @@ export interface ConfigInput {
   readonly authStateFile?: string
   readonly sessionSecretFile?: string
   readonly expectedVersion?: string
+  readonly nativeAuthBridge?: boolean
   readonly loginTokenEnabled?: boolean
   readonly loginTokenDirectory?: string
   readonly loginTokenFailureMessageZh?: string
@@ -114,6 +116,7 @@ export interface ResolvedConfig {
   readonly basePath: typeof AUTH_BASE_PATH
   readonly authStateFile: string
   readonly sessionSecret: Buffer
+  readonly nativeAuthBridge: boolean
   readonly loginTokenEnabled: boolean
   readonly loginTokenDirectory?: string
   readonly loginTokenFailureMessageZh?: string
@@ -382,6 +385,7 @@ export function resolveConfig(value: unknown): ResolvedConfig {
     basePath: AUTH_BASE_PATH,
     authStateFile,
     sessionSecret,
+    nativeAuthBridge: boolean(input, 'nativeAuthBridge', false),
     loginTokenEnabled,
     ...(loginTokenDirectory === undefined ? {} : { loginTokenDirectory }),
     ...(failureZh === undefined ? {} : { loginTokenFailureMessageZh: failureZh }),

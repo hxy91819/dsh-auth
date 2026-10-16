@@ -1,13 +1,13 @@
-import { Context } from '@deepseek-ai/cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
-import { SettingsProvider, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
+import type { SettingsDescriptor, SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { afterEach, describe, expect, it } from 'vitest'
 import { apply, inject, name } from '../src/index.js'
 import { testConfig, testCredentials } from './helpers.js'
 
 const contexts: Context[] = []
 
-class HarnessSettings extends SettingsProvider {
+class HarnessSettings extends Service {
   readonly writable = false
   private readonly values = new Map<string, unknown>()
 
@@ -15,17 +15,11 @@ class HarnessSettings extends SettingsProvider {
     this.values.set(namespace, value)
   }
 
-  override get(namespace: SettingsNamespace): unknown {
-    return this.values.get(namespace)
+  constructor(ctx: Context) { super(ctx, 'settings') }
+  describe(): SettingsDescriptor[] {
+    return [...this.values].map(([ns, value]) => ({ ns: ns as SettingsNamespace, value, autoGenerate: false, schema: {}, revision: 0, applies: 'live' }))
   }
 
-  protected load(): Promise<Record<string, unknown>> {
-    return Promise.resolve({})
-  }
-
-  protected persist(): Promise<void> {
-    return Promise.reject(new Error('read-only test settings'))
-  }
 }
 
 afterEach(async () => {
@@ -39,7 +33,7 @@ describe('Cordis plugin integration', () => {
     contexts.push(context)
     const settingsFiber = context.plugin(HarnessSettings)
     await settingsFiber
-    const settings = context.settings as HarnessSettings
+    const settings = context.settings as unknown as HarnessSettings
     settings.set('locale', { preference: 'zh' })
     settings.set('ui-theme', { preference: 'dark' })
     const web = context.plugin(WebServer, { host: '127.0.0.1', port: 0 })

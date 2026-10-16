@@ -7,6 +7,7 @@ import { FakeCliIo, FakeInstallerHost } from './installer-helpers.js'
 
 const PASSWORD = 'sufficient-system-password'
 const PACKAGE_VERSION = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { readonly version: string }).version
+const NEXT_VERSION = `${String(Number(PACKAGE_VERSION.split('.')[0]) + 1)}.0.0`
 const SYSTEM_ARGS = [
   '--json', '--non-interactive', '--mode', 'http', '--listen-address', '10.0.0.20',
   '--dsh-service', 'dsh-web.service', '--admin-bootstrap', 'password', '--admin-username', 'admin',
@@ -58,23 +59,23 @@ describe('managed upgrade', () => {
     await setupInstalled(host)
     const authStateBefore = host.readFileBytes('/var/lib/dsh-auth/auth-state.json')
     const secretBefore = host.readFileBytes('/etc/dsh-auth/session-secret')
-    host.promoteCliPackage('0.3.0')
+    host.promoteCliPackage(NEXT_VERSION)
 
     const io = new FakeCliIo(false)
     await expect(runCli([...UPGRADE_ARGS], io, host)).resolves.toBe(0)
 
     const state = stateOf(host)
     expect(state.status).toBe('installed')
-    expect(state.profilePackageVersion).toBe('0.3.0')
-    expect(state.profilePackageSpec).toBe('0.3.0')
+    expect(state.profilePackageVersion).toBe(NEXT_VERSION)
+    expect(state.profilePackageSpec).toBe(NEXT_VERSION)
     expect(state.upgrade).toBeUndefined()
-    expect(JSON.parse(host.readFile(`${BUNDLE_ROOT}/package.json`))).toMatchObject({ version: '0.3.0' })
-    expect(host.readFile('/etc/dsh-auth/dsh-auth.env')).toContain('DSH_AUTH_EXPECTED_VERSION="0.3.0"')
+    expect(JSON.parse(host.readFile(`${BUNDLE_ROOT}/package.json`))).toMatchObject({ version: NEXT_VERSION })
+    expect(host.readFile('/etc/dsh-auth/dsh-auth.env')).toContain(`DSH_AUTH_EXPECTED_VERSION="${NEXT_VERSION}"`)
     expect(host.stat('/etc/dsh-auth/dsh-auth.env')).toMatchObject({ uid: 0, gid: 0, mode: 0o640 })
     expect(host.readFileBytes('/var/lib/dsh-auth/auth-state.json')).toEqual(authStateBefore)
     expect(host.fileExists(`${STATE_FILE}.auth-state-backup`)).toBe(false)
     expect(host.readFileBytes('/etc/dsh-auth/session-secret')).toEqual(secretBefore)
-    expect(host.commands.some(command => command.args.includes('add') && command.args.includes('dsh-auth@0.3.0'))).toBe(true)
+    expect(host.commands.some(command => command.args.includes('add') && command.args.includes(`dsh-auth@${NEXT_VERSION}`))).toBe(true)
     expect(host.commands).toContainEqual({ executable: '/usr/bin/systemctl', args: ['restart', 'dsh-web.service'] })
     expect(host.commands).toContainEqual({ executable: '/usr/bin/systemctl', args: ['restart', 'dsh-auth-caddy.service'] })
     expect(host.commands.some(command => command.executable === '/usr/lib/dsh-auth/caddy' && command.args[0] === 'validate')).toBe(true)
@@ -102,11 +103,11 @@ describe('managed upgrade', () => {
   it('rolls the installation back when the target does not resolve to this build', async () => {
     const host = readyHost()
     await setupInstalled(host)
-    host.promoteCliPackage('0.3.0')
+    host.promoteCliPackage(NEXT_VERSION)
     const prior = host.commandHandler
     host.commandHandler = command => {
       const result = prior(command)
-      if (command.executable === '/opt/dsh/bin/dsh' && command.args.includes('add') && command.args.at(-1) === 'dsh-auth@0.3.0') {
+      if (command.executable === '/opt/dsh/bin/dsh' && command.args.includes('add') && command.args.at(-1) === `dsh-auth@${NEXT_VERSION}`) {
         host.addFile(`${BUNDLE_ROOT}/lib/foreign-build.txt`, 'not this build\n')
       }
       return result
@@ -135,11 +136,11 @@ describe('managed upgrade', () => {
     // The setup tarball captured this build; a later plugin add of the file:
     // spec must resolve the same bytes offline.
     host.stashCliSnapshot()
-    host.promoteCliPackage('0.3.0')
+    host.promoteCliPackage(NEXT_VERSION)
     const prior = host.commandHandler
     host.commandHandler = command => {
       const result = prior(command)
-      if (command.executable === '/opt/dsh/bin/dsh' && command.args.includes('add') && command.args.at(-1) === 'dsh-auth@0.3.0') {
+      if (command.executable === '/opt/dsh/bin/dsh' && command.args.includes('add') && command.args.at(-1) === `dsh-auth@${NEXT_VERSION}`) {
         host.addFile(`${BUNDLE_ROOT}/lib/foreign-build.txt`, 'not this build\n')
       }
       return result
@@ -160,7 +161,7 @@ describe('managed upgrade', () => {
   it('rolls the bundle, binary, environment, and record back when Caddy validation fails', async () => {
     const host = readyHost()
     await setupInstalled(host)
-    host.promoteCliPackage('0.3.0')
+    host.promoteCliPackage(NEXT_VERSION)
     const prior = host.commandHandler
     let failedOnce = false
     host.commandHandler = command => {
@@ -208,7 +209,7 @@ describe('managed upgrade', () => {
     const host = readyHost()
     await setupInstalled(host)
     host.addFile(`${BUNDLE_ROOT}/lib/drifted.txt`, 'externally updated\n')
-    host.promoteCliPackage('0.3.0')
+    host.promoteCliPackage(NEXT_VERSION)
 
     const setupCommands = host.commands.length
     const io = new FakeCliIo(false)
@@ -224,15 +225,15 @@ describe('managed upgrade', () => {
   it('recovers a crash-interrupted upgrade and completes a fresh attempt', async () => {
     const host = readyHost()
     await setupInstalled(host)
-    host.promoteCliPackage('0.3.0')
+    host.promoteCliPackage(NEXT_VERSION)
     const recorded = stateOf(host)
     // Simulate a crash after the bundle was swapped to the target build.
-    host.run({ executable: '/opt/dsh/bin/dsh', args: ['plugin', '--profile', 'web', 'add', 'dsh-auth@0.3.0'] })
+    host.run({ executable: '/opt/dsh/bin/dsh', args: ['plugin', '--profile', 'web', 'add', `dsh-auth@${NEXT_VERSION}`] })
     const journal: UpgradeJournal = {
       fromVersion: PACKAGE_VERSION,
       fromSpec: PACKAGE_VERSION,
       fromBuildIdentity: recorded.profilePackageBuildIdentity ?? '',
-      targetVersion: '0.3.0',
+      targetVersion: NEXT_VERSION,
       targetBuildIdentity: 'not-recorded-for-crash',
       phase: 'bundle',
     }
@@ -243,16 +244,16 @@ describe('managed upgrade', () => {
 
     const state = stateOf(host)
     expect(state.status).toBe('installed')
-    expect(state.profilePackageVersion).toBe('0.3.0')
+    expect(state.profilePackageVersion).toBe(NEXT_VERSION)
     expect(state.upgrade).toBeUndefined()
-    expect(JSON.parse(host.readFile(`${BUNDLE_ROOT}/package.json`))).toMatchObject({ version: '0.3.0' })
+    expect(JSON.parse(host.readFile(`${BUNDLE_ROOT}/package.json`))).toMatchObject({ version: NEXT_VERSION })
     await expect(runCli(['doctor', '--json'], new FakeCliIo(false), host)).resolves.toBe(0)
   }, 30_000)
 
   it('prints the secret-free plan for --dry-run and enforces interactive confirmation', async () => {
     const host = readyHost()
     await setupInstalled(host)
-    host.promoteCliPackage('0.3.0')
+    host.promoteCliPackage(NEXT_VERSION)
 
     const setupCommands = host.commands.length
     const dryIo = new FakeCliIo(false)
@@ -272,7 +273,7 @@ describe('managed upgrade', () => {
 
     const confirmed = new FakeCliIo(true, ['upgrade'])
     await expect(runCli(['upgrade', '--json'], confirmed, host)).resolves.toBe(0)
-    expect(stateOf(host).profilePackageVersion).toBe('0.3.0')
+    expect(stateOf(host).profilePackageVersion).toBe(NEXT_VERSION)
   }, 30_000)
 })
 
@@ -287,7 +288,7 @@ describe('managed upgrade authentication-state rollback', () => {
       createdAt: 1, lastSeenAt: 1, expiresAt: 2,
     })
     host.addFile(authStatePath, `${JSON.stringify(authStateBefore)}\n`, 0o600)
-    host.promoteCliPackage('0.3.0')
+    host.promoteCliPackage(NEXT_VERSION)
     const prior = host.commandHandler
     let authStateAtQuiescence = ''
     let oldWebStopped = false

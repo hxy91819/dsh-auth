@@ -8,6 +8,7 @@ function quoteEnvironment(value: string): string {
 /** Render the DSH service environment without embedding secret values. */
 export function renderEnvironmentFile(request: SetupRequest, paths: ManagedPaths, expectedVersion?: string): string {
   const lines = [
+    'DSH_AUTH_NATIVE_AUTH_BRIDGE=true',
     '# Managed by dsh-auth. Secret values live in separate permission-restricted files.',
     `DSH_AUTH_STATE_FILE=${quoteEnvironment(paths.authStateFile)}`,
     `DSH_AUTH_SESSION_SECRET_FILE=${quoteEnvironment(paths.sessionSecretFile)}`,

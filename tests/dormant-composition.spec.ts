@@ -47,6 +47,17 @@ describe('dormant composition contract', () => {
     })).toBe(false)
   })
 
+  it.for(compositionFiles)('keeps %s native admission disabled unless explicitly enabled', (fileName) => {
+    const expression = loadRow(fileName).configExpressions
+      .find(row => row.startsWith('nativeAuthBridge: '))?.slice('nativeAuthBridge: '.length)
+    expect(expression).toBeDefined()
+    if (expression === undefined) throw new Error('missing nativeAuthBridge composition')
+    expect(dormancy(expression, {})).toBe(false)
+    expect(dormancy(expression, { DSH_AUTH_NATIVE_AUTH_BRIDGE: 'true' })).toBe(true)
+    expect(dormancy(expression, { DSH_AUTH_NATIVE_AUTH_BRIDGE: 'false' })).toBe(false)
+    expect(() => dormancy(expression, { DSH_AUTH_NATIVE_AUTH_BRIDGE: 'invalid' })).toThrow()
+  })
+
   it.for(compositionFiles)('keeps %s routing core variables into strict plugin config', (fileName) => {
     const row = loadRow(fileName)
     expect(row.configExpressions).toContain('authStateFile: process.env.DSH_AUTH_STATE_FILE')

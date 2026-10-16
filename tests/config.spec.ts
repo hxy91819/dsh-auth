@@ -28,6 +28,13 @@ describe('configuration', () => {
     expect(testConfig(credentials).basePath).toBe('/auth')
   })
 
+  it('keeps the native bridge opt-in and accepts only boolean overrides', async () => {
+    const credentials = await testCredentials()
+    expect(testConfig(credentials).nativeAuthBridge).toBe(false)
+    expect(testConfig(credentials, { nativeAuthBridge: true }).nativeAuthBridge).toBe(true)
+    expect(testConfig(credentials, { nativeAuthBridge: false }).nativeAuthBridge).toBe(false)
+  })
+
   it('reads bounded absolute secret files and rejects removed identity fields', () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-auth-config-'))
     roots.push(root)
@@ -77,6 +84,9 @@ describe('configuration', () => {
     })).toThrow(/sessionRenewalSeconds/u)
     expect(resolveConfig({ ...base, secureCookies: false }).secureCookies).toBe(false)
     expect(() => resolveConfig({ ...base, secureCookies: 'false' })).toThrow(/secureCookies/u)
+    for (const nativeAuthBridge of ['true', 'false', 1, {}]) {
+      expect(() => resolveConfig({ ...base, nativeAuthBridge })).toThrow(/nativeAuthBridge/u)
+    }
   }, 30_000)
 
   it('rejects exposed or symbolic-link credential files', async () => {

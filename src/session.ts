@@ -86,7 +86,7 @@ export class SessionStore {
     return { cookieValue: signed.value, session: this.view(stored) }
   }
 
-  authenticate(req: IncomingMessage, now: number): SessionAuthentication | undefined {
+  authenticate(req: Pick<IncomingMessage, 'headers'>, now: number): SessionAuthentication | undefined {
     const raw = parseCookies(req.headers.cookie).get(this.cookieName)
     if (raw === undefined) return undefined
     const token = this.signer.verify(raw)
