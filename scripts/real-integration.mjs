@@ -496,12 +496,17 @@ const AUTHENTICATED_SPA = 'location.pathname === "/" && Array.from(document.quer
 
 async function openHarnessSettings(browser, label) {
   await waitForBrowser(browser.evaluate, AUTHENTICATED_SPA, label)
-  await browser.evaluate(`(() => {
-    const labels = new Set(['Settings', '设置'])
-    const settings = Array.from(document.querySelectorAll('button')).find(button => labels.has(button.textContent?.trim() ?? ''))
+  await waitForBrowser(browser.evaluate, `(() => {
+    if (document.querySelector('.dsh-auth-logout') !== null) return true
+    // Native onboarding may mount after the sidebar. Complete its ordinary
+    // dismiss actions before opening Settings, including after a fresh login.
+    const buttons = Array.from(document.querySelectorAll('button'))
+    const dismiss = buttons.find(button => ['Continue', '继续', 'Configure later', '稍后配置'].includes(button.textContent?.trim() ?? ''))
+    if (dismiss !== undefined) { dismiss.click(); return false }
+    const settings = buttons.find(button => ['Settings', '设置'].includes(button.textContent?.trim() ?? ''))
     settings?.click()
-    return settings !== undefined
-  })()`)
+    return false
+  })()`, `${label} Settings account rows`)
 }
 
 async function signOutFromSettings(browser, readyLabel, redirectLabel) {

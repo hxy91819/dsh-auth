@@ -89,8 +89,7 @@ const dshCli = executable(join(checkout, 'node_modules', '.bin', 'dsh'), 'dsh')
 const dshWrapper = join(root, 'bin', 'dsh')
 const dshCommandLog = join(root, 'bin', 'dsh-commands.log')
 mkdirSync(join(root, 'bin'), { mode: 0o755, recursive: true })
-// DSH 0.1.0-rc.7 mounts its HMR service, which requires node internals to be
-// exposed; the disposable unit owns this launch flag. The wrapper also records
+// The disposable unit owns the HMR launch flag. The wrapper also records
 // installer-issued plugin commands so rollback flags are observable.
 writeFileSync(dshWrapper, `#!/bin/sh
 printf '%s\\n' "$*" >> ${JSON.stringify(dshCommandLog)}
@@ -189,7 +188,7 @@ async function waitWeb(port, label) {
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`http://127.0.0.1:${String(port)}/`)
-      if (response.status === 200) return
+      if (response.status === 200 || response.status === 401) return
     } catch (error) {
       lastError = error
     }
@@ -200,11 +199,29 @@ async function waitWeb(port, label) {
 
 async function dormantAssertions(port, label) {
   await waitWeb(port, `${label} dormant boot`)
-  const index = await (await fetch(`http://127.0.0.1:${String(port)}/`)).text()
+  const origin = `http://127.0.0.1:${String(port)}`
+  const anonymous = await fetch(origin)
+  assert(anonymous.status === 401, `${label}: native operator authentication was bypassed`)
+  // Dormant dsh-auth must leave RC.2's native launch-token admission in control.
+  // Read only this test-owned unit's token and never include its value in output.
+  const journalResult = allowFailure('/usr/bin/journalctl', ['--unit', currentUnit, '--no-pager', '--output=cat', '--lines=200'])
+  assert(journalResult.status === 0, `${label}: test-owned unit journal is unavailable`)
+  const journal = journalResult.stdout
+  const launch = [...journal.matchAll(/http:\/\/127\.0\.0\.1:(\d+)\/\?token=([A-Za-z0-9_-]+)/gu)]
+    .findLast(match => match[1] === String(port))
+  assert(launch !== undefined, `${label}: native launch URL was not recorded`)
+  const exchange = await fetch(launch[0], { redirect: 'manual' })
+  assert(exchange.status === 303, `${label}: native token exchange failed`)
+  const cookie = exchange.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
+  assert(cookie !== '', `${label}: native token exchange omitted its cookie`)
+  const indexResponse = await fetch(origin, { headers: { cookie } })
+  assert(indexResponse.status === 200, `${label}: native authenticated SPA is unavailable`)
+  const index = await indexResponse.text()
+  assert(index.includes('__DSH_BOOT__'), `${label}: native SPA boot manifest was absent`)
   assert(!index.includes('"id":"dsh-auth"'), `${label}: dormant bundle entered the client roster`)
-  const login = await fetch(`http://127.0.0.1:${String(port)}/auth/login`)
+  const login = await fetch(`${origin}/auth/login`, { headers: { cookie } })
   const loginHtml = await login.text()
-  assert(loginHtml.includes('window.__DSH_BOOT__') && !loginHtml.includes('name="password"'), `${label}: dormant bundle exposed an authentication route`)
+  assert(login.status === 404 && !loginHtml.includes('name="password"'), `${label}: dormant bundle exposed an authentication route`)
 }
 
 async function login(edgePort, username, password) {
