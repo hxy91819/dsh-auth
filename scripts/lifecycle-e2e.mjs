@@ -172,7 +172,7 @@ async function createService(home, port) {
     'User=root',
     'WorkingDirectory=/root',
     `Environment=DSH_HOME=${home}`,
-    `ExecStart=${dshWrapper} web --port ${String(port)}`,
+    `ExecStart=${dshWrapper} web --no-open --port ${String(port)}`,
     '[Install]',
     'WantedBy=multi-user.target',
     '',
@@ -194,7 +194,11 @@ async function waitWeb(port, label) {
     }
     await new Promise(resolveTimeout => setTimeout(resolveTimeout, 250))
   }
-  throw new Error(`${label} did not become ready: ${lastError instanceof Error ? lastError.message : String(lastError)}`)
+  const journal = allowFailure('/usr/bin/journalctl', ['--unit', currentUnit, '--no-pager', '--output=cat', '--lines=30'])
+  const diagnostic = journal.status === 0
+    ? journal.stdout.replace(/token=[A-Za-z0-9_-]+/gu, 'token=<redacted>').slice(-4000)
+    : 'test-owned journal unavailable'
+  throw new Error(`${label} did not become ready: ${lastError instanceof Error ? lastError.message : String(lastError)}\n${diagnostic}`)
 }
 
 async function dormantAssertions(port, label) {
