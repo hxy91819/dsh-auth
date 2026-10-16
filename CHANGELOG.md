@@ -6,6 +6,7 @@ Changes since [v0.2.3](https://github.com/hxy91819/dsh-auth/compare/v0.2.3...v0.
 
 ### Changes
 
+- build: use patched MCP OAuth dependencies (`7c6a5eb`). Thanks hxy91819.
 - feat: support DSH 0.2 RC authentication and native sessions (`774bcb5`). Thanks hxy91819.
 - Merge branch 'docs/behavior-e2e-explicit' (`db7c211`). Thanks @hxy91819.
 - docs: make behavior e2e validation explicit-only (`9f4660b`). Thanks Mason Huang.
