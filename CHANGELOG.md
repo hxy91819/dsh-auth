@@ -6,6 +6,7 @@ Changes since [v0.2.3](https://github.com/hxy91819/dsh-auth/compare/v0.2.3...v0.
 
 ### Changes
 
+- test: validate RC2 drift admission and noexec lifecycle (`d6a190e`). Thanks hxy91819.
 - test: diagnose isolated systemd startup without exposing launch tokens (`ad504ac`). Thanks hxy91819.
 - test: follow native RC.2 admission and onboarding lifecycle (`6c08ee6`). Thanks hxy91819.
 - build: use patched MCP OAuth dependencies (`7c6a5eb`). Thanks hxy91819.
