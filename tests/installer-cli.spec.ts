@@ -110,6 +110,7 @@ describe('installer CLI', () => {
     expect(host.readFile('/export/dsh-auth/session-secret')).not.toContain(PASSWORD)
     expect(host.readFile('/export/dsh-auth/dsh-auth.env')).not.toContain(host.readFile('/export/dsh-auth/session-secret').trim())
     expect(host.readFile('/export/dsh-auth/dsh-auth.env')).toContain('DSH_AUTH_STATE_FILE=')
+    expect(host.readFile('/export/dsh-auth/dsh-auth.env')).toContain('DSH_AUTH_NATIVE_AUTH_BRIDGE=true')
     expect(host.stat('/export/dsh-auth/session-secret').mode).toBe(0o600)
     expect(firstIo.outputs.join('')).not.toContain(PASSWORD)
     expect(JSON.parse(firstIo.outputs.join(''))).toMatchObject({ schemaVersion: 2 })

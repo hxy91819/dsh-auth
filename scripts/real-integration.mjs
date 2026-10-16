@@ -274,13 +274,17 @@ async function terminate(process) {
   }
 }
 
+function redactHarnessOutput(value) {
+  return value.replaceAll(/([?&]token=)[A-Za-z0-9_-]+/gu, '$1<REDACTED>')
+}
+
 async function waitUntil(check, label, watchedProcesses = []) {
   const deadline = Date.now() + 30_000
   let lastError
   while (Date.now() < deadline) {
     for (const watched of watchedProcesses) {
       if (watched.process.exitCode !== null) {
-        throw new Error(`${watched.name} exited with code ${String(watched.process.exitCode)}\n${watched.process.testOutput()}`)
+        throw new Error(`${watched.name} exited with code ${String(watched.process.exitCode)}\n${redactHarnessOutput(watched.process.testOutput())}`)
       }
     }
     try {
@@ -290,7 +294,7 @@ async function waitUntil(check, label, watchedProcesses = []) {
     }
     await new Promise(resolveTimeout => setTimeout(resolveTimeout, 200))
   }
-  const childOutput = watchedProcesses.map(watched => `\n${watched.name}:\n${watched.process.testOutput()}`).join('')
+  const childOutput = watchedProcesses.map(watched => `\n${watched.name}:\n${redactHarnessOutput(watched.process.testOutput())}`).join('')
   throw new Error(`${label} did not become ready${lastError instanceof Error ? `: ${lastError.message}` : ''}${childOutput}`)
 }
 
@@ -356,7 +360,7 @@ async function websocketStatus(port, cookie) {
   return new Promise((resolveSocket, rejectSocket) => {
     const headers = { host: `localhost:${String(port)}` }
     if (cookie !== undefined) headers.cookie = cookie
-    const socket = new WebSocket(`wss://127.0.0.1:${String(port)}/api/events.mux`, {
+    const socket = new WebSocket(`wss://127.0.0.1:${String(port)}/api/remote.mux`, {
       headers,
       origin: `https://localhost:${String(port)}`,
       rejectUnauthorized: false,
@@ -492,12 +496,17 @@ const AUTHENTICATED_SPA = 'location.pathname === "/" && Array.from(document.quer
 
 async function openHarnessSettings(browser, label) {
   await waitForBrowser(browser.evaluate, AUTHENTICATED_SPA, label)
-  await browser.evaluate(`(() => {
-    const labels = new Set(['Settings', '设置'])
-    const settings = Array.from(document.querySelectorAll('button')).find(button => labels.has(button.textContent?.trim() ?? ''))
+  await waitForBrowser(browser.evaluate, `(() => {
+    if (document.querySelector('.dsh-auth-logout') !== null) return true
+    // Native onboarding may mount after the sidebar. Complete its ordinary
+    // dismiss actions before opening Settings, including after a fresh login.
+    const buttons = Array.from(document.querySelectorAll('button'))
+    const dismiss = buttons.find(button => ['Continue', '继续', 'Configure later', '稍后配置'].includes(button.textContent?.trim() ?? ''))
+    if (dismiss !== undefined) { dismiss.click(); return false }
+    const settings = buttons.find(button => ['Settings', '设置'].includes(button.textContent?.trim() ?? ''))
     settings?.click()
-    return settings !== undefined
-  })()`)
+    return false
+  })()`, `${label} Settings account rows`)
 }
 
 async function signOutFromSettings(browser, readyLabel, redirectLabel) {
@@ -683,21 +692,27 @@ async function verifyDormantPreinstall(authStateFile) {
   delete dormantEnvironment.DSH_AUTH_STATE_FILE
   delete dormantEnvironment.DSH_AUTH_SESSION_SECRET_FILE
   const dormantPort = await availablePort()
-  const dormantProcess = child(dshExecutable, ['web', '--port', String(dormantPort)], {
+  const dormantProcess = child(dshExecutable, ['web', '--no-open', '--port', String(dormantPort)], {
     cwd: launchCwd, env: dormantEnvironment,
   })
   try {
-    await waitUntil(async () => (await fetch(`http://127.0.0.1:${String(dormantPort)}/`)).status === 200, 'dormant DSH', [
-      { name: 'dormant DSH', process: dormantProcess },
-    ])
-    const dormantIndex = await (await fetch(`http://127.0.0.1:${String(dormantPort)}/`)).text()
+    const origin = `http://127.0.0.1:${String(dormantPort)}`
+    let nativeCookie
+    await waitUntil(async () => {
+      const launch = /http:\/\/127\.0\.0\.1:\d+\/\?token=[A-Za-z0-9_-]+/u.exec(dormantProcess.testOutput())?.[0]
+      if (launch === undefined) return false
+      assert(new URL(launch).origin === origin, 'native launch authority was unexpected')
+      const exchanged = await fetch(launch, { redirect: 'manual' })
+      nativeCookie = exchanged.headers.get('set-cookie')?.split(';')[0]
+      return exchanged.status === 303 && nativeCookie !== undefined
+    }, 'dormant DSH', [{ name: 'dormant DSH', process: dormantProcess }])
+    const dormantIndex = await (await fetch(`${origin}/`, { headers: { cookie: nativeCookie } })).text()
+    assert(dormantIndex.includes('__DSH_BOOT__'), 'native authenticated dormant Web was unavailable')
     assert(!dormantIndex.includes('"id":"dsh-auth"'), 'dormant bundle entered the client boot roster')
-    const dormantLogin = await fetch(`http://127.0.0.1:${String(dormantPort)}/auth/login`)
+    const dormantLogin = await fetch(`${origin}/auth/login`, { headers: { cookie: nativeCookie } })
     const dormantLoginHtml = await dormantLogin.text()
     assert(
-      dormantLogin.status === 200
-        && dormantLoginHtml.includes('window.__DSH_BOOT__')
-        && !dormantLoginHtml.includes('name="password"'),
+      dormantLogin.status === 404 && !dormantLoginHtml.includes('name="password"'),
       'dormant bundle exposed an authentication route',
     )
   } finally {
@@ -706,22 +721,25 @@ async function verifyDormantPreinstall(authStateFile) {
 
   const partialEnvironment = { ...dormantEnvironment, DSH_AUTH_STATE_FILE: authStateFile }
   const partialPort = await availablePort()
-  const partialProcess = child(dshExecutable, ['web', '--port', String(partialPort)], {
+  const partialProcess = child(dshExecutable, ['web', '--no-open', '--port', String(partialPort)], {
     cwd: launchCwd, env: partialEnvironment,
   })
-  const partialExit = await new Promise(resolve => {
-    const timer = setTimeout(() => {
-      partialProcess.kill('SIGKILL')
-      resolve(null)
-    }, 30_000)
-    partialProcess.once('exit', code => {
-      clearTimeout(timer)
-      resolve(code)
-    })
-  })
-  assert(partialExit !== 0 && partialExit !== null, `partial core configuration booted (exit ${String(partialExit)})`)
-  assert(partialProcess.testOutput().includes('invalid config'), 'partial core configuration failed without a diagnostic')
-  return { dormantBoot: 'web usable without auth surface', partialConfig: `exit ${String(partialExit)}` }
+  try {
+    await waitUntil(() => partialProcess.testOutput().includes('invalid config'), 'partial configuration diagnostic')
+    // RC.2 contains plugin activation errors instead of necessarily exiting the CLI.
+    // The observable contract is no auth surface and no unauthenticated native access.
+    for (const path of ['/', '/auth/login', '/auth/verify']) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${String(partialPort)}${path}`, { redirect: 'manual' })
+        assert(response.status === 401 || response.status === 404, 'partial configuration served an unprotected entry')
+      } catch (error) {
+        if (!(error instanceof TypeError) || !String(error.message).includes('fetch failed')) throw error
+      }
+    }
+  } finally {
+    await terminate(partialProcess)
+  }
+  return { dormantBoot: 'native login works without dsh-auth surface', partialConfig: 'diagnostic; protected entry denied' }
 }
 
 // eslint-disable-next-line max-lines-per-function, max-statements, complexity -- 真实 E2E 按拓扑部署→令牌或密码登录→受保护资源→重启→浏览器的时间顺序编排，拆散会隐藏跨层状态关系；浏览器恢复与多标签断言必须紧邻登录旅程。
@@ -745,8 +763,8 @@ async function main() {
   checked(dshExecutable, [
     'plugin', '--profile', 'web', 'add', '--offline', '--config.auto-install-peers=false', tarball,
   ], { cwd: checkout, env: { ...process.env, DSH_HOME: home } })
-  const settingsFile = join(home, 'settings.yaml')
-  writeFileSync(settingsFile, 'locale:\n  preference: zh\nui-theme:\n  preference: dark\n')
+  const settingsFile = join(home, 'profiles', 'web', 'cordis.patch.yml')
+  writeFileSync(settingsFile, '- id: locale\n  config:\n    preference: zh\n- id: ui-theme\n  config:\n    preference: dark\n')
 
   const preinstall = await verifyDormantPreinstall(layout.authStateFile)
 
@@ -758,6 +776,7 @@ async function main() {
   const dshEnvironment = {
     ...process.env,
     DSH_HOME: home,
+    DSH_AUTH_NATIVE_AUTH_BRIDGE: 'true',
     DSH_AUTH_STATE_FILE: layout.authStateFile,
     DSH_AUTH_SESSION_SECRET_FILE: layout.secretFile,
     DSH_AUTH_LOGIN_TOKEN_ENABLED: 'true',
@@ -770,7 +789,7 @@ async function main() {
     DSH_AUTH_GATEWAY_SAFE_MODE: 'true',
     DSH_AUTH_GATEWAY_ALLOWED_USERS: gatewayUsername,
   }
-  dshProcess = child(dshExecutable, ['web', '--port', String(dshPort)], { cwd: launchCwd, env: dshEnvironment })
+  dshProcess = child(dshExecutable, ['web', '--no-open', '--port', String(dshPort)], { cwd: launchCwd, env: dshEnvironment })
   await waitUntil(async () => {
     const response = await fetch(`http://127.0.0.1:${String(dshPort)}/auth/login`)
     return response.status === 200
@@ -873,7 +892,7 @@ async function main() {
       && !harnessStyledHtml.includes('class="preferences"'),
     'authentication UI did not use Harness locale/theme settings exclusively',
   )
-  writeFileSync(settingsFile, 'locale:\n  preference: en\nui-theme:\n  preference: light\n')
+  writeFileSync(settingsFile, '- id: locale\n  config:\n    preference: en\n- id: ui-theme\n  config:\n    preference: light\n')
   await waitUntil(async () => {
     const response = await request(httpsPort, '/auth/login')
     const html = response.body.toString('utf8')
@@ -997,7 +1016,7 @@ async function main() {
   await new Promise(resolveTimeout => setTimeout(resolveTimeout, 1_100))
   const spa = await request(httpsPort, '/', { headers: { cookie: session.pair } })
   const spaHtml = spa.body.toString('utf8')
-  assert(spa.status === 200 && spaHtml.includes('window.__DSH_BOOT__'), 'authenticated real SPA was unavailable')
+  assert(spa.status === 200 && spaHtml.includes('__DSH_BOOT__'), 'authenticated real SPA was unavailable')
   assert(
     (Array.isArray(spa.headers['set-cookie']) ? spa.headers['set-cookie'] : [spa.headers['set-cookie']])
       .some(field => field?.startsWith('__Host-dsh_auth_session=')),
@@ -1009,24 +1028,32 @@ async function main() {
   assert(sessionView.status === 200 && sessionJson.user.userId === 'admin', 'session identity was unavailable')
   const assetPath = /<script[^>]+src="([^"]+\.js)"/u.exec(spaHtml)?.[1]
   assert(assetPath !== undefined, 'SPA entry asset was not discoverable')
-  assert((await request(httpsPort, assetPath, { headers: { cookie: session.pair } })).status === 200, 'SPA asset was unavailable')
-  const authClient = await request(httpsPort, '/plugins/dsh-auth/client.js', { headers: { cookie: session.pair } })
+  const assetUrl = new URL(assetPath, `https://localhost:${String(httpsPort)}/`)
+  const spaAsset = await request(httpsPort, `${assetUrl.pathname}${assetUrl.search}`, { headers: { cookie: session.pair } })
+  assert(spaAsset.status === 200, `SPA asset was unavailable (${String(spaAsset.status)}, ${assetPath})`)
+  const bootText = /\["__DSH_BOOT__"\]\s*=\s*([\s\S]*?)<\/script>/u.exec(spaHtml)?.[1]
+  assert(bootText !== undefined, 'SPA plugin manifest was unavailable')
+  const boot = JSON.parse(bootText.trim().replace(/;$/u, ''))
+  const authEntry = boot.entries.find(entry => entry.id === 'dsh-auth')
+  assert(typeof authEntry?.url === 'string', 'auth plugin was absent from the native manifest')
+  const authUrl = new URL(authEntry.url, 'https://localhost/')
+  const authClient = await request(httpsPort, `${authUrl.pathname}${authUrl.search}`, { headers: { cookie: session.pair } })
   assert(
     authClient.status === 200 && authClient.body.toString('utf8').includes('id: "dsh-auth"'),
     'dsh-auth browser client bundle was not discovered',
   )
 
   const rpcBody = JSON.stringify({
-    type: 'client-request', rpcId: 'dsh-auth-integration', method: 'session.create', payload: {},
+    type: 'client-request', rpcId: 'dsh-auth-integration', method: 'session/create', payload: { args: { request: {} } },
   })
-  const createdResponse = await request(httpsPort, '/api/session.create', {
+  const createdResponse = await request(httpsPort, '/api/session/create', {
     method: 'POST',
     headers: { ...commonPostHeaders, cookie: session.pair, 'content-type': 'application/json' },
     body: rpcBody,
   })
   assert(createdResponse.status === 200, 'authenticated real API was unavailable')
   const created = JSON.parse(createdResponse.body.toString('utf8'))
-  assert(created.result?.ok === true, 'session.create returned a business error')
+  assert(created.result?.ok === true, 'session/create returned a business error')
   const sessionId = created.result.value.sessionId
   const downloadPath = `/api/session.export?sessionId=${encodeURIComponent(sessionId)}`
   const downloadHead = await request(httpsPort, downloadPath, { method: 'HEAD', headers: { cookie: session.pair } })
@@ -1041,7 +1068,7 @@ async function main() {
   assert(await websocketStatus(httpsPort, session.pair) === 101, 'authenticated real WebSocket did not upgrade')
 
   await terminate(dshProcess)
-  dshProcess = child(dshExecutable, ['web', '--port', String(dshPort)], { cwd: launchCwd, env: dshEnvironment })
+  dshProcess = child(dshExecutable, ['web', '--no-open', '--port', String(dshPort)], { cwd: launchCwd, env: dshEnvironment })
   await waitUntil(async () => {
     const response = await fetch(`http://127.0.0.1:${String(dshPort)}/auth/login`)
     return response.status === 200
@@ -1108,6 +1135,11 @@ async function main() {
       'document.querySelector(".dsh-auth-password") !== null && document.querySelector(".dsh-auth-logout") !== null',
       'Settings account rows',
     )
+    await waitForBrowser(
+      browser.evaluate,
+      'document.querySelector(".dsh-auth-password")?.textContent?.trim() === "Reset" && document.querySelector(".dsh-auth-logout")?.textContent?.trim() === "Sign out"',
+      'Settings active locale',
+    )
     const accountView = await browser.evaluate(`(() => {
       const rows = Array.from(document.querySelectorAll('.dsh-auth-settings-row'))
       const password = document.querySelector('.dsh-auth-password')
@@ -1121,7 +1153,7 @@ async function main() {
     })()`)
     assert(
       accountView.passwordTitle === 'Reset password' && accountView.passwordAction === 'Reset',
-      'Settings password-reset row did not follow the active locale',
+      `Settings password-reset row did not follow the active locale (${JSON.stringify(accountView)})`,
     )
     assert(
       accountView.logoutTitle === 'Current session' && accountView.logoutAction === 'Sign out',

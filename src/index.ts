@@ -1,7 +1,8 @@
 /** dsh-auth Cordis plugin: mounts standalone authentication routes on the DSH WebServer. */
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-settings'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+import { installNativeAuthBridge } from './native-auth.js'
 import { AuthApplication } from './application.js'
 import { injectAuthBasePath, injectBrowserBootstrap } from './browser-bootstrap.js'
 import { Config } from './config.js'
@@ -23,8 +24,8 @@ export type { ExternalIdentity, ExternalIdentityProvider } from './external-iden
 /** Stable Cordis plugin name. */
 export const name = 'dsh-auth'
 
-const LOCALE_NAMESPACE = settingsNamespace('locale')
-const THEME_NAMESPACE = settingsNamespace('ui-theme')
+const LOCALE_NAMESPACE = 'locale'
+const THEME_NAMESPACE = 'ui-theme'
 
 /** DSH services required before the authentication route can register. */
 export const inject = ['webServer', 'settings']
@@ -38,9 +39,14 @@ export function apply(ctx: Context, config: ResolvedConfig): void {
     line => { process.stderr.write(line) },
   )
   const application = new AuthApplication(config, Date.now, () => ({
-    locale: ctx.settings.get(LOCALE_NAMESPACE),
-    theme: ctx.settings.get(THEME_NAMESPACE),
+    locale: ctx.settings.describe().find(entry => entry.ns === LOCALE_NAMESPACE)?.value,
+    theme: ctx.settings.describe().find(entry => entry.ns === THEME_NAMESPACE)?.value,
   }), logger)
+  if (config.nativeAuthBridge) {
+    ctx.inject(['connection'], nativeCtx => {
+      nativeCtx.effect(() => installNativeAuthBridge(nativeCtx.connection, headers => application.isAuthenticated(headers)), 'dsh-auth: native operator bridge')
+    })
+  }
   logger.info({
     event: 'auth.runtime.ready',
     secureCookies: config.secureCookies,

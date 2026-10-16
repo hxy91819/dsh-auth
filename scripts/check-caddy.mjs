@@ -301,6 +301,7 @@ async function verifyProtocol(caddy, root, ports, certificate, key) {
     const accepted = await request(ports.https, '/echo', {
       headers: {
         cookie: 'session=valid',
+        'x-dsh-auth-renewal': 'forged=attacker; Path=/',
         'x-dsh-auth-user-id': 'forged',
         'x-dsh-auth-subject': 'forged',
         'x-dsh-auth-username': 'forged',
@@ -321,6 +322,8 @@ async function verifyProtocol(caddy, root, ports, certificate, key) {
       || seen['x-real-ip'] === '203.0.113.9') throw new Error('forged forwarding headers reached the upstream')
     const cookies = Array.isArray(accepted.headers['set-cookie']) ? accepted.headers['set-cookie'] : [accepted.headers['set-cookie']]
     if (!cookies.some(value => value?.startsWith('renewed=yes;'))) throw new Error('renewal Cookie was not forwarded')
+    if (seen.cookie !== 'renewed=yes; session=valid') throw new Error('verified renewal was not attached to the current upstream request')
+    if (seen['x-dsh-auth-renewal'] !== undefined) throw new Error('internal renewal header reached the upstream')
     if ((await request(ports.https, '/api/access-log-check')).status !== 401) {
       throw new Error('routine access-log probe did not reach the protected edge')
     }

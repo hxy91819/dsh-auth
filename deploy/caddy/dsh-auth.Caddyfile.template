@@ -115,6 +115,9 @@ https://{{PUBLIC_SITE_HOST}}:{{HTTPS_PORT}}, https://:{{HTTPS_PORT}} {
 
 		@renewed expression `{http.request.header.X-Dsh-Auth-Renewal} != ""`
 		header @renewed +Set-Cookie {http.request.header.X-Dsh-Auth-Renewal}
+		# The first signed-gateway request must carry the newly issued session upstream too.
+		@renewed_session header_regexp renewed_session X-Dsh-Auth-Renewal "^([^;]+);"
+		request_header @renewed_session Cookie "{re.renewed_session.1}; {header.Cookie}"
 		request_header -X-Dsh-Auth-Renewal
 		request_header -X-Dsh-Auth-Original-Method
 		request_header -X-Dsh-Auth-Original-URI

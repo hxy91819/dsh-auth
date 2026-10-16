@@ -38,8 +38,7 @@ import { LoginLimiter } from './limiter.js'
 import { externalIdentityHeaders, randomOAuthValue, TaihuAccessTokenProvider, type ExternalIdentity, type ExternalIdentityProvider } from './external-identity.js'
 import { resolveGatewayIdentity } from './gateway-identity.js'
 import { LoginTokenStore, createNodeTokenHost } from './login-token-store.js'
-import { clientLogId, errorLogFields, silentAuthLogger } from './logging.js'
-import type { AuthEventLogger } from './logging.js'
+import { clientLogId, errorLogFields, silentAuthLogger, type AuthEventLogger } from './logging.js'
 import {
   ADMIN_PASSWORD_MAX_BYTES,
   assertAdministratorPassword,
@@ -47,10 +46,8 @@ import {
   parseAdministratorUsername,
   verifyPassword,
 } from './password.js'
-import { resolveUiPreferences } from './preferences.js'
-import type { HarnessUiSettings, UiPreferences } from './preferences.js'
-import { SessionStore } from './session.js'
-import type { SessionAuthentication } from './session.js'
+import { resolveUiPreferences, type HarnessUiSettings, type UiPreferences } from './preferences.js'
+import { SessionStore, type SessionAuthentication } from './session.js'
 import { TOKEN_BOOTSTRAP_FILE, tokenBootstrapSource } from './token-bootstrap.js'
 
 /** HTTP authentication application mounted into the DSH WebServer. */
@@ -94,6 +91,10 @@ export class AuthApplication {
       })
     }
   }
+
+  /** Reuse the revocable session store for an explicitly enabled native operator bridge. */
+  readonly isAuthenticated = (cookie: string | undefined): boolean =>
+    this.sessions.authenticate({ headers: cookie === undefined ? {} : { cookie } }, this.now()) !== undefined
 
   /** Handle one request under the configured auth prefix. */
   async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {

@@ -1,13 +1,37 @@
 # Changelog
 
-## Unreleased
+## v0.3.0
+
+Changes since [v0.2.3](https://github.com/hxy91819/dsh-auth/compare/v0.2.3...v0.3.0).
 
 ### Changes
 
-- docs: describe the pull-request release path and stop extra local packed checks.
-- test: reject oversized login bodies at the outer TLS proxy so 413 is deterministic.
-- ci: run packed installer, browser, and lifecycle tests in parallel from one tarball checkpoint.
-- ci: add a Release dry-run that packs HEAD and skips npm publish.
+- test: validate RC2 drift admission and noexec lifecycle (`d6a190e`). Thanks hxy91819.
+- test: diagnose isolated systemd startup without exposing launch tokens (`ad504ac`). Thanks hxy91819.
+- test: follow native RC.2 admission and onboarding lifecycle (`6c08ee6`). Thanks hxy91819.
+- build: use patched MCP OAuth dependencies (`7c6a5eb`). Thanks hxy91819.
+- feat: support DSH 0.2 RC authentication and native sessions (`774bcb5`). Thanks hxy91819.
+- Merge branch 'docs/behavior-e2e-explicit' (`db7c211`). Thanks @hxy91819.
+- docs: make behavior e2e validation explicit-only (`9f4660b`). Thanks Mason Huang.
+- Support public IP edges and protected experience deployments ([#48](https://github.com/hxy91819/dsh-auth/pull/48)). Thanks @hxy91819.
+- 清理已过期的打包产物 (`541291d`). Thanks @hxy91819.
+- 修正 Actions 排程与产物保留策略 (`d937b8b`). Thanks @hxy91819.
+- fix: harden external identity compatibility boundaries ([#47](https://github.com/hxy91819/dsh-auth/pull/47)). Thanks @hxy91819.
+- feat: add provider-neutral IOA external identity login ([#46](https://github.com/hxy91819/dsh-auth/pull/46)). Thanks @hxy91819.
+- docs: require autoreview from session manager roots ([#45](https://github.com/hxy91819/dsh-auth/pull/45)). Thanks @hxy91819.
+- test: lock CSRF browser behavior end to end ([#40](https://github.com/hxy91819/dsh-auth/pull/40)). Thanks @hxy91819.
+- build(deps-dev): align DeepSeek Harness rc.8 dependency stack (`d9d6079`). Thanks Mason Huang.
+- build(deps-dev): refresh development dependency group (`546b013`). Thanks Mason Huang.
+- build(deps-dev): bump eslint from 9.33.0 to 10.8.1 (`a889063`). Thanks Mason Huang.
+- build(deps): bump the github-actions group with 3 updates (`9bcbfdf`). Thanks Mason Huang.
+- docs: add code-health and cross-surface review skills ([#42](https://github.com/hxy91819/dsh-auth/pull/42)). Thanks @hxy91819.
+- fix: recover stale login CSRF pages ([#39](https://github.com/hxy91819/dsh-auth/pull/39)). Thanks @hxy91819.
+- ci: checkpoint packed tests so a flake does not restart the suite ([#30](https://github.com/hxy91819/dsh-auth/pull/30)). Thanks @hxy91819.
+- release: prepare v0.2.3 ([#29](https://github.com/hxy91819/dsh-auth/pull/29)). Thanks @hxy91819.
+
+### Contributors
+
+Thanks hxy91819, @hxy91819, and Mason Huang for this release.
 
 ## v0.2.3
 

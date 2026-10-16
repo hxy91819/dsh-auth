@@ -89,8 +89,7 @@ const dshCli = executable(join(checkout, 'node_modules', '.bin', 'dsh'), 'dsh')
 const dshWrapper = join(root, 'bin', 'dsh')
 const dshCommandLog = join(root, 'bin', 'dsh-commands.log')
 mkdirSync(join(root, 'bin'), { mode: 0o755, recursive: true })
-// DSH 0.1.0-rc.7 mounts its HMR service, which requires node internals to be
-// exposed; the disposable unit owns this launch flag. The wrapper also records
+// The disposable unit owns the HMR launch flag. The wrapper also records
 // installer-issued plugin commands so rollback flags are observable.
 writeFileSync(dshWrapper, `#!/bin/sh
 printf '%s\\n' "$*" >> ${JSON.stringify(dshCommandLog)}
@@ -173,7 +172,9 @@ async function createService(home, port) {
     'User=root',
     'WorkingDirectory=/root',
     `Environment=DSH_HOME=${home}`,
-    `ExecStart=${dshWrapper} web --port ${String(port)}`,
+    // The systemd fixture keeps /tmp noexec; immutable package bindings need no scratch copy.
+    'Environment=NARB_DISABLE_NATIVE_CACHE=1',
+    `ExecStart=${dshWrapper} web --no-open --port ${String(port)}`,
     '[Install]',
     'WantedBy=multi-user.target',
     '',
@@ -189,22 +190,44 @@ async function waitWeb(port, label) {
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`http://127.0.0.1:${String(port)}/`)
-      if (response.status === 200) return
+      if (response.status === 200 || response.status === 401) return
     } catch (error) {
       lastError = error
     }
     await new Promise(resolveTimeout => setTimeout(resolveTimeout, 250))
   }
-  throw new Error(`${label} did not become ready: ${lastError instanceof Error ? lastError.message : String(lastError)}`)
+  const journal = allowFailure('/usr/bin/journalctl', ['--unit', currentUnit, '--no-pager', '--output=cat', '--lines=30'])
+  const diagnostic = journal.status === 0
+    ? journal.stdout.replace(/token=[A-Za-z0-9_-]+/gu, 'token=<redacted>').slice(-4000)
+    : 'test-owned journal unavailable'
+  throw new Error(`${label} did not become ready: ${lastError instanceof Error ? lastError.message : String(lastError)}\n${diagnostic}`)
 }
 
 async function dormantAssertions(port, label) {
   await waitWeb(port, `${label} dormant boot`)
-  const index = await (await fetch(`http://127.0.0.1:${String(port)}/`)).text()
+  const origin = `http://127.0.0.1:${String(port)}`
+  const anonymous = await fetch(origin)
+  assert(anonymous.status === 401, `${label}: native operator authentication was bypassed`)
+  // Dormant dsh-auth must leave RC.2's native launch-token admission in control.
+  // Read only this test-owned unit's token and never include its value in output.
+  const journalResult = allowFailure('/usr/bin/journalctl', ['--unit', currentUnit, '--no-pager', '--output=cat', '--lines=200'])
+  assert(journalResult.status === 0, `${label}: test-owned unit journal is unavailable`)
+  const journal = journalResult.stdout
+  const launch = [...journal.matchAll(/http:\/\/127\.0\.0\.1:(\d+)\/\?token=([A-Za-z0-9_-]+)/gu)]
+    .findLast(match => match[1] === String(port))
+  assert(launch !== undefined, `${label}: native launch URL was not recorded`)
+  const exchange = await fetch(launch[0], { redirect: 'manual' })
+  assert(exchange.status === 303, `${label}: native token exchange failed`)
+  const cookie = exchange.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
+  assert(cookie !== '', `${label}: native token exchange omitted its cookie`)
+  const indexResponse = await fetch(origin, { headers: { cookie } })
+  assert(indexResponse.status === 200, `${label}: native authenticated SPA is unavailable`)
+  const index = await indexResponse.text()
+  assert(index.includes('__DSH_BOOT__'), `${label}: native SPA boot manifest was absent`)
   assert(!index.includes('"id":"dsh-auth"'), `${label}: dormant bundle entered the client roster`)
-  const login = await fetch(`http://127.0.0.1:${String(port)}/auth/login`)
+  const login = await fetch(`${origin}/auth/login`, { headers: { cookie } })
   const loginHtml = await login.text()
-  assert(loginHtml.includes('window.__DSH_BOOT__') && !loginHtml.includes('name="password"'), `${label}: dormant bundle exposed an authentication route`)
+  assert(login.status === 404 && !loginHtml.includes('name="password"'), `${label}: dormant bundle exposed an authentication route`)
 }
 
 async function login(edgePort, username, password) {
@@ -435,6 +458,35 @@ async function verifyProxiedSystemLifecycle(tarball) {
   return 'system issue at two dynamic HTTPS origins, both redeemed, setup state unchanged'
 }
 
+async function assertDriftAdmissionClosed(unit, webPort, edgePort, session) {
+  // RC.2 disables an invalid plugin without terminating the Web process.
+  // Prove admission fails closed, whether the unit stops or stays native-only.
+  let failedClosed = false
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    if (allowFailure('/usr/bin/systemctl', ['is-failed', '--quiet', unit]).status === 0) {
+      failedClosed = true
+      break
+    }
+    try {
+      const probes = await Promise.all([
+        [webPort, '/'], [webPort, '/auth/session'],
+        [edgePort, '/'], [edgePort, '/auth/session'], [edgePort, '/auth/login'],
+      ].map(async ([port, path]) => {
+        const response = await fetch(`http://127.0.0.1:${String(port)}${path}`, {
+          headers: { cookie: session }, redirect: 'manual',
+        })
+        return response.status
+      }))
+      if (probes.every(status => [401, 403, 404, 502, 503].includes(status))) {
+        failedClosed = true
+        break
+      }
+    } catch { /* service is still restarting; wait for a stable refusal */ }
+    await new Promise(resolveTimeout => setTimeout(resolveTimeout, 250))
+  }
+  assert(failedClosed, 'drifted bundle did not refuse the old session, login, and application admission after restart')
+}
+
 async function main() {
   mkdirSync(join(root, 'artifacts'), { recursive: true })
   const manifestPath = join(checkout, 'package.json')
@@ -532,31 +584,21 @@ async function main() {
     cwd: root, env: { ...process.env, DSH_HOME: home },
   })
   allowFailure('/usr/bin/systemctl', ['restart', unit])
-  // Type=simple restarts return before the main process crashes; fail-closed
-  // surfaces asynchronously as a failed unit.
-  let failedClosed = false
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    if (allowFailure('/usr/bin/systemctl', ['is-failed', '--quiet', unit]).status === 0) {
-      failedClosed = true
-      break
-    }
-    await new Promise(resolveTimeout => setTimeout(resolveTimeout, 250))
-  }
-  assert(failedClosed, 'drifted bundle did not fail the service restart closed')
+  await assertDriftAdmissionClosed(unit, webPort, edgePort, session)
   const driftDoctor = cli('doctor', [])
   assert(driftDoctor.status === 8, `doctor did not refuse drift (${String(driftDoctor.status)})`)
   assert(driftDoctor.stdout.includes('PROFILE_PACKAGE_BUILD_DRIFT'), 'doctor missed the drift diagnostic')
   assert(driftDoctor.stdout.includes(`dsh plugin --profile web add ${upgradedState.profilePackageSpec}`), 'doctor remediation did not reference the recorded spec')
   const driftUpgrade = cli('upgrade', ['--non-interactive', '--authorize-upgrade'])
   assert(driftUpgrade.status === 8, `upgrade did not refuse drift (${String(driftUpgrade.status)})`)
-  summary.drift = 'restart fails closed, doctor exit 8 with recorded-spec recovery, upgrade refused'
+  summary.drift = 'admission fails closed, doctor exit 8 with recorded-spec recovery, upgrade refused'
 
   // 5. Restore per the fixed recovery order, then re-upgrade to a newer build.
   checked(dshCli, ['plugin', '--profile', 'web', 'add', '--offline', '--config.auto-install-peers=false', tarballB], {
     cwd: root, env: { ...process.env, DSH_HOME: home },
   })
-  checked('/usr/bin/systemctl', ['start', unit])
-  await waitWeb(webPort, 'restored web')
+  checked('/usr/bin/systemctl', ['restart', unit])
+  await waitForSession(webPort, session, 'restored web')
   const restoredDoctor = cli('doctor', [])
   assert(restoredDoctor.status === 0, `doctor did not return to healthy after the recorded restore\n${restoredDoctor.stdout}${restoredDoctor.stderr}`)
   await waitWeb(edgePort, 'restored edge')

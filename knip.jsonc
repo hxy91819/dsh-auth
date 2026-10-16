@@ -6,7 +6,10 @@
   ],
   "ignoreDependencies": [
     // The real integration test resolves this package's dsh binary by absolute path.
-    "@deepseek-ai/dsh"
+    "@deepseek-ai/dsh",
+    // RC.2 browser declaration dependencies require explicit development peers.
+    "@deepseek-ai/dsh-client-store",
+    "@deepseek-ai/dsh-package-manifest"
   ],
   "ignoreBinaries": [
     // Optional manual edge-benchmark.mjs compares a host nginx with Caddy.

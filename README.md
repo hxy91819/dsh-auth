@@ -24,18 +24,20 @@ sudo dsh-auth setup
 `npm install -g dsh-auth` installs the current stable CLI, and the installer pins that same version in the selected DSH profile. For controlled production rollout, install the exact version approved by your supply-chain policy:
 
 ```sh
-sudo npm install -g dsh-auth@0.2.3
+sudo npm install -g dsh-auth@0.3.0
 ```
 
 ### Plugin pre-install is not enabled authentication
 
-`dsh plugin --profile web add dsh-auth` (or a local tarball) only adds the bundle to the Web profile. With both core environment variables absent the bundle stays dormant: Web keeps booting normally, no authentication routes or settings UI appear, and nothing is exposed. A partially supplied configuration still fails loudly instead of booting. Enabling authentication always requires the globally installed CLI and `sudo dsh-auth setup`; the plugin command never creates secrets, installs Caddy, or protects anything.
+`dsh plugin --profile web add dsh-auth` (or a local tarball) only adds the bundle to the Web profile. With both core environment variables absent the bundle stays dormant: Web keeps booting with its native authentication, and no dsh-auth routes or settings UI appear. A partially supplied configuration produces an activation error and does not enable dsh-auth; Harness may keep running with its native authentication. Enabling authentication always requires the globally installed CLI and `sudo dsh-auth setup`; the plugin command never creates secrets, installs Caddy, or protects anything.
 
 When setup finds a pre-installed bundle whose package name, version, and build content exactly match the running CLI, it adopts it: no package is reinstalled, and the bundle keeps external ownership. Any other pre-installed build is refused before the host changes. Rollback and uninstall leave an adopted bundle in place; without managed configuration it simply returns to dormancy.
 
 The interactive installer asks for the exact DSH service, administrator initialization method, HTTPS hostname, and TLS mode; shows a secret-free plan; and changes the system only after you type the exact confirmation. It installs the pinned bundle into the selected DSH profile, copies a checksum-verified Caddy binary bundled in the same package, writes permission-restricted authentication state, and enables an independent `dsh-auth-caddy.service`. It never stores a plaintext password and never downloads Caddy at setup time.
 
-Normal deployment requires Linux x64 or ARM64, systemd, Node.js 24.7 or newer, and DSH Web 0.1.0-rc.7. Automatic TLS is the HTTPS default. Manual TLS requires an existing certificate and key. `--server-name` accepts either a DNS name or a public literal IP address.
+Normal deployment requires Linux x64 or ARM64, systemd, Node.js 24.7 or newer, and DSH Web 0.2.0-rc.2. Automatic TLS is the HTTPS default. Manual TLS requires an existing certificate and key. `--server-name` accepts either a DNS name or a public literal IP address.
+
+The standalone installer explicitly enables `DSH_AUTH_NATIVE_AUTH_BRIDGE=true`: a valid, revocable dsh-auth session can then act as the native Harness operator while native Host and Origin checks remain enforced. The plugin defaults this option to `false`. Multi-user gateways such as Chatroom must leave it disabled and enforce their own resource authorization. Revoking a dsh-auth session does not revoke separately issued native Harness credentials.
 
 ```text
 $ sudo dsh-auth setup
@@ -357,13 +359,13 @@ schema v1 ownership records, old Nginx flags, and old plugin identity fields are
 `upgrade` moves a healthy v2 installation to the build of the currently installed global CLI. Install the newer CLI first, then run:
 
 ```sh
-sudo npm install -g dsh-auth@0.2.3
+sudo npm install -g dsh-auth@0.3.0
 sudo dsh-auth upgrade
 ```
 
 The profile bundle, bundled Caddy binary, environment marker, ownership record, and both services move together; administrator credentials, the session secret, and existing sessions survive. Any failing step rolls everything back to the recorded build. Same-version reinstalls and downgrades are refused, and `--package /path/dsh-auth-VERSION.tgz` pins an offline source. Interactive upgrade requires typing `upgrade`; automation requires `--non-interactive --authorize-upgrade`.
 
-Updating the profile bundle through plain `dsh plugin` (instead of `dsh-auth upgrade`) creates version drift. The Web service then fails closed on restart instead of running an unverified build behind the authentication edge. `doctor` reports the drift with a fixed recovery order:
+Updating the profile bundle through plain `dsh plugin` (instead of `dsh-auth upgrade`) creates version drift. On restart, the mismatched authentication plugin refuses activation: existing dsh-auth sessions, login, and application admission through the managed edge fail closed. DSH may keep its Web process running under native authentication. `doctor` reports the drift with a fixed recovery order:
 
 ```sh
 dsh plugin --profile web add <recorded-package-spec>   # restore the recorded build
