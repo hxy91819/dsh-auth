@@ -140,7 +140,11 @@
     "onlyBuiltDependencies": [
       "@deepseek-ai/dsh-subprocess-local",
       "node-pty"
-    ]
+    ],
+    "overrides": {
+      "@modelcontextprotocol/client": "2.2.0",
+      "@modelcontextprotocol/core": "2.2.0"
+    }
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "~4.0.4",
