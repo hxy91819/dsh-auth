@@ -142,8 +142,11 @@
       "node-pty"
     ],
     "overrides": {
-      "@modelcontextprotocol/client": "2.2.0",
-      "@modelcontextprotocol/core": "2.2.0"
+      "@modelcontextprotocol/client": "2.3.0",
+      "@modelcontextprotocol/core": "2.3.0",
+      "fast-uri": "3.1.9",
+      "fflate": "0.8.3",
+      "minimatch": "11.0.1"
     }
   },
   "devDependencies": {
@@ -176,7 +179,7 @@
     "tsdown": "0.22.14",
     "typescript": "5.9.2",
     "typescript-eslint": "8.67.0",
-    "vitest": "4.1.11",
+    "vitest": "4.1.12",
     "ws": "8.21.3",
     "@deepseek-ai/dsh-client-ui-renderer": "0.2.0-rc.2",
     "@deepseek-ai/dsh-client-store": "0.2.0-rc.2",
