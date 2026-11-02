@@ -233,6 +233,8 @@ externalIdentity:
 可吊销不透明 Session。太湖 Token 只从权限受限的 `tokenFile` 读取，不会出现在
 URL 或持久化认证状态中。
 
+设置 `allowedUsers: ['*']` 后，接受所配置身份提供商或网关验证通过的所有身份，访问范围由该身份提供商统一管理。签名、加密身份断言、有效期和 Session 校验仍然生效；空白名单仍拒绝访问。同一策略适用于 `gatewayIdentity.allowedUsers` 及其 `DSH_AUTH_GATEWAY_ALLOWED_USERS` 环境变量。
+
 ### 已验证身份 Header
 
 已认证的 `GET`/`HEAD /auth/verify` 仍返回 `204` 及旧版

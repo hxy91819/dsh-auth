@@ -250,6 +250,8 @@ session used by password login. The Taihu token is read only from the
 permission-restricted `tokenFile`; it is never accepted in a URL or persisted
 authentication state.
 
+Set `allowedUsers: ['*']` to accept every authenticated identity from the configured provider or gateway. This delegates admission to that identity provider; signatures, encrypted assertions, expiry, and session verification still apply. An empty allowlist continues to deny access. The same policy applies to `gatewayIdentity.allowedUsers` and its `DSH_AUTH_GATEWAY_ALLOWED_USERS` environment setting.
+
 ### Verified identity headers
 
 An authenticated `GET` or `HEAD` request to `/auth/verify` still returns `204`
