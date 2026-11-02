@@ -787,7 +787,7 @@ async function main() {
     DSH_AUTH_GATEWAY_ENABLED: 'true',
     DSH_AUTH_GATEWAY_TOKEN_FILE: gatewayTokenFile,
     DSH_AUTH_GATEWAY_SAFE_MODE: 'true',
-    DSH_AUTH_GATEWAY_ALLOWED_USERS: gatewayUsername,
+    DSH_AUTH_GATEWAY_ALLOWED_USERS: '*',
   }
   dshProcess = child(dshExecutable, ['web', '--no-open', '--port', String(dshPort)], { cwd: launchCwd, env: dshEnvironment })
   await waitUntil(async () => {
@@ -1070,9 +1070,11 @@ async function main() {
   await terminate(dshProcess)
   dshProcess = child(dshExecutable, ['web', '--no-open', '--port', String(dshPort)], { cwd: launchCwd, env: dshEnvironment })
   await waitUntil(async () => {
-    const response = await fetch(`http://127.0.0.1:${String(dshPort)}/auth/login`)
-    return response.status === 200
-  }, 'restarted DSH', [{ name: 'DSH', process: dshProcess }])
+    // The auth route can register before DSH's connection service installs the native admission bridge.
+    const response = await request(httpsPort, '/', { headers: { cookie: session.pair } })
+    if (response.status !== 200) throw new Error(`protected SPA status ${String(response.status)}`)
+    return true
+  }, 'restarted DSH protected SPA', [{ name: 'DSH', process: dshProcess }])
   const afterRestartSession = await request(httpsPort, '/auth/session', { headers: { cookie: session.pair } })
   const afterRestartIdentity = JSON.parse(afterRestartSession.body.toString('utf8'))
   assert(
@@ -1238,7 +1240,7 @@ async function main() {
     authenticatedWebSocket: 101,
     sessionRenewal: 'Set-Cookie via forward_auth',
     sessionPersistence: 'survived DSH restart',
-    gatewayIdentity: 'signed JWE session reached SPA and survived restart',
+    gatewayIdentity: 'wildcard policy accepted a signed JWE, reached SPA and survived restart',
     forgedGatewayIdentity: 401,
     browserSettingsSignOut: 'Settings -> Sign out -> /auth/login',
     browserSettingsPasswordReset: 'Settings -> Reset password',

@@ -23,7 +23,7 @@ async function identityHeader(loginName = 'masonxhuang@tencent.com', expiration 
   }))).setProtectedHeader({ alg: 'dir', enc: 'A256GCM' }).encrypt(new TextEncoder().encode(token))
 }
 
-async function gatewayServer() {
+async function gatewayServer(allowedUsers = ['masonxhuang']) {
   const credentials = await testCredentials()
   const root = mkdtempSync(join(tmpdir(), 'dsh-auth-gateway-http-'))
   const tokenFile = join(root, 'gateway-token')
@@ -38,13 +38,43 @@ async function gatewayServer() {
       callbackUrl: 'http://127.0.0.1/auth/callback',
       allowedUsers: ['masonxhuang'],
     },
-    gatewayIdentity: { enabled: true, tokenFile, safeMode: true, allowedUsers: ['masonxhuang'] },
+    gatewayIdentity: { enabled: true, tokenFile, safeMode: true, allowedUsers },
   })
   const server = await startTestServer(config, () => now)
   return { server, tokenFile }
 }
 
 describe('TOF gateway identity behavior', () => {
+  it('accepts any verified identity with the wildcard policy, but still rejects anonymous and forged requests', async () => {
+    const { server } = await gatewayServer(['*'])
+    try {
+      const timestamp = String(Math.floor(now / 1000))
+      const sequence = 'wildcard-identity'
+      const headers = {
+        timestamp,
+        signature: signature(timestamp, sequence),
+        'x-rio-seq': sequence,
+        'x-tai-identity': await identityHeader('new-member@example.com'),
+      }
+      const anonymous = await fetch(`${server.baseUrl}/auth/verify`)
+      expect(anonymous.status).toBe(401)
+      expect(anonymous.headers.get('set-cookie')).toBeNull()
+      const forged = await fetch(`${server.baseUrl}/auth/verify`, { headers: { ...headers, signature: 'FORGED' } })
+      expect(forged.status).toBe(401)
+      expect(forged.headers.get('set-cookie')).toBeNull()
+      const verified = await fetch(`${server.baseUrl}/auth/verify`, { headers })
+      expect(verified.status).toBe(204)
+      expect(verified.headers.get('x-dsh-auth-subject')).toBe('new-member')
+      const session = cookiePair(verified.headers, 'dsh_auth_session')
+      await expect(fetch(`${server.baseUrl}/auth/session`, { headers: { cookie: session } }).then(response => response.json())).resolves.toMatchObject({
+        authenticated: true,
+        user: { username: 'new-member' },
+      })
+    } finally {
+      server.server.close()
+    }
+  })
+
   it('creates a session from a valid signed JWE and hides the OAuth fallback link', async () => {
     const { server } = await gatewayServer()
     try {

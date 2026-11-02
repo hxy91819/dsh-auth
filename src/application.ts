@@ -350,7 +350,7 @@ export class AuthApplication {
 
   private externalIdentityAllowed(identity: ExternalIdentity, policy: typeof this.config.externalIdentity | typeof this.config.gatewayIdentity): boolean {
     if (policy === undefined) return false
-    return policy.allowedUsers.has(identity.subject)
+    return policy.allowedUsers.has('*') || policy.allowedUsers.has(identity.subject)
       || (identity.departmentId !== undefined && policy.allowedDepartmentIds.has(identity.departmentId))
       || (identity.departmentName !== undefined && policy.allowedDepartmentPrefixes.some(prefix => identity.departmentName?.startsWith(prefix) === true))
   }

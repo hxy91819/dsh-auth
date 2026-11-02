@@ -76,7 +76,7 @@ describe('TaihuAccessTokenProvider', () => {
     expect(fetcher).toHaveBeenCalledOnce()
   })
 
-  it('completes the callback into a session only for an allowed user', async () => {
+  it.each([{ allowedUsers: ['masonxhuang'] }, { allowedUsers: ['*'] }])('completes the callback into a session with $allowedUsers', async ({ allowedUsers }) => {
     const credentials = await testCredentials()
     const root = mkdtempSync(join(tmpdir(), 'dsh-auth-external-http-'))
     const tokenFile = join(root, 'taihu-token')
@@ -89,7 +89,7 @@ describe('TaihuAccessTokenProvider', () => {
         paasId: 'paas-demo',
         tokenFile,
         callbackUrl: 'http://127.0.0.1/auth/callback',
-        allowedUsers: ['masonxhuang'],
+        allowedUsers,
       },
     })
     const httpFetch = globalThis.fetch
